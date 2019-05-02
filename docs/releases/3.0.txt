@@ -315,6 +315,7 @@ Models
   features class ``allows_group_by_selected_pks_on_model()`` method as you
   require. See :ref:`Subclassing the built-in database backends
   <subclassing-database-backends>` for an example.
+* :class:`~django.db.models.FilePathField` now accepts a callable ``path``.
 
 Requests and Responses
 ~~~~~~~~~~~~~~~~~~~~~~
