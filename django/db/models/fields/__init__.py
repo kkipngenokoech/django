@@ -1668,6 +1668,12 @@ class FilePathField(Field):
         kwargs.setdefault('max_length', 100)
         super().__init__(verbose_name, name, **kwargs)
 
+    def _get_path(self):
+        """Return the path, calling it if it's a callable."""
+        if callable(self.path):
+            return self.path()
+        return self.path
+
     def check(self, **kwargs):
         return [
             *super().check(**kwargs),
@@ -1709,7 +1715,7 @@ class FilePathField(Field):
 
     def formfield(self, **kwargs):
         return super().formfield(**{
-            'path': self.path,
+            'path': self._get_path(),
             'match': self.match,
             'recursive': self.recursive,
             'form_class': forms.FilePathField,
