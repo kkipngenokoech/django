@@ -172,8 +172,29 @@ def common_roots(paths):
     """
     # Inspired from Werkzeug:
     # https://github.com/pallets/werkzeug/blob/7477be2853df70a022d9613e765581b9411c3c39/werkzeug/_reloader.py
+    
+    # Filter out paths that are subpaths of other paths to avoid circular watching
+    filtered_paths = []
+    sorted_paths = sorted(paths, key=lambda p: len(p.parts))
+    
+    for path in sorted_paths:
+        # Check if this path is a subpath of any already included path
+        is_subpath = False
+        for existing_path in filtered_paths:
+            try:
+                path.relative_to(existing_path)
+                is_subpath = True
+                break
+            except ValueError:
+                continue
+        
+        if not is_subpath:
+            # Check if any existing paths are subpaths of this path
+            filtered_paths = [p for p in filtered_paths if not _is_subpath(p, path)]
+            filtered_paths.append(path)
+    
     # Create a sorted list of the path components, longest first.
-    path_parts = sorted([x.parts for x in paths], key=len, reverse=True)
+    path_parts = sorted([x.parts for x in filtered_paths], key=len, reverse=True)
     tree = {}
     for chunks in path_parts:
         node = tree
@@ -191,6 +212,15 @@ def common_roots(paths):
             yield Path(*path)
 
     return tuple(_walk(tree, ()))
+
+
+def _is_subpath(potential_subpath, parent_path):
+    """Check if potential_subpath is a subpath of parent_path."""
+    try:
+        potential_subpath.relative_to(parent_path)
+        return True
+    except ValueError:
+        return False
 
 
 def sys_path_directories():
@@ -276,14 +306,31 @@ class BaseReloader:
     def watch_dir(self, path, glob):
         path = Path(path)
         try:
-            path = path.absolute()
-        except FileNotFoundError:
+            path = path.resolve().absolute()
+        except (FileNotFoundError, OSError):
             logger.debug(
                 'Unable to watch directory %s as it cannot be resolved.',
                 path,
                 exc_info=True,
             )
             return
+        
+        # Check if this path is already being watched by a parent directory
+        for existing_path in list(self.directory_globs.keys()):
+            try:
+                # If the new path is a subpath of an existing watched path, skip it
+                path.relative_to(existing_path)
+                logger.debug('Directory %s already covered by parent watch %s.', path, existing_path)
+                return
+            except ValueError:
+                # If an existing path is a subpath of the new path, remove it
+                try:
+                    existing_path.relative_to(path)
+                    logger.debug('Removing redundant watch %s, covered by %s.', existing_path, path)
+                    del self.directory_globs[existing_path]
+                except ValueError:
+                    continue
+        
         logger.debug('Watching dir %s with glob %s.', path, glob)
         self.directory_globs[path].add(glob)
 
@@ -511,7 +558,18 @@ class WatchmanReloader(BaseReloader):
         extra_directories = self.directory_globs.keys()
         watched_file_dirs = [f.parent for f in watched_files]
         sys_paths = list(sys_path_directories())
-        return frozenset((*extra_directories, *watched_file_dirs, *sys_paths))
+        
+        # Combine all paths and resolve them to avoid duplicates and circular references
+        all_paths = set()
+        for path in (*extra_directories, *watched_file_dirs, *sys_paths):
+            try:
+                resolved_path = path.resolve().absolute()
+                all_paths.add(resolved_path)
+            except (OSError, ValueError):
+                # Skip paths that can't be resolved
+                continue
+        
+        return frozenset(all_paths)
 
     def _update_watches(self):
         watched_files = list(self.watched_files(include_globs=False))
