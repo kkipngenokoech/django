@@ -207,6 +207,7 @@ class Field(RegisterLookupMixin):
             *self._check_backend_specific_checks(**kwargs),
             *self._check_validators(),
             *self._check_deprecation_details(),
+            *self._check_max_length_choices(),
         ]
 
     def _check_field_name(self):
@@ -371,6 +372,47 @@ class Field(RegisterLookupMixin):
                     hint=self.system_check_deprecated_details.get('hint'),
                     obj=self,
                     id=self.system_check_deprecated_details.get('id', 'fields.WXXX'),
+                )
+            ]
+        return []
+
+    def _check_max_length_choices(self):
+        if self.max_length is None or not self.choices:
+            return []
+
+        choice_max_length = 0
+        for choice_item in self.choices:
+            try:
+                # Handle grouped choices: (group_name, [(value, display), ...])
+                if isinstance(choice_item, (list, tuple)) and len(choice_item) == 2:
+                    group_name, group_choices = choice_item
+                    # Check if this is actually a group or just a (value, display) pair
+                    if isinstance(group_choices, (list, tuple)) and group_choices and isinstance(group_choices[0], (list, tuple)):
+                        # This is a group
+                        for value, display in group_choices:
+                            if isinstance(value, str):
+                                choice_max_length = max(choice_max_length, len(value))
+                    else:
+                        # This is a (value, display) pair
+                        value, display = choice_item
+                        if isinstance(value, str):
+                            choice_max_length = max(choice_max_length, len(value))
+                else:
+                    # Handle single values or other formats
+                    if isinstance(choice_item, str):
+                        choice_max_length = max(choice_max_length, len(choice_item))
+            except (TypeError, ValueError):
+                # Skip malformed choice items
+                continue
+
+        if choice_max_length > self.max_length:
+            return [
+                checks.Error(
+                    "'max_length' is too small to fit the longest value "
+                    "in 'choices' (%d characters)." % choice_max_length,
+                    hint="Increase 'max_length' to at least %d characters." % choice_max_length,
+                    obj=self,
+                    id='fields.E009',
                 )
             ]
         return []
