@@ -916,7 +916,13 @@ class Model(metaclass=ModelBase):
 
         collector = Collector(using=using)
         collector.collect([self], keep_parents=keep_parents)
-        return collector.delete()
+        deletion_counter = collector.delete()
+        
+        # Set the PK to None after successful deletion
+        if deletion_counter[0] > 0:  # If any objects were deleted
+            setattr(self, self._meta.pk.attname, None)
+        
+        return deletion_counter
 
     delete.alters_data = True
 
