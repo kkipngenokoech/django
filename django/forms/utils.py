@@ -69,9 +69,13 @@ class RenderableMixin:
             template == "django/forms/default.html"
             or template == "django/forms/formsets/default.html"
         ):
-            warnings.warn(
-                DEFAULT_TEMPLATE_DEPRECATION_MSG, RemovedInDjango50Warning, stacklevel=2
-            )
+            # Skip deprecation warning for ManagementForm since it only renders hidden inputs
+            # and the template choice is irrelevant
+            if not (hasattr(self, '__class__') and 
+                   self.__class__.__name__ == 'ManagementForm'):
+                warnings.warn(
+                    DEFAULT_TEMPLATE_DEPRECATION_MSG, RemovedInDjango50Warning, stacklevel=2
+                )
         return mark_safe(renderer.render(template, context))
 
     __str__ = render
