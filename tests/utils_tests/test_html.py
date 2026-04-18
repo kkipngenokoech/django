@@ -217,6 +217,31 @@ class TestUtilsHtml(SimpleTestCase):
             '<script type="application/json">{"key": "value"}</script>',
         )
 
+    def test_json_script_custom_encoder(self):
+        class CustomEncoder(json.JSONEncoder):
+            def encode(self, obj):
+                if isinstance(obj, dict) and "custom" in obj:
+                    obj = obj.copy()
+                    obj["custom"] = "CUSTOM_" + str(obj["custom"])
+                return super().encode(obj)
+
+        self.assertHTMLEqual(
+            json_script({"custom": "value"}, encoder=CustomEncoder),
+            '<script type="application/json">{"custom": "CUSTOM_value"}</script>',
+        )
+
+    def test_json_script_custom_encoder_with_id(self):
+        class CustomEncoder(json.JSONEncoder):
+            def encode(self, obj):
+                if isinstance(obj, str):
+                    return '"ENCODED_' + obj + '"'
+                return super().encode(obj)
+
+        self.assertHTMLEqual(
+            json_script("test", element_id="test-id", encoder=CustomEncoder),
+            '<script id="test-id" type="application/json">"ENCODED_test"</script>',
+        )
+
     def test_smart_urlquote(self):
         items = (
             ("http://öäü.com/", "http://xn--4ca9at.com/"),
