@@ -125,6 +125,26 @@ class EnumSerializer(BaseSerializer):
     def serialize(self):
         enum_class = self.value.__class__
         module = enum_class.__module__
+        
+        # Handle combination of enum flags
+        if self.value.name is None:
+            # Use enum._decompose to get constituent flags
+            try:
+                # For flag enums, _decompose returns (flag_value, aliases)
+                decomposed = enum._decompose(enum_class, self.value.value)
+                if decomposed[0]:  # If there are constituent flags
+                    flag_names = [flag.name for flag in decomposed[0]]
+                    if flag_names:
+                        # Create expression that ORs the flags together
+                        flag_expr = " | ".join(
+                            "%s.%s.%s" % (module, enum_class.__qualname__, name)
+                            for name in flag_names
+                        )
+                        return flag_expr, {"import %s" % module}
+            except (AttributeError, ValueError):
+                # Fall back to original behavior if _decompose fails
+                pass
+        
         return (
             "%s.%s[%r]" % (module, enum_class.__qualname__, self.value.name),
             {"import %s" % module},
