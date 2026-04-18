@@ -74,6 +74,12 @@ class Feed:
             return [enc]
         return []
 
+    def item_comments(self, item):
+        """
+        Return the comments URL for the given item.
+        """
+        return None
+
     def _get_dynamic_attr(self, attname, obj, default=None):
         try:
             attr = getattr(self, attname)
@@ -199,6 +205,14 @@ class Feed:
             if updateddate and is_naive(updateddate):
                 updateddate = make_aware(updateddate, tz)
 
+            comments = self._get_dynamic_attr('item_comments', item)
+            if comments:
+                comments = add_domain(
+                    current_site.domain,
+                    comments,
+                    request.is_secure(),
+                )
+
             feed.add_item(
                 title=title,
                 link=link,
@@ -214,6 +228,7 @@ class Feed:
                 author_link=author_link,
                 categories=self._get_dynamic_attr('item_categories', item),
                 item_copyright=self._get_dynamic_attr('item_copyright', item),
+                comments=comments,
                 **self.item_extra_kwargs(item)
             )
         return feed
