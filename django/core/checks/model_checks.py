@@ -5,11 +5,21 @@ from itertools import chain
 
 from django.apps import apps
 from django.core.checks import Error, Tags, register
+from django.db import router
+
+
+def _get_target_database_for_model(model):
+    """
+    Determine which database a model targets for write operations.
+    Returns the database alias that would be used for writes to this model.
+    """
+    return router.db_for_write(model)
 
 
 @register(Tags.models)
 def check_all_models(app_configs=None, **kwargs):
-    db_table_models = defaultdict(list)
+    # Group models by database and table name to check for conflicts
+    db_table_models_by_db = defaultdict(lambda: defaultdict(list))
     indexes = defaultdict(list)
     constraints = defaultdict(list)
     errors = []
@@ -17,9 +27,12 @@ def check_all_models(app_configs=None, **kwargs):
         models = apps.get_models()
     else:
         models = chain.from_iterable(app_config.get_models() for app_config in app_configs)
+    
+    # Collect all models and group them by target database and table name
     for model in models:
         if model._meta.managed and not model._meta.proxy:
-            db_table_models[model._meta.db_table].append(model._meta.label)
+            target_db = _get_target_database_for_model(model)
+            db_table_models_by_db[target_db][model._meta.db_table].append(model._meta.label)
         if not inspect.ismethod(model.check):
             errors.append(
                 Error(
@@ -35,16 +48,19 @@ def check_all_models(app_configs=None, **kwargs):
             indexes[model_index.name].append(model._meta.label)
         for model_constraint in model._meta.constraints:
             constraints[model_constraint.name].append(model._meta.label)
-    for db_table, model_labels in db_table_models.items():
-        if len(model_labels) != 1:
-            errors.append(
-                Error(
-                    "db_table '%s' is used by multiple models: %s."
-                    % (db_table, ', '.join(db_table_models[db_table])),
-                    obj=db_table,
-                    id='models.E028',
+    
+    # Check for table name conflicts within each database
+    for db_alias, db_table_models in db_table_models_by_db.items():
+        for db_table, model_labels in db_table_models.items():
+            if len(model_labels) != 1:
+                errors.append(
+                    Error(
+                        "db_table '%s' is used by multiple models: %s."
+                        % (db_table, ', '.join(model_labels)),
+                        obj=db_table,
+                        id='models.E028',
+                    )
                 )
-            )
     for index_name, model_labels in indexes.items():
         if len(model_labels) > 1:
             model_labels = set(model_labels)
