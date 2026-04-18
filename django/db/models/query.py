@@ -918,6 +918,10 @@ class QuerySet:
 
     def none(self):
         """Return an empty QuerySet."""
+        if self.query.combinator:
+            # For combined queries (union, intersection, difference),
+            # we need to return an EmptyQuerySet to ensure no results
+            return self._clone(klass=EmptyQuerySet)
         clone = self._chain()
         clone.query.set_empty()
         return clone
