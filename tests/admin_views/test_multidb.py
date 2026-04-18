@@ -37,11 +37,19 @@ class MultiDatabaseTests(TestCase):
         for db in connections:
             Router.target_db = db
             cls.superusers[db] = User.objects.create_superuser(
-                username='admin', password='something', email='test@test.org',
+                username='admin', password='test_password_123', email='test@test.org',
             )
             b = Book(name='Test Book')
             b.save(using=db)
             cls.test_book_ids[db] = b.id
+
+    def tearDown(self):
+        """Ensure all database connections are properly closed to prevent locking."""
+        for alias in connections:
+            connection = connections[alias]
+            if connection.connection is not None:
+                connection.close()
+        super().tearDown()
 
     @mock.patch('django.contrib.admin.options.transaction')
     def test_add_view(self, mock):
