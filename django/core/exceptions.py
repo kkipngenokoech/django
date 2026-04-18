@@ -182,6 +182,31 @@ class ValidationError(Exception):
     def __repr__(self):
         return 'ValidationError(%s)' % self
 
+    def __eq__(self, other):
+        if not isinstance(other, ValidationError):
+            return False
+        
+        # Compare based on the structure of the ValidationError
+        if hasattr(self, 'error_dict') and hasattr(other, 'error_dict'):
+            # Both have error_dict - compare field by field
+            if set(self.error_dict.keys()) != set(other.error_dict.keys()):
+                return False
+            for field in self.error_dict:
+                # Convert to sets of string representations for order-independent comparison
+                self_messages = {str(msg) for msg in self.error_dict[field]}
+                other_messages = {str(msg) for msg in other.error_dict[field]}
+                if self_messages != other_messages:
+                    return False
+            return True
+        elif hasattr(self, 'error_dict') or hasattr(other, 'error_dict'):
+            # One has error_dict, the other doesn't - not equal
+            return False
+        else:
+            # Both have error_list - compare as sets for order independence
+            self_messages = {str(msg) for msg in self.error_list}
+            other_messages = {str(msg) for msg in other.error_list}
+            return self_messages == other_messages
+
 
 class EmptyResultSet(Exception):
     """A database query predicate is impossible."""
