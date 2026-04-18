@@ -1296,6 +1296,22 @@ class Model(metaclass=ModelBase):
         return errors
 
     @classmethod
+    def _has_inherited_pk(cls):
+        """
+        Check if the model has inherited a primary key from a parent class.
+        """
+        for parent in cls.__mro__[1:]:
+            if hasattr(parent, '_meta') and not parent._meta.abstract:
+                if parent._meta.pk is not None:
+                    return True
+            elif hasattr(parent, '_meta') and parent._meta.abstract:
+                # Check abstract parents for explicitly defined primary keys
+                for field in parent._meta.local_fields:
+                    if field.primary_key:
+                        return True
+        return False
+
+    @classmethod
     def _check_default_pk(cls):
         if (
             cls._meta.pk.auto_created and
