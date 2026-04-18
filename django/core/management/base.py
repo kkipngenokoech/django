@@ -131,6 +131,16 @@ class DjangoHelpFormatter(HelpFormatter):
         super().add_arguments(self._reordered_actions(actions))
 
 
+class RawDescriptionDjangoHelpFormatter(DjangoHelpFormatter):
+    """
+    A Django help formatter that preserves whitespace and formatting in
+    description text, similar to argparse.RawDescriptionHelpFormatter.
+    """
+
+    def _fill_text(self, text, width, indent):
+        return '\n'.join(indent + line for line in text.splitlines())
+
+
 class OutputWrapper(TextIOBase):
     """
     Wrapper around stdout/stderr
@@ -286,10 +296,18 @@ class BaseCommand:
         Create and return the ``ArgumentParser`` which will be used to
         parse the arguments to this command.
         """
+        # Use RawDescriptionDjangoHelpFormatter if help text contains newlines
+        formatter_class = kwargs.pop('formatter_class', None)
+        if formatter_class is None:
+            if self.help and '\n' in self.help:
+                formatter_class = RawDescriptionDjangoHelpFormatter
+            else:
+                formatter_class = DjangoHelpFormatter
+        
         parser = CommandParser(
             prog="%s %s" % (os.path.basename(prog_name), subcommand),
             description=self.help or None,
-            formatter_class=DjangoHelpFormatter,
+            formatter_class=formatter_class,
             missing_args_message=getattr(self, "missing_args_message", None),
             called_from_command_line=getattr(self, "_called_from_command_line", None),
             **kwargs,
