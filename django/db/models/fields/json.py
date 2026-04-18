@@ -368,12 +368,22 @@ class KeyTransformIsNull(lookups.IsNull):
     def as_oracle(self, compiler, connection):
         if not self.rhs:
             return HasKey(self.lhs.lhs, self.lhs.key_name).as_oracle(compiler, connection)
-        return super().as_sql(compiler, connection)
+        # For isnull=True, we want to match only missing keys, not keys with JSON null
+        lhs, lhs_params, key_transforms = self.lhs.preprocess_lhs(compiler, connection)
+        json_path = compile_json_path(key_transforms)
+        # Use NOT JSON_EXISTS to check if key is missing
+        sql = "NOT JSON_EXISTS(%s, '%s')" % (lhs, json_path)
+        return sql, lhs_params
 
     def as_sqlite(self, compiler, connection):
         if not self.rhs:
             return HasKey(self.lhs.lhs, self.lhs.key_name).as_sqlite(compiler, connection)
-        return super().as_sql(compiler, connection)
+        # For isnull=True, we want to match only missing keys, not keys with JSON null
+        lhs, lhs_params, key_transforms = self.lhs.preprocess_lhs(compiler, connection)
+        json_path = compile_json_path(key_transforms)
+        # Use JSON_TYPE IS NULL to check if key is missing
+        sql = "JSON_TYPE(%s, %%s) IS NULL" % lhs
+        return sql, tuple(lhs_params) + (json_path,)
 
 
 class KeyTransformIn(lookups.In):
