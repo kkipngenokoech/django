@@ -19,6 +19,79 @@ class MockedPasswordResetTokenGenerator(PasswordResetTokenGenerator):
 
 class TokenGeneratorTest(TestCase):
 
+    def test_token_invalidated_when_email_changes(self):
+        """
+        Test that password reset tokens are invalidated when user's email changes.
+        """
+        User = get_user_model()
+        user = User.objects.create_user(
+            username='testuser',
+            email='original@example.com',
+            password='testpass123'
+        )
+        
+        # Generate token with original email
+        token_generator = PasswordResetTokenGenerator()
+        original_token = token_generator.make_token(user)
+        
+        # Verify token is valid with original email
+        self.assertTrue(token_generator.check_token(user, original_token))
+        
+        # Change user's email
+        user.email = 'changed@example.com'
+        user.save()
+        
+        # Token should now be invalid
+        self.assertFalse(token_generator.check_token(user, original_token))
+        
+        # New token should work with changed email
+        new_token = token_generator.make_token(user)
+        self.assertTrue(token_generator.check_token(user, new_token))
+    
+    def test_token_valid_when_email_unchanged(self):
+        """
+        Test that password reset tokens remain valid when email doesn't change.
+        """
+        User = get_user_model()
+        user = User.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpass123'
+        )
+        
+        token_generator = PasswordResetTokenGenerator()
+        token = token_generator.make_token(user)
+        
+        # Token should be valid
+        self.assertTrue(token_generator.check_token(user, token))
+        
+        # Save user without changing email
+        user.save()
+        
+        # Token should still be valid
+        self.assertTrue(token_generator.check_token(user, token))
+    
+    def test_token_works_with_no_email(self):
+        """
+        Test that password reset tokens work for users without email addresses.
+        """
+        User = get_user_model()
+        user = User.objects.create_user(
+            username='testuser',
+            password='testpass123'
+        )
+        # Ensure no email is set
+        user.email = ''
+        user.save()
+        
+        token_generator = PasswordResetTokenGenerator()
+        token = token_generator.make_token(user)
+        
+        # Token should be valid even without email
+        self.assertTrue(token_generator.check_token(user, token))
+
+class TokenGeneratorTest(TestCase):
+
     def test_make_token(self):
         user = User.objects.create_user('tokentestuser', 'test2@example.com', 'testpw')
         p0 = PasswordResetTokenGenerator()
