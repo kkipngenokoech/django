@@ -112,14 +112,31 @@ class SQLCompiler:
         ref_sources = {
             expr.source for expr in expressions if isinstance(expr, Ref)
         }
-        for expr, _, _ in select:
+        # Build a mapping of select expressions to their aliases to handle
+        # ambiguous column references in GROUP BY clauses
+        select_alias_map = {}
+        for expr, _, alias in select:
+            if alias and hasattr(expr, 'get_group_by_cols'):
+                select_alias_map[expr] = alias
+        
+        for expr, _, alias in select:
             # Skip members of the select clause that are already included
             # by reference.
             if expr in ref_sources:
                 continue
             cols = expr.get_group_by_cols()
             for col in cols:
-                expressions.append(col)
+                # For subquery annotations that might create ambiguous references,
+                # prefer using the alias if available
+                if alias and expr in select_alias_map and hasattr(col, 'target'):
+                    # Create a reference to the aliased column instead of the raw column
+                    # to avoid ambiguous column references in GROUP BY
+                    if hasattr(col, 'alias') and col.alias == self.query.base_table:
+                        expressions.append(Ref(alias, expr))
+                    else:
+                        expressions.append(col)
+                else:
+                    expressions.append(col)
         for expr, (sql, params, is_ref) in order_by:
             # Skip References to the select clause, as all expressions in the
             # select clause are already part of the group by.
