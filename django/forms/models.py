@@ -231,6 +231,10 @@ def fields_for_model(
         if formfield:
             if apply_limit_choices_to:
                 apply_limit_choices_to_to_formfield(formfield)
+            # Prevent show_hidden_initial for fields with callable defaults
+            # to avoid validation bypass issues in inline formsets
+            if hasattr(f, 'default') and callable(f.default):
+                formfield.show_hidden_initial = False
             field_dict[f.name] = formfield
         else:
             ignored.append(f.name)
@@ -376,6 +380,17 @@ class BaseModelForm(BaseForm, AltersData):
         )
         for formfield in self.fields.values():
             apply_limit_choices_to_to_formfield(formfield)
+        
+        # Additional check for callable defaults in ModelForm context
+        if opts.model:
+            for field_name, formfield in self.fields.items():
+                try:
+                    model_field = opts.model._meta.get_field(field_name)
+                    if hasattr(model_field, 'default') and callable(model_field.default):
+                        formfield.show_hidden_initial = False
+                except:
+                    # Field might not exist on model (e.g., custom form fields)
+                    pass
 
     def _get_validation_exclusions(self):
         """
