@@ -1,5 +1,5 @@
 from django.apps.registry import Apps
-from django.db import DatabaseError, models
+from django.db import DatabaseError, models, router
 from django.utils.functional import classproperty
 from django.utils.timezone import now
 
@@ -58,6 +58,9 @@ class MigrationRecorder:
 
     def ensure_schema(self):
         """Ensure the table exists and has the correct schema."""
+        # Check if migrations are allowed on this database
+        if not router.allow_migrate(self.connection.alias, self.Migration):
+            return
         # If the table's there, that's fine - we've never changed its schema
         # in the codebase.
         if self.has_table():
@@ -83,11 +86,15 @@ class MigrationRecorder:
 
     def record_applied(self, app, name):
         """Record that a migration was applied."""
+        if not router.allow_migrate(self.connection.alias, self.Migration):
+            return
         self.ensure_schema()
         self.migration_qs.create(app=app, name=name)
 
     def record_unapplied(self, app, name):
         """Record that a migration was unapplied."""
+        if not router.allow_migrate(self.connection.alias, self.Migration):
+            return
         self.ensure_schema()
         self.migration_qs.filter(app=app, name=name).delete()
 
