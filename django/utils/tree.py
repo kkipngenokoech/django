@@ -50,8 +50,41 @@ class Node:
     def __deepcopy__(self, memodict):
         obj = Node(connector=self.connector, negated=self.negated)
         obj.__class__ = self.__class__
-        obj.children = copy.deepcopy(self.children, memodict)
+        obj.children = self._deepcopy_children(self.children, memodict)
         return obj
+
+    def _deepcopy_children(self, children, memodict):
+        """Deep copy children, converting non-pickleable objects to pickleable equivalents."""
+        copied_children = []
+        for child in children:
+            try:
+                copied_children.append(copy.deepcopy(child, memodict))
+            except TypeError:
+                # Handle non-pickleable objects by converting them
+                copied_child = self._make_pickleable(child)
+                copied_children.append(copy.deepcopy(copied_child, memodict))
+        return copied_children
+
+    def _make_pickleable(self, obj):
+        """Convert non-pickleable objects to pickleable equivalents."""
+        if isinstance(obj, tuple) and len(obj) == 2:
+            # Handle (field, value) tuples which are common in Q objects
+            field, value = obj
+            return (field, self._convert_value(value))
+        return self._convert_value(obj)
+
+    def _convert_value(self, value):
+        """Convert a single value to a pickleable equivalent."""
+        # Convert dict_keys and dict_values to lists
+        if hasattr(value, '__iter__') and not isinstance(value, (str, bytes)):
+            try:
+                # Test if it's pickleable
+                copy.deepcopy(value)
+                return value
+            except TypeError:
+                # Convert to list if not pickleable
+                return list(value)
+        return value
 
     def __len__(self):
         """Return the number of children this node has."""
