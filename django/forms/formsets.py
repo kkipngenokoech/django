@@ -257,12 +257,16 @@ class BaseFormSet(RenderableFormMixin):
 
     @property
     def empty_form(self):
+        form_kwargs = self.get_form_kwargs(None)
+        # Remove empty_permitted from form_kwargs as it's explicitly set below
+        # and not relevant for empty forms
+        form_kwargs.pop('empty_permitted', None)
         form = self.form(
             auto_id=self.auto_id,
             prefix=self.add_prefix("__prefix__"),
             empty_permitted=True,
             use_required_attribute=False,
-            **self.get_form_kwargs(None),
+            **form_kwargs,
             renderer=self.renderer,
         )
         self.add_fields(form, None)
