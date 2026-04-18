@@ -264,6 +264,10 @@ class AlterField(FieldOperation):
                     field=self.field,
                 ),
             ]
+        elif isinstance(operation, AlterField) and self.is_same_field_operation(
+            operation
+        ):
+            return [operation]
         return super().reduce(operation, app_label)
 
 
