@@ -133,6 +133,10 @@ class Command(BaseCommand):
                 known_models.append(table2model(table_name))
                 used_column_names = []  # Holds column names used in the table so far
                 column_to_field_name = {}  # Maps column names to names of model fields
+                # Track foreign key relationships to detect multiple references to same model
+                fk_relations = {}  # Maps target table to list of (field_name, column_name) tuples
+                field_lines = []  # Store field lines to potentially modify them later
+                
                 for row in table_description:
                     comment_notes = (
                         []
@@ -182,6 +186,12 @@ class Command(BaseCommand):
                             if ref_db_table == table_name
                             else table2model(ref_db_table)
                         )
+                        
+                        # Track this relationship for related_name generation
+                        if ref_db_table not in fk_relations:
+                            fk_relations[ref_db_table] = []
+                        fk_relations[ref_db_table].append((att_name, column_name))
+                        
                         if rel_to in known_models:
                             field_type = "%s(%s" % (rel_type, rel_to)
                         else:
@@ -233,7 +243,58 @@ class Command(BaseCommand):
                     field_desc += ")"
                     if comment_notes:
                         field_desc += "  # " + " ".join(comment_notes)
-                    yield "    %s" % field_desc
+                    
+                    # Store field info for potential related_name addition
+                    field_info = {
+                        'desc': field_desc,
+                        'att_name': att_name,
+                        'is_relation': is_relation,
+                        'ref_db_table': relations[column_name][1] if is_relation else None,
+                        'extra_params': extra_params.copy(),
+                        'field_type': field_type if is_relation else None
+                    }
+                    field_lines.append(field_info)
+                
+                # Check for multiple FKs to same table and add related_name
+                for ref_table, field_list in fk_relations.items():
+                    if len(field_list) > 1:
+                        # Multiple fields reference the same table, need to add related_name
+                        for field_name, column_name in field_list:
+                            # Find and update the corresponding field_info
+                            for field_info in field_lines:
+                                if field_info['att_name'] == field_name and field_info['is_relation']:
+                                    # Add related_name to extra_params
+                                    field_info['extra_params']['related_name'] = field_name
+                                    
+                                    # Rebuild field_desc with related_name
+                                    field_desc = "%s = %s%s" % (
+                                        field_info['att_name'],
+                                        "" if "." in field_info['field_type'] else "models.",
+                                        field_info['field_type'],
+                                    )
+                                    if field_info['field_type'].startswith(("ForeignKey(", "OneToOneField(")):
+                                        field_desc += ", models.DO_NOTHING"
+                                    
+                                    if field_info['extra_params']:
+                                        if not field_desc.endswith("("):
+                                            field_desc += ", "
+                                        field_desc += ", ".join(
+                                            "%s=%r" % (k, v) for k, v in field_info['extra_params'].items()
+                                        )
+                                    field_desc += ")"
+                                    
+                                    # Add any comment notes back
+                                    original_desc = field_info['desc']
+                                    if "  # " in original_desc:
+                                        comment_part = original_desc.split("  # ", 1)[1]
+                                        field_desc += "  # " + comment_part
+                                    
+                                    field_info['desc'] = field_desc
+                                    break
+                
+                # Yield all field lines
+                for field_info in field_lines:
+                    yield "    %s" % field_info['desc']
                 is_view = any(
                     info.name == table_name and info.type == "v" for info in table_info
                 )
