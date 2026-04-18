@@ -41,9 +41,13 @@ class MigrationOptimizer:
         """Inner optimization loop."""
         new_operations = []
         for i, operation in enumerate(operations):
+            # Convert index_together to indexes before optimization
+            operation = self._convert_index_together_to_indexes(operation)
+            
             right = True  # Should we reduce on the right or on the left.
             # Compare it to each operation after it
             for j, other in enumerate(operations[i + 1 :]):
+                other = self._convert_index_together_to_indexes(other)
                 result = operation.reduce(other, app_label)
                 if isinstance(result, list):
                     in_between = operations[i + 1 : i + j + 1]
@@ -67,3 +71,57 @@ class MigrationOptimizer:
             else:
                 new_operations.append(operation)
         return new_operations
+
+    def _convert_index_together_to_indexes(self, operation):
+        """Convert index_together to indexes in CreateModel and AlterModelOptions operations."""
+        from django.db.migrations.operations.models import CreateModel, AlterModelOptions
+        from django.db import models
+        
+        if isinstance(operation, CreateModel):
+            options = operation.options.copy()
+            if 'index_together' in options:
+                index_together = options.pop('index_together')
+                indexes = list(options.get('indexes', []))
+                
+                # Convert index_together tuples to Index objects
+                for fields in index_together:
+                    if isinstance(fields, (list, tuple)):
+                        # Create an Index object from the field names
+                        index = models.Index(fields=list(fields))
+                        indexes.append(index)
+                
+                if indexes:
+                    options['indexes'] = indexes
+                
+                # Create new CreateModel operation with updated options
+                return CreateModel(
+                    name=operation.name,
+                    fields=operation.fields,
+                    options=options,
+                    bases=operation.bases,
+                    managers=operation.managers,
+                )
+        
+        elif isinstance(operation, AlterModelOptions):
+            options = operation.options.copy()
+            if 'index_together' in options:
+                index_together = options.pop('index_together')
+                indexes = list(options.get('indexes', []))
+                
+                # Convert index_together tuples to Index objects
+                for fields in index_together:
+                    if isinstance(fields, (list, tuple)):
+                        # Create an Index object from the field names
+                        index = models.Index(fields=list(fields))
+                        indexes.append(index)
+                
+                if indexes:
+                    options['indexes'] = indexes
+                
+                # Create new AlterModelOptions operation with updated options
+                return AlterModelOptions(
+                    name=operation.name,
+                    options=options,
+                )
+        
+        return operation
