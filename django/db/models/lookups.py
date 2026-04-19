@@ -462,6 +462,14 @@ class IsNull(BuiltinLookup):
     lookup_name = 'isnull'
     prepare_rhs = False
 
+    def get_prep_lookup(self):
+        if not isinstance(self.rhs, bool):
+            raise ValueError(
+                'The __isnull lookup requires a boolean value (True or False), '
+                'got %r.' % self.rhs
+            )
+        return self.rhs
+
     def as_sql(self, compiler, connection):
         sql, params = compiler.compile(self.lhs)
         if self.rhs:
