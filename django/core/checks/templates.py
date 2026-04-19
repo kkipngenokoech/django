@@ -51,14 +51,20 @@ def check_string_if_invalid_is_string(app_configs, **kwargs):
 def check_for_template_tags_with_the_same_name(app_configs, **kwargs):
     errors = []
     libraries = defaultdict(list)
+    custom_library_names = set()
 
+    # First, collect custom libraries from TEMPLATES configuration
     for conf in settings.TEMPLATES:
         custom_libraries = conf.get("OPTIONS", {}).get("libraries", {})
         for module_name, module_path in custom_libraries.items():
             libraries[module_name].append(module_path)
+            custom_library_names.add(module_name)
 
+    # Then, collect libraries from installed apps, but skip those already
+    # explicitly configured to avoid duplicates
     for module_name, module_path in get_template_tag_modules():
-        libraries[module_name].append(module_path)
+        if module_name not in custom_library_names:
+            libraries[module_name].append(module_path)
 
     for library_name, items in libraries.items():
         if len(items) > 1:
