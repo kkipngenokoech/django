@@ -1036,6 +1036,8 @@ class CharField(Field):
     description = _("String (up to %(max_length)s)")
 
     def __init__(self, *args, **kwargs):
+        if 'help_text' not in kwargs or not kwargs['help_text']:
+            kwargs['help_text'] = _('Enter a duration in the format: [DD] [[HH:]MM:]ss[.uuuuuu]')
         super().__init__(*args, **kwargs)
         self.validators.append(validators.MaxLengthValidator(self.max_length))
 
