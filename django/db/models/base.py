@@ -1375,6 +1375,49 @@ class Model(metaclass=ModelBase):
             errors.extend(field.check(**kwargs))
         for field in cls._meta.local_many_to_many:
             errors.extend(field.check(from_model=cls, **kwargs))
+        
+        # Check for auto-created primary key warning (W042)
+        # Only warn if no primary key is defined locally or inherited
+        if not cls._meta.abstract and not cls._meta.proxy:
+            # Check if model has a primary key field (local or inherited)
+            has_primary_key = False
+            
+            # Check local fields first
+            for field in cls._meta.local_fields:
+                if field.primary_key:
+                    has_primary_key = True
+                    break
+            
+            # If no local primary key, check inherited fields
+            if not has_primary_key:
+                for parent in cls._meta.get_parent_list():
+                    if parent._meta.pk:
+                        has_primary_key = True
+                        break
+            
+            # If still no primary key found, check if an auto field was created
+            if not has_primary_key:
+                pk_field = cls._meta.pk
+                if pk_field and getattr(pk_field, 'auto_created', False):
+                    from django.conf import settings
+                    default_auto_field = getattr(settings, 'DEFAULT_AUTO_FIELD', 'django.db.models.AutoField')
+                    app_config = cls._meta.apps.get_containing_app_config(cls.__module__)
+                    if app_config and hasattr(app_config, 'default_auto_field'):
+                        default_auto_field = app_config.default_auto_field
+                    
+                    errors.append(
+                        checks.Warning(
+                            "Auto-created primary key used when not defining a primary key type, "
+                            "by default '%s'." % default_auto_field,
+                            hint=(
+                                "Configure the DEFAULT_AUTO_FIELD setting or the %sConfig.default_auto_field "
+                                "attribute to point to a subclass of AutoField, e.g. 'django.db.models.BigAutoField'."
+                            ) % (app_config.name if app_config else cls._meta.app_label),
+                            obj=cls,
+                            id='models.W042',
+                        )
+                    )
+        
         return errors
 
     @classmethod
