@@ -346,6 +346,13 @@ class ModelBase(type):
                 remote = wrt.remote_field.model
                 lazy_related_operation(make_foreign_order_accessors, cls, remote)
 
+        # Create get_FOO_display methods for fields with choices
+        # This needs to be done after all fields are set up to ensure
+        # we use the correct choices from the current model class
+        for field in opts.fields:
+            if field.choices:
+                cls._create_display_method(field)
+
         # Give the class a docstring -- its definition.
         if cls.__doc__ is None:
             cls.__doc__ = "%s(%s)" % (cls.__name__, ", ".join(f.name for f in opts.fields))
@@ -380,6 +387,22 @@ class ModelBase(type):
     @property
     def _default_manager(cls):
         return cls._meta.default_manager
+
+    def _create_display_method(cls, field):
+        """Create get_FOO_display method for a field with choices."""
+        def make_get_display(field_name):
+            def get_display(self):
+                # Get the field from the current model class to ensure we use
+                # the correct choices, not inherited ones
+                current_field = self._meta.get_field(field_name)
+                value = getattr(self, current_field.attname)
+                choices_dict = dict(current_field.choices)
+                return choices_dict.get(value, value)
+            return get_display
+        
+        method_name = 'get_%s_display' % field.name
+        if not hasattr(cls, method_name):
+            setattr(cls, method_name, make_get_display(field.name))
 
 
 class ModelStateFieldsCacheDescriptor:
