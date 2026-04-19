@@ -511,7 +511,36 @@ class WatchmanReloader(BaseReloader):
         extra_directories = self.directory_globs.keys()
         watched_file_dirs = [f.parent for f in watched_files]
         sys_paths = list(sys_path_directories())
-        return frozenset((*extra_directories, *watched_file_dirs, *sys_paths))
+        
+        # Normalize and deduplicate all paths to avoid circular references
+        all_paths = set()
+        for path in (*extra_directories, *watched_file_dirs, *sys_paths):
+            try:
+                normalized_path = Path(path).resolve().absolute()
+                all_paths.add(normalized_path)
+            except (OSError, ValueError):
+                # Skip paths that can't be resolved
+                continue
+        
+        # Remove any path that is a parent of another path to avoid redundant watching
+        filtered_paths = set()
+        sorted_paths = sorted(all_paths, key=lambda p: len(p.parts))
+        
+        for path in sorted_paths:
+            # Check if this path is already covered by a parent path we're watching
+            is_covered = False
+            for existing_path in filtered_paths:
+                try:
+                    if existing_path in path.parents or existing_path == path:
+                        is_covered = True
+                        break
+                except (OSError, ValueError):
+                    continue
+            
+            if not is_covered:
+                filtered_paths.add(path)
+        
+        return frozenset(filtered_paths)
 
     def _update_watches(self):
         watched_files = list(self.watched_files(include_globs=False))
