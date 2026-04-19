@@ -25,6 +25,11 @@ E004 = Error(
 )
 
 
+def get_base_language(language_code):
+    """Extract the base language from a language code (e.g., 'de' from 'de-at')."""
+    return language_code.split('-')[0]
+
+
 @register(Tags.translation)
 def check_setting_language_code(app_configs, **kwargs):
     """Error if LANGUAGE_CODE setting is invalid."""
@@ -56,6 +61,15 @@ def check_setting_languages_bidi(app_configs, **kwargs):
 def check_language_settings_consistent(app_configs, **kwargs):
     """Error if language settings are not consistent with each other."""
     available_tags = {i for i, _ in settings.LANGUAGES} | {'en-us'}
-    if settings.LANGUAGE_CODE not in available_tags:
-        return [E004]
-    return []
+    
+    # Check if LANGUAGE_CODE is directly available
+    if settings.LANGUAGE_CODE in available_tags:
+        return []
+    
+    # If not directly available, check if base language is available
+    base_language = get_base_language(settings.LANGUAGE_CODE)
+    if base_language in available_tags:
+        return []
+    
+    # Neither the full language code nor its base language is available
+    return [E004]
