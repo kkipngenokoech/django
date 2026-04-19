@@ -19,6 +19,105 @@ class MockedPasswordResetTokenGenerator(PasswordResetTokenGenerator):
 
 class TokenGeneratorTest(TestCase):
 
+    def test_token_invalidated_when_email_changes(self):
+        """
+        Test that password reset tokens are invalidated when user's email changes.
+        """
+        User = get_user_model()
+        user = User.objects.create_user(
+            username='testuser',
+            email='original@example.com',
+            password='testpass123'
+        )
+        
+        # Generate token with original email
+        token_generator = PasswordResetTokenGenerator()
+        token = token_generator.make_token(user)
+        
+        # Verify token is valid with original email
+        self.assertTrue(token_generator.check_token(user, token))
+        
+        # Change user's email
+        user.email = 'changed@example.com'
+        user.save()
+        
+        # Token should now be invalid
+        self.assertFalse(token_generator.check_token(user, token))
+        
+        # New token should work with changed email
+        new_token = token_generator.make_token(user)
+        self.assertTrue(token_generator.check_token(user, new_token))
+    
+    def test_token_works_with_no_email(self):
+        """
+        Test that tokens work for users without email addresses.
+        """
+        User = get_user_model()
+        user = User.objects.create_user(
+            username='noemailuser',
+            password='testpass123'
+        )
+        # Ensure no email is set
+        user.email = ''
+        user.save()
+        
+        token_generator = PasswordResetTokenGenerator()
+        token = token_generator.make_token(user)
+        
+        # Token should be valid
+        self.assertTrue(token_generator.check_token(user, token))
+    
+    def test_token_invalidated_when_email_set_to_empty(self):
+        """
+        Test that tokens are invalidated when email is changed to empty string.
+        """
+        User = get_user_model()
+        user = User.objects.create_user(
+            username='testemptyemail',
+            email='test@example.com',
+            password='testpass123'
+        )
+        
+        token_generator = PasswordResetTokenGenerator()
+        token = token_generator.make_token(user)
+        
+        # Verify token is valid with email
+        self.assertTrue(token_generator.check_token(user, token))
+        
+        # Change email to empty string
+        user.email = ''
+        user.save()
+        
+        # Token should now be invalid
+        self.assertFalse(token_generator.check_token(user, token))
+    
+    def test_token_invalidated_when_email_set_from_empty(self):
+        """
+        Test that tokens are invalidated when email is changed from empty to a value.
+        """
+        User = get_user_model()
+        user = User.objects.create_user(
+            username='testfromempty',
+            password='testpass123'
+        )
+        user.email = ''
+        user.save()
+        
+        token_generator = PasswordResetTokenGenerator()
+        token = token_generator.make_token(user)
+        
+        # Verify token is valid with no email
+        self.assertTrue(token_generator.check_token(user, token))
+        
+        # Set email to a value
+        user.email = 'newemail@example.com'
+        user.save()
+        
+        # Token should now be invalid
+        self.assertFalse(token_generator.check_token(user, token))
+
+class TokenGeneratorTest(TestCase):
+
     def test_make_token(self):
         user = User.objects.create_user('tokentestuser', 'test2@example.com', 'testpw')
         p0 = PasswordResetTokenGenerator()
