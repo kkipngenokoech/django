@@ -50,8 +50,32 @@ class Node:
     def __deepcopy__(self, memodict):
         obj = Node(connector=self.connector, negated=self.negated)
         obj.__class__ = self.__class__
-        obj.children = copy.deepcopy(self.children, memodict)
+        obj.children = self._deepcopy_children(self.children, memodict)
         return obj
+
+    def _deepcopy_children(self, children, memodict):
+        """Deep copy children, converting non-pickleable iterables to lists."""
+        copied_children = []
+        for child in children:
+            try:
+                copied_children.append(copy.deepcopy(child, memodict))
+            except TypeError:
+                # Handle non-pickleable objects by converting them to pickleable equivalents
+                if isinstance(child, tuple) and len(child) == 2:
+                    key, value = child
+                    try:
+                        # Try to copy the value first
+                        copied_value = copy.deepcopy(value, memodict)
+                        copied_children.append((key, copied_value))
+                    except TypeError:
+                        # If value is non-pickleable, convert it to a list if it's an iterable
+                        if hasattr(value, '__iter__') and not isinstance(value, (str, bytes)):
+                            copied_children.append((key, list(value)))
+                        else:
+                            copied_children.append(child)
+                else:
+                    copied_children.append(child)
+        return copied_children
 
     def __len__(self):
         """Return the number of children this node has."""
