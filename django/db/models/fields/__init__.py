@@ -128,6 +128,22 @@ class Field(RegisterLookupMixin):
         }
     description = property(_description)
 
+    def _convert_choices_value(self, value):
+        """
+        Convert a Choices enum value to its primitive type.
+        """
+        if value is None:
+            return value
+        
+        # Check if this is a Choices enum by looking for the value attribute
+        # This is more reliable than isinstance checks since Choices are dynamic
+        if hasattr(value, '_name_') and hasattr(value, '_value_') and hasattr(value, '__class__'):
+            # Check if it's likely a Choices enum by seeing if the class has choices attribute
+            if hasattr(value.__class__, 'choices'):
+                return value.value
+        
+        return value
+
     def __init__(self, verbose_name=None, name=None, primary_key=False,
                  max_length=None, unique=False, blank=False, null=False,
                  db_index=False, rel=None, default=NOT_PROVIDED, editable=True,
