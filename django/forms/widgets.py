@@ -307,6 +307,14 @@ class TextInput(Input):
 class NumberInput(Input):
     input_type = 'number'
     template_name = 'django/forms/widgets/number.html'
+    
+    def format_value(self, value):
+        if value is None:
+            return ''
+        if isinstance(value, str):
+            return value
+        # For number inputs, use unlocalized format to ensure valid HTML5 number format
+        return str(value)
 
 
 class EmailInput(Input):
