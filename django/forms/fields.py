@@ -678,6 +678,16 @@ class URLField(CharField):
     def __init__(self, **kwargs):
         super().__init__(strip=True, **kwargs)
 
+    def clean(self, value):
+        """
+        Validate the given value and return its "cleaned" value as an
+        appropriate Python object. Raise ValidationError for any errors.
+        """
+        try:
+            return super().clean(value)
+        except ValueError as e:
+            raise ValidationError(self.error_messages['invalid'], code='invalid') from e
+
     def to_python(self, value):
 
         def split_url(url):
