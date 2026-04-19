@@ -472,6 +472,10 @@ class DurationField(Field):
         'overflow': _('The number of days must be between {min_days} and {max_days}.')
     }
 
+    def __init__(self, **kwargs):
+        kwargs.setdefault('help_text', _('Duration format: [DD] [[HH:]MM:]ss[.uuuuuu]'))
+        super().__init__(**kwargs)
+
     def prepare_value(self, value):
         if isinstance(value, datetime.timedelta):
             return duration_string(value)
