@@ -353,7 +353,10 @@ class SQLCompiler:
             # not taken into account so we strip it. When this entire method
             # is refactored into expressions, then we can check each part as we
             # generate it.
-            without_ordering = self.ordering_parts.search(sql).group(1)
+            # Normalize multiline SQL to single line before regex matching
+            # to handle multiline RawSQL expressions correctly
+            sql_oneline = ' '.join(sql.split())
+            without_ordering = self.ordering_parts.search(sql_oneline).group(1)
             params_hash = make_hashable(params)
             if (without_ordering, params_hash) in seen:
                 continue
