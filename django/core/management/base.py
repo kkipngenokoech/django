@@ -130,6 +130,12 @@ class DjangoHelpFormatter(HelpFormatter):
     def add_arguments(self, actions):
         super().add_arguments(self._reordered_actions(actions))
 
+    def _fill_text(self, text, width, indent):
+        """
+        Preserve whitespace and formatting in help text descriptions.
+        """
+        return '\n'.join(indent + line for line in text.splitlines())
+
 
 class OutputWrapper(TextIOBase):
     """
