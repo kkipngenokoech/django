@@ -182,6 +182,35 @@ class ValidationError(Exception):
     def __repr__(self):
         return 'ValidationError(%s)' % self
 
+    def __eq__(self, other):
+        if not isinstance(other, ValidationError):
+            return False
+        
+        # Compare error_dict cases
+        if hasattr(self, 'error_dict') and hasattr(other, 'error_dict'):
+            if set(self.error_dict.keys()) != set(other.error_dict.keys()):
+                return False
+            for field in self.error_dict:
+                self_messages = set(str(error.message) for error in self.error_dict[field])
+                other_messages = set(str(error.message) for error in other.error_dict[field])
+                if self_messages != other_messages:
+                    return False
+            return True
+        
+        # Compare error_list cases (order-independent)
+        if hasattr(self, 'error_list') and hasattr(other, 'error_list'):
+            # Only compare if both don't have error_dict
+            if not hasattr(self, 'error_dict') and not hasattr(other, 'error_dict'):
+                self_messages = set(str(error.message) for error in self.error_list)
+                other_messages = set(str(error.message) for error in other.error_list)
+                return self_messages == other_messages
+        
+        # One has error_dict, other has error_list - not equal
+        if hasattr(self, 'error_dict') != hasattr(other, 'error_dict'):
+            return False
+        
+        return False
+
 
 class EmptyResultSet(Exception):
     """A database query predicate is impossible."""
