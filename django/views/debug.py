@@ -84,12 +84,17 @@ class SafeExceptionReporterFilter:
         """
         Cleanse an individual setting key/value of sensitive content. If the
         value is a dictionary, recursively cleanse the keys in that dictionary.
+        For other iterables, recursively cleanse their contents.
         """
         try:
             if self.hidden_settings.search(key):
                 cleansed = self.cleansed_substitute
             elif isinstance(value, dict):
                 cleansed = {k: self.cleanse_setting(k, v) for k, v in value.items()}
+            elif isinstance(value, (list, tuple)):
+                cleansed = type(value)(
+                    self.cleanse_setting('', item) for item in value
+                )
             else:
                 cleansed = value
         except TypeError:
