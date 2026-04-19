@@ -8,6 +8,7 @@ from django.core.handlers.asgi import ASGIHandler
 from django.core.handlers.exception import response_for_exception
 from django.core.handlers.wsgi import WSGIHandler, get_path_info
 from django.http import Http404
+from django.utils.decorators import sync_and_async_middleware
 
 
 class StaticFilesHandlerMixin:
@@ -46,9 +47,19 @@ class StaticFilesHandlerMixin:
         """Serve the request path."""
         return serve(request, self.file_path(request.path), insecure=True)
 
+    async def serve_async(self, request):
+        """Serve the request path asynchronously."""
+        return serve(request, self.file_path(request.path), insecure=True)
+
     def get_response(self, request):
         try:
             return self.serve(request)
+        except Http404 as e:
+            return response_for_exception(request, e)
+
+    async def get_response_async(self, request):
+        try:
+            return await self.serve_async(request)
         except Http404 as e:
             return response_for_exception(request, e)
 
