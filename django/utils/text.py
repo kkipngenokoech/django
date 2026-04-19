@@ -20,7 +20,7 @@ def capfirst(x):
 # Set up regular expressions
 re_words = _lazy_re_compile(r'<[^>]+?>|([^<>\s]+)', re.S)
 re_chars = _lazy_re_compile(r'<[^>]+?>|(.)', re.S)
-re_tag = _lazy_re_compile(r'<(/)?(\S+?)(?:(\s*/)|\s.*?)?>', re.S)
+re_tag = _lazy_re_compile(r'<(/)?(\S+?)(?:(\s*/)\s.*?)?>', re.S)
 re_newlines = _lazy_re_compile(r'\r\n|\r')  # Used in normalize_newlines
 re_camel_case = _lazy_re_compile(r'(((?<=[a-z])[A-Z])|([A-Z](?![A-Z]|$)))')
 
@@ -395,7 +395,8 @@ def slugify(value, allow_unicode=False):
     """
     Convert to ASCII if 'allow_unicode' is False. Convert spaces to hyphens.
     Remove characters that aren't alphanumerics, underscores, or hyphens.
-    Convert to lowercase. Also strip leading and trailing whitespace.
+    Convert to lowercase. Also strip leading and trailing whitespace, dashes,
+    and underscores.
     """
     value = str(value)
     if allow_unicode:
@@ -403,7 +404,8 @@ def slugify(value, allow_unicode=False):
     else:
         value = unicodedata.normalize('NFKD', value).encode('ascii', 'ignore').decode('ascii')
     value = re.sub(r'[^\w\s-]', '', value.lower()).strip()
-    return re.sub(r'[-\s]+', '-', value)
+    value = re.sub(r'[-\s]+', '-', value)
+    return re.sub(r'^[-_]+|[-_]+$', '', value)
 
 
 def camel_case_to_spaces(value):
