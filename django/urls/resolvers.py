@@ -45,12 +45,22 @@ class ResolverMatch:
         self.namespaces = [x for x in namespaces if x] if namespaces else []
         self.namespace = ':'.join(self.namespaces)
 
-        if not hasattr(func, '__name__'):
+        # Handle functools.partial objects by unwrapping them
+        self._partial_args = ()
+        self._partial_kwargs = {}
+        unwrapped_func = func
+        
+        if isinstance(func, functools.partial):
+            self._partial_args = func.args
+            self._partial_kwargs = func.keywords
+            unwrapped_func = func.func
+
+        if not hasattr(unwrapped_func, '__name__'):
             # A class-based view
-            self._func_path = func.__class__.__module__ + '.' + func.__class__.__name__
+            self._func_path = unwrapped_func.__class__.__module__ + '.' + unwrapped_func.__class__.__name__
         else:
             # A function-based view
-            self._func_path = func.__module__ + '.' + func.__name__
+            self._func_path = unwrapped_func.__module__ + '.' + unwrapped_func.__name__
 
         view_path = url_name or self._func_path
         self.view_name = ':'.join(self.namespaces + [view_path])
@@ -59,8 +69,18 @@ class ResolverMatch:
         return (self.func, self.args, self.kwargs)[index]
 
     def __repr__(self):
+        if isinstance(self.func, functools.partial):
+            func_repr = "functools.partial(%s" % self._func_path
+            if self._partial_args:
+                func_repr += ", %s" % ", ".join(repr(arg) for arg in self._partial_args)
+            if self._partial_kwargs:
+                func_repr += ", %s" % ", ".join("%s=%r" % (k, v) for k, v in self._partial_kwargs.items())
+            func_repr += ")"
+        else:
+            func_repr = self._func_path
+            
         return "ResolverMatch(func=%s, args=%s, kwargs=%s, url_name=%s, app_names=%s, namespaces=%s, route=%s)" % (
-            self._func_path, self.args, self.kwargs, self.url_name,
+            func_repr, self.args, self.kwargs, self.url_name,
             self.app_names, self.namespaces, self.route,
         )
 
