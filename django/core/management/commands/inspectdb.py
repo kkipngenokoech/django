@@ -133,6 +133,8 @@ class Command(BaseCommand):
                 known_models.append(table2model(table_name))
                 used_column_names = []  # Holds column names used in the table so far
                 column_to_field_name = {}  # Maps column names to names of model fields
+                # Track foreign key relationships to detect multiple refs to same model
+                fk_relations = {}  # Maps target table to list of (field_name, column_name) tuples
                 for row in table_description:
                     comment_notes = (
                         []
@@ -182,6 +184,12 @@ class Command(BaseCommand):
                             if ref_db_table == table_name
                             else table2model(ref_db_table)
                         )
+                        
+                        # Track this foreign key relationship
+                        if ref_db_table not in fk_relations:
+                            fk_relations[ref_db_table] = []
+                        fk_relations[ref_db_table].append((att_name, column_name))
+                        
                         if rel_to in known_models:
                             field_type = "%s(%s" % (rel_type, rel_to)
                         else:
@@ -223,6 +231,12 @@ class Command(BaseCommand):
                     )
                     if field_type.startswith(("ForeignKey(", "OneToOneField(")):
                         field_desc += ", models.DO_NOTHING"
+                        
+                        # Add related_name if multiple fields reference the same table
+                        if is_relation and len(fk_relations[ref_db_table]) > 1:
+                            # Only add related_name if not already specified
+                            if "related_name" not in extra_params:
+                                extra_params["related_name"] = att_name
 
                     if extra_params:
                         if not field_desc.endswith("("):
