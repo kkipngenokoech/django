@@ -37,17 +37,29 @@ class PrefixNode(template.Node):
         return cls(varname, name)
 
     @classmethod
-    def handle_simple(cls, name):
+    def handle_simple(cls, name, context=None):
         try:
             from django.conf import settings
         except ImportError:
             prefix = ''
         else:
             prefix = iri_to_uri(getattr(settings, name, ''))
+        
+        # Add SCRIPT_NAME support
+        if context and 'request' in context:
+            request = context['request']
+            script_name = getattr(request, 'META', {}).get('SCRIPT_NAME', '')
+            if script_name and prefix:
+                # Ensure script_name doesn't end with / and prefix starts with /
+                script_name = script_name.rstrip('/')
+                if not prefix.startswith('/'):
+                    prefix = '/' + prefix
+                prefix = script_name + prefix
+        
         return prefix
 
     def render(self, context):
-        prefix = self.handle_simple(self.name)
+        prefix = self.handle_simple(self.name, context)
         if self.varname is None:
             return prefix
         context[self.varname] = prefix
@@ -100,7 +112,7 @@ class StaticNode(template.Node):
 
     def url(self, context):
         path = self.path.resolve(context)
-        return self.handle_simple(path)
+        return self.handle_simple(path, context)
 
     def render(self, context):
         url = self.url(context)
@@ -112,12 +124,29 @@ class StaticNode(template.Node):
         return ''
 
     @classmethod
-    def handle_simple(cls, path):
+    def handle_simple(cls, path, context=None):
         if apps.is_installed('django.contrib.staticfiles'):
             from django.contrib.staticfiles.storage import staticfiles_storage
-            return staticfiles_storage.url(path)
+            url = staticfiles_storage.url(path)
         else:
-            return urljoin(PrefixNode.handle_simple("STATIC_URL"), quote(path))
+            url = urljoin(PrefixNode.handle_simple("STATIC_URL", context), quote(path))
+        
+        # Add SCRIPT_NAME support for non-staticfiles case or when staticfiles doesn't handle it
+        if context and 'request' in context and not apps.is_installed('django.contrib.staticfiles'):
+            request = context['request']
+            script_name = getattr(request, 'META', {}).get('SCRIPT_NAME', '')
+            if script_name and url.startswith('/'):
+                script_name = script_name.rstrip('/')
+                url = script_name + url
+        elif context and 'request' in context and apps.is_installed('django.contrib.staticfiles'):
+            # For staticfiles, we need to check if the URL needs SCRIPT_NAME prepended
+            request = context['request']
+            script_name = getattr(request, 'META', {}).get('SCRIPT_NAME', '')
+            if script_name and url.startswith('/') and not url.startswith(script_name):
+                script_name = script_name.rstrip('/')
+                url = script_name + url
+        
+        return url
 
     @classmethod
     def handle_token(cls, parser, token):
