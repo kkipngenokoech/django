@@ -153,7 +153,9 @@ class BoundField:
         id_ = widget.attrs.get('id') or self.auto_id
         if id_:
             id_for_label = widget.id_for_label(id_)
-            if id_for_label:
+            # Check if widget is labelable before adding 'for' attribute
+            widget_is_labelable = getattr(widget, 'labelable', True)
+            if id_for_label and widget_is_labelable:
                 attrs = {**(attrs or {}), 'for': id_for_label}
             if self.field.required and hasattr(self.form, 'required_css_class'):
                 attrs = attrs or {}

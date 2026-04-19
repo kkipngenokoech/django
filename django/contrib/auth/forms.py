@@ -33,6 +33,7 @@ def _unicode_ci_compare(s1, s2):
 class ReadOnlyPasswordHashWidget(forms.Widget):
     template_name = 'auth/widgets/read_only_password_hash.html'
     read_only = True
+    labelable = False
 
     def get_context(self, name, value, attrs):
         context = super().get_context(name, value, attrs)
