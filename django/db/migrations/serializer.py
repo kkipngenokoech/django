@@ -125,8 +125,55 @@ class EnumSerializer(BaseSerializer):
     def serialize(self):
         enum_class = self.value.__class__
         module = enum_class.__module__
+        
+        # Check if the enum value has a name (single flag)
+        if hasattr(self.value, 'name') and self.value.name is not None:
+            return (
+                "%s.%s[%r]" % (module, enum_class.__qualname__, self.value.name),
+                {"import %s" % module},
+            )
+        
+        # Handle combination of enum flags using _decompose
+        if hasattr(enum, '_decompose') and hasattr(enum_class, '_decompose'):
+            try:
+                # Use enum._decompose to get constituent flags
+                decomposed = enum_class._decompose(enum_class, self.value)
+                if decomposed[1]:  # If there are constituent flags
+                    flag_parts = []
+                    for flag in decomposed[1]:
+                        flag_parts.append("%s.%s.%s" % (module, enum_class.__qualname__, flag.name))
+                    return (
+                        " | ".join(flag_parts),
+                        {"import %s" % module},
+                    )
+            except (AttributeError, TypeError, ValueError):
+                pass
+        
+        # Fallback: try to find flags by checking all enum members
+        try:
+            flags = []
+            remaining_value = self.value.value if hasattr(self.value, 'value') else int(self.value)
+            
+            for member in enum_class:
+                member_value = member.value if hasattr(member, 'value') else int(member)
+                if member_value != 0 and (remaining_value & member_value) == member_value:
+                    flags.append(member)
+                    remaining_value &= ~member_value
+            
+            if flags and remaining_value == 0:
+                flag_parts = []
+                for flag in flags:
+                    flag_parts.append("%s.%s.%s" % (module, enum_class.__qualname__, flag.name))
+                return (
+                    " | ".join(flag_parts),
+                    {"import %s" % module},
+                )
+        except (AttributeError, TypeError, ValueError):
+            pass
+        
+        # Final fallback - this should not happen in normal cases
         return (
-            "%s.%s[%r]" % (module, enum_class.__qualname__, self.value.name),
+            "%s.%s(%r)" % (module, enum_class.__qualname__, self.value.value if hasattr(self.value, 'value') else self.value),
             {"import %s" % module},
         )
 
