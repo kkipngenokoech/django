@@ -403,6 +403,56 @@ class ModelState:
 
 class Model(metaclass=ModelBase):
 
+    @classmethod
+    def check(cls, **kwargs):
+        """Run model validation checks."""
+        errors = []
+        errors.extend(cls._check_swappable())
+        errors.extend(cls._check_model())
+        errors.extend(cls._check_managers(**kwargs))
+        errors.extend(cls._check_fields(**kwargs))
+        errors.extend(cls._check_m2m_through_same_relationship())
+        errors.extend(cls._check_id_field())
+        errors.extend(cls._check_field_name_clashes())
+        errors.extend(cls._check_property_name_related_field_accessor_clashes())
+        errors.extend(cls._check_single_primary_key())
+        errors.extend(cls._check_constraints(databases=kwargs.get('databases')))
+        errors.extend(cls._check_default_pk())
+        errors.extend(cls._check_db_table_comment(databases=kwargs.get('databases')))
+        return errors
+
+    @classmethod
+    def _check_default_pk(cls):
+        """Check that models define a primary key or inherit one."""
+        if cls._meta.abstract:
+            return []
+        
+        # Check if model has an explicit primary key field
+        if cls._meta.pk is not None and not cls._meta.pk.auto_created:
+            return []
+        
+        # Check if model inherits a manually specified primary key from parent
+        for parent in cls._meta.get_parent_list():
+            if parent._meta.pk is not None and not parent._meta.pk.auto_created:
+                return []
+        
+        # Only show warning if no explicit primary key is found in model or parents
+        if cls._meta.pk is None or cls._meta.pk.auto_created:
+            return [
+                checks.Warning(
+                    "Auto-created primary key used when not defining a primary key type, "
+                    "by default 'django.db.models.AutoField'.",
+                    hint=(
+                        "Configure the DEFAULT_AUTO_FIELD setting or the %sConfig.default_auto_field "
+                        "attribute to point to a subclass of AutoField, e.g. "
+                        "'django.db.models.BigAutoField'."
+                    ) % cls._meta.app_config.__class__.__name__,
+                    obj=cls,
+                    id='models.W042',
+                )
+            ]
+        return []
+
     def __init__(self, *args, **kwargs):
         # Alias some things as locals to avoid repeat global lookups
         cls = self.__class__
