@@ -163,7 +163,11 @@ class UserChangeForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         password = self.fields.get("password")
         if password:
-            password.help_text = password.help_text.format("../password/")
+            if self.instance and self.instance.pk:
+                password_url = f"../../{self.instance.pk}/password/"
+            else:
+                password_url = "../password/"
+            password.help_text = password.help_text.format(password_url)
         user_permissions = self.fields.get("user_permissions")
         if user_permissions:
             user_permissions.queryset = user_permissions.queryset.select_related(
