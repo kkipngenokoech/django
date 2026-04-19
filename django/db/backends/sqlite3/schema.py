@@ -236,7 +236,36 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 if delete_field.name not in index.fields
             ]
 
-        constraints = list(model._meta.constraints)
+        # Work out the new constraints, taking renames into account
+        constraints = []
+        for constraint in model._meta.constraints:
+            if isinstance(constraint, UniqueConstraint):
+                # Handle field renames in unique constraints
+                new_fields = []
+                constraint_valid = True
+                for field_name in constraint.fields:
+                    if delete_field and field_name == delete_field.name:
+                        # Skip constraints that reference deleted fields
+                        constraint_valid = False
+                        break
+                    new_field_name = rename_mapping.get(field_name, field_name)
+                    new_fields.append(new_field_name)
+                
+                if constraint_valid:
+                    # Create a new constraint with updated field names
+                    new_constraint = UniqueConstraint(
+                        fields=new_fields,
+                        name=constraint.name,
+                        condition=constraint.condition,
+                        deferrable=constraint.deferrable,
+                        include=constraint.include,
+                        opclasses=constraint.opclasses,
+                    )
+                    constraints.append(new_constraint)
+            else:
+                # For non-UniqueConstraint types, keep as-is for now
+                # This preserves existing behavior for other constraint types
+                constraints.append(constraint)
 
         # Provide isolated instances of the fields to the new model body so
         # that the existing model's internals aren't interfered with when
