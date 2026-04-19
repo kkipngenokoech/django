@@ -163,8 +163,18 @@ class MigrationWriter:
                 self.needs_manual_porting = True
 
         # django.db.migrations is always used, but models import may not be.
-        # If models import exists, merge it with migrations import.
-        if "from django.db import models" in imports:
+        # Check if 'models.' is referenced in the serialized content
+        needs_models_import = "from django.db import models" in imports
+        if not needs_models_import:
+            # Check if models.Model or other models references appear in operations
+            operations_content = items.get("operations", "")
+            dependencies_content = items.get("dependencies", "")
+            all_content = operations_content + dependencies_content
+            if "models." in all_content:
+                needs_models_import = True
+        
+        # If models import exists or is needed, merge it with migrations import.
+        if needs_models_import:
             imports.discard("from django.db import models")
             imports.add("from django.db import migrations, models")
         else:
