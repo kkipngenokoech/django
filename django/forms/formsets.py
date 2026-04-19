@@ -40,6 +40,21 @@ class ManagementForm(Form):
     MIN_NUM_FORMS = IntegerField(required=False, widget=HiddenInput)
     MAX_NUM_FORMS = IntegerField(required=False, widget=HiddenInput)
 
+    def render(self, template_name=None, context=None, renderer=None):
+        """
+        Render the management form without triggering deprecation warnings.
+        Management forms only contain hidden inputs, so template choice is irrelevant.
+        """
+        import warnings
+        with warnings.catch_warnings():
+            # Suppress RemovedInDjango50Warning for default.html template usage
+            warnings.filterwarnings(
+                'ignore',
+                message='The default form rendering is deprecated.*',
+                category=DeprecationWarning,
+            )
+            return super().render(template_name, context, renderer)
+
     def clean(self):
         cleaned_data = super().clean()
         # When the management form is invalid, we don't know how many forms
