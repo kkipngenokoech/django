@@ -2040,7 +2040,12 @@ class InlineModelAdmin(BaseModelAdmin):
         if self.verbose_name is None:
             self.verbose_name = self.model._meta.verbose_name
         if self.verbose_name_plural is None:
-            self.verbose_name_plural = self.model._meta.verbose_name_plural
+            # If verbose_name was explicitly set on the inline class but verbose_name_plural wasn't,
+            # derive verbose_name_plural from verbose_name by adding 's'
+            if hasattr(self.__class__, 'verbose_name') and self.__class__.verbose_name is not None:
+                self.verbose_name_plural = self.verbose_name + 's'
+            else:
+                self.verbose_name_plural = self.model._meta.verbose_name_plural
 
     @property
     def media(self):
