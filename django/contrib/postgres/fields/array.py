@@ -225,6 +225,10 @@ class ArrayField(CheckFieldDefaultMixin, Field):
                 )
 
     def formfield(self, **kwargs):
+        # Prevent hidden initial inputs for callable defaults to avoid
+        # bypassing validation on subsequent form submissions
+        if callable(self.default) and "show_hidden_initial" not in kwargs:
+            kwargs["show_hidden_initial"] = False
         return super().formfield(
             **{
                 "form_class": SimpleArrayField,
