@@ -26,11 +26,20 @@ class AutocompleteJsonView(BaseListView):
         context = self.get_context_data()
         return JsonResponse({
             'results': [
-                {'id': str(getattr(obj, to_field_name)), 'text': str(obj)}
+                self.get_result_data(obj, to_field_name)
                 for obj in context['object_list']
             ],
             'pagination': {'more': context['page_obj'].has_next()},
         })
+
+    def get_result_data(self, obj, to_field_name):
+        """
+        Return the result data dictionary for a single object.
+        
+        This method can be overridden in subclasses to add extra fields
+        to the autocomplete response.
+        """
+        return {'id': str(getattr(obj, to_field_name)), 'text': str(obj)}
 
     def get_paginator(self, *args, **kwargs):
         """Use the ModelAdmin's paginator."""
