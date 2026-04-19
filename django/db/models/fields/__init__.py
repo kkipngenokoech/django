@@ -1709,7 +1709,7 @@ class FilePathField(Field):
 
     def formfield(self, **kwargs):
         return super().formfield(**{
-            'path': self.path,
+            'path': self._get_path(),
             'match': self.match,
             'recursive': self.recursive,
             'form_class': forms.FilePathField,
