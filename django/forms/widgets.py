@@ -138,12 +138,31 @@ class Media:
                 # Add path to combined_list since it doesn't exist.
                 combined_list.insert(last_insert_index, path)
             else:
+                # Check if this creates a real conflict by examining if the relative
+                # order between this element and others in list_2 is violated
                 if index > last_insert_index:
-                    warnings.warn(
-                        'Detected duplicate Media files in an opposite order:\n'
-                        '%s\n%s' % (combined_list[last_insert_index], combined_list[index]),
-                        MediaOrderConflictWarning,
-                    )
+                    # Only warn if this represents a true ordering conflict
+                    # Check if any element from list_2 that should come after 'path'
+                    # is already positioned before 'path' in combined_list
+                    path_index_in_list2 = list_2.index(path)
+                    conflict_found = False
+                    
+                    for other_path in list_2[path_index_in_list2 + 1:]:
+                        try:
+                            other_index = combined_list.index(other_path)
+                            if other_index < index:
+                                conflict_found = True
+                                break
+                        except ValueError:
+                            # other_path not in combined_list yet, no conflict
+                            continue
+                    
+                    if conflict_found:
+                        warnings.warn(
+                            'Detected duplicate Media files in an opposite order:\n'
+                            '%s\n%s' % (combined_list[last_insert_index], combined_list[index]),
+                            MediaOrderConflictWarning,
+                        )
                 # path already exists in the list. Update last_insert_index so
                 # that the following elements are inserted in front of this one.
                 last_insert_index = index
