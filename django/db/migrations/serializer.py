@@ -90,7 +90,36 @@ class DeconstructableSerializer(BaseSerializer):
 
     @staticmethod
     def _serialize_path(path):
-        module, name = path.rsplit(".", 1)
+        # Split the path to find the actual module vs class hierarchy
+        parts = path.split('.')
+        
+        # Try to find where the module ends and the class hierarchy begins
+        # We'll work backwards from the end to find the first part that could be a module
+        module_parts = []
+        class_parts = []
+        
+        # Start with the assumption that everything except the last part is module
+        for i in range(len(parts) - 1, 0, -1):
+            potential_module = '.'.join(parts[:i])
+            potential_class_path = '.'.join(parts[i:])
+            
+            # Check if this could be a valid module by trying to import it
+            try:
+                __import__(potential_module)
+                module_parts = parts[:i]
+                class_parts = parts[i:]
+                break
+            except ImportError:
+                continue
+        
+        # If we couldn't find a valid module, fall back to the original behavior
+        if not module_parts:
+            module_parts = parts[:-1]
+            class_parts = parts[-1:]
+        
+        module = '.'.join(module_parts)
+        name = '.'.join(class_parts)
+        
         if module == "django.db.models":
             imports = {"from django.db import models"}
             name = "models.%s" % name
