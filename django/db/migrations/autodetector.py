@@ -190,6 +190,8 @@ class MigrationAutodetector:
         # Generate removal of foo together.
         self.generate_removed_altered_unique_together()
         self.generate_removed_altered_index_together()
+        # Generate removal of unique_together constraints that become invalid due to field type changes
+        self.generate_removed_unique_together_for_field_changes()
         # Generate field operations.
         self.generate_removed_fields()
         self.generate_added_fields()
@@ -1501,6 +1503,64 @@ class MigrationAutodetector:
 
     def generate_removed_altered_index_together(self):
         self._generate_removed_altered_foo_together(operations.AlterIndexTogether)
+
+    def generate_removed_unique_together_for_field_changes(self):
+        """
+        Remove unique_together constraints that become invalid when fields change type
+        from ForeignKey to ManyToManyField or other incompatible types.
+        """
+        for app_label, model_name in sorted(self.kept_model_keys):
+            old_model_name = self.renamed_models.get((app_label, model_name), model_name)
+            old_model_state = self.from_state.models[app_label, old_model_name]
+            new_model_state = self.to_state.models[app_label, model_name]
+            
+            # Get the current unique_together constraints
+            old_unique_together = old_model_state.options.get("unique_together", [])
+            if not old_unique_together:
+                continue
+                
+            # Check if any fields in unique_together are changing to incompatible types
+            constraints_to_remove = []
+            
+            for constraint in old_unique_together:
+                should_remove = False
+                for field_name in constraint:
+                    # Check if this field exists in both old and new states
+                    if (field_name in old_model_state.fields and 
+                        field_name in new_model_state.fields):
+                        
+                        old_field = old_model_state.fields[field_name]
+                        new_field = new_model_state.fields[field_name]
+                        
+                        # Check if field is changing from ForeignKey to ManyToManyField
+                        old_is_fk = (hasattr(old_field, 'remote_field') and 
+                                    old_field.remote_field and 
+                                    not old_field.many_to_many)
+                        new_is_m2m = (hasattr(new_field, 'remote_field') and 
+                                     new_field.remote_field and 
+                                     new_field.many_to_many)
+                        
+                        if old_is_fk and new_is_m2m:
+                            should_remove = True
+                            break
+                            
+                if should_remove:
+                    constraints_to_remove.append(constraint)
+            
+            # Generate operations to remove the incompatible constraints
+            if constraints_to_remove:
+                remaining_constraints = [
+                    constraint for constraint in old_unique_together 
+                    if constraint not in constraints_to_remove
+                ]
+                
+                self.add_operation(
+                    app_label,
+                    operations.AlterUniqueTogether(
+                        name=model_name,
+                        unique_together=remaining_constraints,
+                    ),
+                )
 
     def _generate_altered_foo_together(self, operation):
         for (
