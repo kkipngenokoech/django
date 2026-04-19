@@ -138,12 +138,32 @@ class Media:
                 # Add path to combined_list since it doesn't exist.
                 combined_list.insert(last_insert_index, path)
             else:
+                # Only warn if there's an actual ordering conflict between
+                # consecutive elements that appear in both lists
                 if index > last_insert_index:
-                    warnings.warn(
-                        'Detected duplicate Media files in an opposite order:\n'
-                        '%s\n%s' % (combined_list[last_insert_index], combined_list[index]),
-                        MediaOrderConflictWarning,
-                    )
+                    # Check if this is a real conflict by looking at the relative
+                    # positions in both original lists
+                    conflict_detected = False
+                    try:
+                        # Find positions in original lists
+                        pos1_in_list1 = list_1.index(combined_list[last_insert_index])
+                        pos2_in_list1 = list_1.index(path)
+                        pos1_in_list2 = list_2.index(combined_list[last_insert_index])
+                        pos2_in_list2 = list_2.index(path)
+                        
+                        # Only warn if the relative order is different in both lists
+                        if ((pos1_in_list1 < pos2_in_list1) != (pos1_in_list2 < pos2_in_list2)):
+                            conflict_detected = True
+                    except ValueError:
+                        # If elements don't exist in both lists, it's not a real conflict
+                        pass
+                    
+                    if conflict_detected:
+                        warnings.warn(
+                            'Detected duplicate Media files in an opposite order:\n'
+                            '%s\n%s' % (combined_list[last_insert_index], combined_list[index]),
+                            MediaOrderConflictWarning,
+                        )
                 # path already exists in the list. Update last_insert_index so
                 # that the following elements are inserted in front of this one.
                 last_insert_index = index
