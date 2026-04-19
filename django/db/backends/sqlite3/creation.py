@@ -24,7 +24,19 @@ class DatabaseCreation(BaseDatabaseCreation):
         test_database_name = self._get_test_db_name()
 
         if keepdb:
+            # For persistent databases, ensure any existing connections are closed
+            # to prevent SQLite locking issues in multidb scenarios
+            if not self.is_in_memory_db(test_database_name):
+                # Close any existing connection to this database
+                if hasattr(self.connection, '_close'):
+                    try:
+                        self.connection._close()
+                    except Exception:
+                        pass  # Ignore errors when closing connections
+                # Reset connection state
+                self.connection.close()
             return test_database_name
+            
         if not self.is_in_memory_db(test_database_name):
             # Erase the old test database
             if verbosity >= 1:
