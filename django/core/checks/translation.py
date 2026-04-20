@@ -56,6 +56,16 @@ def check_setting_languages_bidi(app_configs, **kwargs):
 def check_language_settings_consistent(app_configs, **kwargs):
     """Error if language settings are not consistent with each other."""
     available_tags = {i for i, _ in settings.LANGUAGES} | {'en-us'}
-    if settings.LANGUAGE_CODE not in available_tags:
-        return [E004]
-    return []
+    language_code = settings.LANGUAGE_CODE
+    
+    # Check if the exact language code is available
+    if language_code in available_tags:
+        return []
+    
+    # Check if the base language is available (for sublanguages like 'de-at' -> 'de')
+    if '-' in language_code:
+        base_language = language_code.split('-')[0]
+        if base_language in available_tags:
+            return []
+    
+    return [E004]
