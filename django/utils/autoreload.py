@@ -172,8 +172,35 @@ def common_roots(paths):
     """
     # Inspired from Werkzeug:
     # https://github.com/pallets/werkzeug/blob/7477be2853df70a022d9613e765581b9411c3c39/werkzeug/_reloader.py
+    
+    # Filter out paths that could cause circular references
+    # Specifically, avoid watching directories that contain settings modules
+    filtered_paths = []
+    settings_paths = set()
+    
+    # Identify potential settings module paths
+    for path in paths:
+        path_str = str(path)
+        if 'settings' in path_str and path_str.endswith('.py'):
+            settings_paths.add(path.parent)
+    
+    # Filter out any directory that contains a settings file to prevent circular references
+    for path in paths:
+        # Skip directories that contain settings files when they would be watched
+        # due to being added to template directories (BASE_DIR scenario)
+        if path.is_dir() and any(settings_path == path or settings_path in path.parents for settings_path in settings_paths):
+            continue
+        filtered_paths.append(path)
+    
+    # If we filtered out all paths, fall back to the original behavior
+    # but with a more conservative approach
+    if not filtered_paths:
+        filtered_paths = [p for p in paths if not p.is_dir() or not any(p.name == 'settings.py' for p in p.rglob('settings.py'))]
+        if not filtered_paths:
+            filtered_paths = list(paths)
+    
     # Create a sorted list of the path components, longest first.
-    path_parts = sorted([x.parts for x in paths], key=len, reverse=True)
+    path_parts = sorted([x.parts for x in filtered_paths], key=len, reverse=True)
     tree = {}
     for chunks in path_parts:
         node = tree
