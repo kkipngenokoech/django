@@ -94,6 +94,11 @@ class WhereNode(tree.Node):
             # counts.
             if empty_needed == 0:
                 if self.negated:
+                    # When negating an empty result (nothing matches),
+                    # we should return a condition that always matches (everything)
+                    # For expressions in SELECT clauses, return '1' instead of ''
+                    if hasattr(compiler, 'query') and getattr(compiler.query, 'annotation_select_mask', None):
+                        return '1', []
                     return '', []
                 else:
                     raise EmptyResultSet
