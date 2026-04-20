@@ -1,6 +1,4 @@
-"""
-Creates permissions for all installed apps that need permissions.
-"""
+"""Creates permissions for all installed apps that need permissions."""
 import getpass
 import unicodedata
 
