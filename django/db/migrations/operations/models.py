@@ -320,6 +320,10 @@ class RenameModel(ModelOperation):
         new_model = to_state.apps.get_model(app_label, self.new_name)
         if self.allow_migrate_model(schema_editor.connection.alias, new_model):
             old_model = from_state.apps.get_model(app_label, self.old_name)
+            # If the model has a custom db_table, renaming the model should be a no-op
+            # since the table name doesn't change
+            if old_model._meta.db_table == new_model._meta.db_table:
+                return
             # Move the main table
             schema_editor.alter_db_table(
                 new_model,
@@ -368,6 +372,12 @@ class RenameModel(ModelOperation):
                 )
 
     def database_backwards(self, app_label, schema_editor, from_state, to_state):
+        # Check if models have custom db_table - if so, it's a no-op
+        old_model = from_state.apps.get_model(app_label, self.old_name)
+        new_model = to_state.apps.get_model(app_label, self.new_name)
+        if old_model._meta.db_table == new_model._meta.db_table:
+            return
+            
         self.new_name_lower, self.old_name_lower = self.old_name_lower, self.new_name_lower
         self.new_name, self.old_name = self.old_name, self.new_name
 
