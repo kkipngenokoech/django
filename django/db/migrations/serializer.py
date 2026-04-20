@@ -8,6 +8,7 @@ import math
 import re
 import types
 import uuid
+import importlib
 
 from django.conf import SettingsReference
 from django.db import models
@@ -90,30 +91,37 @@ class DeconstructableSerializer(BaseSerializer):
 
     @staticmethod
     def _serialize_path(path):
-        module, name = path.rsplit(".", 1)
-        if module == "django.db.models":
-            imports = {"from django.db import models"}
-            name = "models.%s" % name
-        else:
-            imports = {"import %s" % module}
-            name = path
-        return name, imports
+        # Handle inner classes by preserving the full dotted path
+        module, name = path.rsplit('.', 1)
+        
+        # Check if this is a local class (contains '<locals>')
+        if '<locals>' in module:
+            # For local classes, we need to extract the outer class names
+            # Example: 'test_module.test_func.<locals>.Outer.Inner' -> 'Outer.Inner'
+            locals_index = module.find('<locals>')
+            if locals_index != -1:
+                # Get everything after '<locals>.'
+                after_locals = module[locals_index + len('<locals>.'):]n                if after_locals:
+                    # Combine the outer class path with the final name
+                    name = after_locals + '.' + name
+                # Return just the class name without module import
+                return name, set()
+        
+        # For regular module-level classes, import the module
+        try:
+            importlib.import_module(module)
+            return name, {"import %s" % module}
+        except ImportError:
+            # If we can't import the module, return the full path
+            return path, set()
 
     def serialize(self):
         return self.serialize_deconstructed(*self.value.deconstruct())
 
 
-class DictionarySerializer(BaseSerializer):
-    def serialize(self):
-        imports = set()
-        strings = []
-        for k, v in sorted(self.value.items()):
-            k_string, k_imports = serializer_factory(k).serialize()
-            v_string, v_imports = serializer_factory(v).serialize()
-            imports.update(k_imports)
-            imports.update(v_imports)
-            strings.append((k_string, v_string))
-        return "{%s}" % (", ".join("%s: %s" % (k, v) for k, v in strings)), imports
+class DictionarySerializer(BaseSequenceSerializer):
+    def _format(self):
+        return "{%s}"
 
 
 class EnumSerializer(BaseSerializer):
@@ -121,15 +129,15 @@ class EnumSerializer(BaseSerializer):
         enum_class = self.value.__class__
         module = enum_class.__module__
         return (
-            '%s.%s[%r]' % (module, enum_class.__qualname__, self.value.name),
-            {'import %s' % module},
+            "%s.%s[%r]" % (module, enum_class.__qualname__, self.value.name),
+            {"import %s" % module}
         )
 
 
 class FloatSerializer(BaseSimpleSerializer):
     def serialize(self):
         if math.isnan(self.value) or math.isinf(self.value):
-            return 'float("{}")'.format(self.value), set()
+            return 'float("%s")' % self.value, set()
         return super().serialize()
 
 
@@ -152,45 +160,45 @@ class FunctionTypeSerializer(BaseSerializer):
 
         module_name = self.value.__module__
 
-        if '<' not in self.value.__qualname__:  # Qualname can include <locals>
-            return '%s.%s' % (module_name, self.value.__qualname__), {'import %s' % self.value.__module__}
+        if '<locals>' in self.value.__qualname__:
+            raise ValueError(
+                "Cannot serialize function %r: it's a local function. Please "
+                "move it to the top level of the module." % self.value
+            )
 
-        raise ValueError(
-            'Could not find function %s in %s.\n' % (self.value.__name__, module_name)
-        )
+        return "%s.%s" % (module_name, self.value.__qualname__), {"import %s" % module_name}
 
 
 class FunctoolsPartialSerializer(BaseSerializer):
     def serialize(self):
-        # Serialize functools.partial() arguments
+        # Serialize functools.partial objects
         func_string, func_imports = serializer_factory(self.value.func).serialize()
         args_string, args_imports = serializer_factory(self.value.args).serialize()
         keywords_string, keywords_imports = serializer_factory(self.value.keywords).serialize()
-        # Add any imports needed by arguments
-        imports = {'import functools', *func_imports, *args_imports, *keywords_imports}
+        # Note that we always use functools.partial name directly
         return (
-            'functools.%s(%s, *%s, **%s)' % (
-                self.value.__class__.__name__,
-                func_string,
-                args_string,
-                keywords_string,
-            ),
-            imports,
+            "functools.partial(%s, *%s, **%s)" % (func_string, args_string, keywords_string),
+            func_imports | args_imports | keywords_imports | {"import functools"}
         )
 
 
-class IterableSerializer(BaseSerializer):
+class IteratorSerializer(BaseSerializer):
     def serialize(self):
-        imports = set()
-        strings = []
-        for item in self.value:
-            item_string, item_imports = serializer_factory(item).serialize()
-            imports.update(item_imports)
-            strings.append(item_string)
-        # When len(strings)==0, the empty iterable should be serialized as
-        # "()", not "(,)" because (,) is invalid Python syntax.
-        value = "(%s)" if len(strings) != 1 else "(%s,)"
-        return value % (", ".join(strings)), imports
+        # Consume iterators into tuples, then serialize that
+        return serializer_factory(tuple(self.value)).serialize()
+
+
+class LazyObjectSerializer(BaseSerializer):
+    def serialize(self):
+        # The lazy object wraps a function or class
+        if isinstance(self.value._setupfunc, functools.partial):
+            return serializer_factory(self.value._setupfunc).serialize()
+        return serializer_factory(self.value._setupfunc).serialize()
+
+
+class ListSerializer(BaseSequenceSerializer):
+    def _format(self):
+        return "[%s]"
 
 
 class ModelFieldSerializer(DeconstructableSerializer):
@@ -213,8 +221,13 @@ class OperationSerializer(BaseSerializer):
     def serialize(self):
         from django.db.migrations.writer import OperationWriter
         string, imports = OperationWriter(self.value, indentation=0).serialize()
-        # Nested operation, trailing comma is handled in upper OperationWriter._write()
-        return string.rstrip(','), imports
+        # Nested operation, so snip off the indentation
+        return string.strip(), imports
+
+
+class PathLikeSerializer(BaseSerializer):
+    def serialize(self):
+        return repr(str(self.value)), set()
 
 
 class RegexSerializer(BaseSerializer):
@@ -224,7 +237,7 @@ class RegexSerializer(BaseSerializer):
         # same implicit and explicit flags aren't equal.
         flags = self.value.flags ^ re.compile('').flags
         regex_flags, flag_imports = serializer_factory(flags).serialize()
-        imports = {'import re', *pattern_imports, *flag_imports}
+        imports = {"import re"} | pattern_imports | flag_imports
         args = [regex_pattern]
         if flags:
             args.append(regex_flags)
@@ -233,14 +246,17 @@ class RegexSerializer(BaseSerializer):
 
 class SequenceSerializer(BaseSequenceSerializer):
     def _format(self):
-        return "[%s]"
+        return "(%s)"
 
 
 class SetSerializer(BaseSequenceSerializer):
     def _format(self):
         # Serialize as a set literal except when value is empty because {}
-        # is an empty dict.
-        return '{%s}' if self.value else 'set(%s)'
+        # is a dict literal, not a set.
+        if self.value:
+            return "{%s}"
+        else:
+            return "set(%s)"
 
 
 class SettingsReferenceSerializer(BaseSerializer):
@@ -250,9 +266,9 @@ class SettingsReferenceSerializer(BaseSerializer):
 
 class TupleSerializer(BaseSequenceSerializer):
     def _format(self):
-        # When len(value)==0, the empty tuple should be serialized as "()",
-        # not "(,)" because (,) is invalid Python syntax.
-        return "(%s)" if len(self.value) != 1 else "(%s,)"
+        # When len(value)==1, the trailing comma is needed to ensure we're
+        # actually creating a tuple, rather than just using parentheses.
+        return "(%s%s)" % ("%s", "," if len(self.value) == 1 else "")
 
 
 class TypeSerializer(BaseSerializer):
@@ -269,7 +285,7 @@ class TypeSerializer(BaseSerializer):
             if module == builtins.__name__:
                 return self.value.__name__, set()
             else:
-                return "%s.%s" % (module, self.value.__name__), {"import %s" % module}
+                return "%s.%s" % (module, self.value.__qualname__), {"import %s" % module}
 
 
 class UUIDSerializer(BaseSerializer):
@@ -281,21 +297,21 @@ class Serializer:
     _registry = {
         # Some of these are order-dependent.
         frozenset: FrozensetSerializer,
-        list: SequenceSerializer,
+        list: ListSerializer,
         set: SetSerializer,
         tuple: TupleSerializer,
         dict: DictionarySerializer,
         models.Choices: ChoicesSerializer,
         enum.Enum: EnumSerializer,
         datetime.datetime: DatetimeDatetimeSerializer,
-        (datetime.date, datetime.timedelta, datetime.time): DateTimeSerializer,
+        (datetime.date, datetime.time, datetime.timedelta): DateTimeSerializer,
         SettingsReference: SettingsReferenceSerializer,
         float: FloatSerializer,
         (bool, int, type(None), bytes, str, range): BaseSimpleSerializer,
         decimal.Decimal: DecimalSerializer,
         (functools.partial, functools.partialmethod): FunctoolsPartialSerializer,
         (types.FunctionType, types.BuiltinFunctionType, types.MethodType): FunctionTypeSerializer,
-        collections.abc.Iterable: IterableSerializer,
+        collections.abc.Iterable: IteratorSerializer,
         (COMPILED_REGEX_TYPE, RegexObject): RegexSerializer,
         uuid.UUID: UUIDSerializer,
     }
@@ -327,12 +343,19 @@ def serializer_factory(value):
         return OperationSerializer(value)
     if isinstance(value, type):
         return TypeSerializer(value)
-    # Anything that knows how to deconstruct itself.
-    if hasattr(value, 'deconstruct'):
-        return DeconstructableSerializer(value)
-    for type_, serializer_cls in Serializer._registry.items():
-        if isinstance(value, type_):
-            return serializer_cls(value)
+    # Check for pathlib.PurePath instances
+    if hasattr(value, 'parts') and hasattr(value, 'as_posix'):
+        return PathLikeSerializer(value)
+    # Check if it's a builtin.type
+    if type(value) in Serializer._registry:
+        return Serializer._registry[type(value)](value)
+    for base in type(value).__mro__:
+        if base in Serializer._registry:
+            return Serializer._registry[base](value)
+        # Special cases for things that can be imported
+        if hasattr(value, 'deconstruct'):
+            return DeconstructableSerializer(value)
+
     raise ValueError(
         "Cannot serialize: %r\nThere are some values Django cannot serialize into "
         "migration files.\nFor more, see https://docs.djangoproject.com/en/%s/"
