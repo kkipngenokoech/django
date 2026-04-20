@@ -100,10 +100,18 @@ def urlunquote_plus(quoted_url):
     return unquote_plus(quoted_url)
 
 
-def urlencode(query, doseq=False):
+def urlencode(query, doseq=False, safe='', encoding=None, errors=None,
+              quote_via=quote_plus):
     """
     A version of Python's urllib.parse.urlencode() function that can operate on
-    MultiValueDict and non-string values.
+    MultiValueDict and other dictionary-like objects.
+
+    The parameters are the same as the original except:
+    * doseq - If True, individual key=value pairs separated by '&' are
+              generated for each element of the value sequence for the key.
+    * safe - May be used to set the characters that are "safe" from encoding.
+    * encoding - May be used to set the encoding for the query string.
+    * errors - May be used to set the error handling scheme.
     """
     if isinstance(query, MultiValueDict):
         query = query.lists()
@@ -111,34 +119,19 @@ def urlencode(query, doseq=False):
         query = query.items()
     query_params = []
     for key, value in query:
-        if value is None:
-            raise TypeError(
-                "Cannot encode None for key '%s' in a query string. Did you "
-                "mean to pass an empty string or omit the value?" % key
-            )
-        elif not doseq or isinstance(value, (str, bytes)):
-            query_val = value
-        else:
-            try:
-                itr = iter(value)
-            except TypeError:
-                query_val = value
+        if isinstance(value, (list, tuple)):
+            if not doseq:
+                # Encode the last element
+                value = value[-1] if value else ''
             else:
-                # Consume generators and iterators, when doseq=True, to
-                # work around https://bugs.python.org/issue31706.
-                query_val = []
-                for item in itr:
-                    if item is None:
-                        raise TypeError(
-                            "Cannot encode None for key '%s' in a query "
-                            "string. Did you mean to pass an empty string or "
-                            "omit the value?" % key
-                        )
-                    elif not isinstance(item, bytes):
-                        item = str(item)
-                    query_val.append(item)
-        query_params.append((key, query_val))
-    return original_urlencode(query_params, doseq)
+                # If doseq is True, encode each element as a separate parameter
+                for item in value:
+                    query_params.append((key, item))
+                continue
+        query_params.append((key, value))
+    return original_urlencode(
+        query_params, doseq, safe, encoding, errors, quote_via
+    )
 
 
 def http_date(epoch_seconds=None):
@@ -174,80 +167,36 @@ def parse_http_date(date):
     else:
         raise ValueError("%r is not in a valid HTTP date format" % date)
     try:
-        year = int(m.group('year'))
-        if year < 100:
-            if year < 70:
-                year += 2000
-            else:
-                year += 1900
-        month = MONTHS.index(m.group('mon').lower()) + 1
-        day = int(m.group('day'))
-        hour = int(m.group('hour'))
-        min = int(m.group('min'))
-        sec = int(m.group('sec'))
-        result = datetime.datetime(year, month, day, hour, min, sec)
-        return calendar.timegm(result.utctimetuple())
-    except Exception as exc:
-        raise ValueError("%r is not a valid date" % date) from exc
-
-
-def parse_http_date_safe(date):
-    """
-    Same as parse_http_date, but return None if the input is invalid.
-    """
-    try:
-        return parse_http_date(date)
-    except Exception:
-        pass
-
-
-# Base 36 functions: useful for generating compact URLs
-
-def base36_to_int(s):
-    """
-    Convert a base 36 string to an int. Raise ValueError if the input won't fit
-    into an int.
-    """
-    # To prevent overconsumption of server resources, reject any
-    # base36 string that is longer than 13 base36 digits (13 digits
-    # is sufficient to base36-encode any 64-bit integer)
-    if len(s) > 13:
-        raise ValueError("Base36 input too large")
-    return int(s, 36)
-
-
-def int_to_base36(i):
-    """Convert an integer to a base36 string."""
-    char_set = '0123456789abcdefghijklmnopqrstuvwxyz'
-    if i < 0:
-        raise ValueError("Negative base36 conversion input.")
-    if i < 36:
-        return char_set[i]
-    b36 = ''
-    while i != 0:
-        i, n = divmod(i, 36)
-        b36 = char_set[n] + b36
-    return b36
-
-
-def urlsafe_base64_encode(s):
-    """
-    Encode a bytestring to a base64 string for use in URLs. Strip any trailing
-    equal signs.
-    """
-    return base64.urlsafe_b64encode(s).rstrip(b'\n=').decode('ascii')
-
-
-def urlsafe_base64_decode(s):
-    """
-    Decode a base64 encoded string. Add back any trailing equal signs that
-    might have been stripped.
-    """
-    s = s.encode()
-    try:
-        return base64.urlsafe_b64decode(s.ljust(len(s) + len(s) % 4, b'='))
-    except (LookupError, BinasciiError) as e:
-        raise ValueError(e)
+        tz = m.groupdict()
+        mon = MONTHS.index(tz['mon'].lower()) + 1
+        if 'year' in tz:
+            year = int(tz['year'])
+            # RFC 7231 compliant two-digit year handling
+            if year < 100:
+                current_year = datetime.datetime.now().year
+                # Calculate what the year would be in current century
+                current_century = (current_year // 100) * 100
+                candidate_year = current_century + year
+                
+                # If candidate year is more than 50 years in the future,
+                # use previous century
+                if candidate_year - current_year > 50:
+                    year = candidate_year - 100
+                else:
+                    year = candidate_year
+        else:
+            year = None
+        return calendar.timegm((
+            year,
+            mon,
+            int(tz['day']),
+            int(tz['hour']),
+            int(tz['min']),
+            int(tz['sec']),
+            0, 0, 0,
+        ))
+    except (ValueError, OverflowError, OSError):
+        raise ValueError("%r is not a valid date" % date)
 
 
 def parse_etags(etag_str):
@@ -275,23 +224,143 @@ def quote_etag(etag_str):
         return '"%s"' % etag_str
 
 
-def is_same_domain(host, pattern):
+def parse_header_parameters(line):
     """
-    Return ``True`` if the host is either an exact match or a match
-    to the wildcard pattern.
+    Parse a Content-type like header.
 
-    Any pattern beginning with a period matches a domain and all of its
-    subdomains. (e.g. ``.example.com`` matches ``example.com`` and
-    ``foo.example.com``). Anything else is an exact string match.
+    Return the main content-type and a dictionary containing
+    options.
     """
-    if not pattern:
+    def unquote_header_value(value, is_filename=False):
+        if value and value[0] == value[-1] == '"':
+            # This is a quoted string. Remove the quotes and handle escape sequences.
+            value = value[1:-1]
+            value = value.replace('\\\\', '\\')
+            value = value.replace('\\"', '"')
+            if is_filename:
+                # Historically, many HTTP clients implement an unescaping
+                # scheme for quoted-string filename values which is more
+                # liberal than the one mandated by RFC 2616:
+                value = value.replace('\\\\'', '\\')
+        return value
+
+    plist = [x.strip() for x in line.split(';')]
+    parts = plist[1:]
+    opts = {}
+    while parts:
+        p = parts.pop(0)
+        if '=' in p:
+            i = p.find('=')
+            name = p[:i].strip().lower()
+            value = p[i + 1:].strip()
+            is_filename = name == 'filename'
+            opts[name] = unquote_header_value(value, is_filename=is_filename)
+    return plist[0], opts
+
+
+def parse_header_name(line):
+    """Parse header name from a line."""
+    return line.split(':', 1)[0].strip()
+
+
+def limited_parse_qsl(qs, keep_blank_values=False, strict_parsing=False,
+                      encoding='utf-8', errors='replace', fields_limit=None):
+    """
+    Return a list of key/value tuples parsed from query string.
+
+    Copied from urlparse with an additional "fields_limit" argument.
+    Copyright (C) 2013 Python Software Foundation (see LICENSE.python).
+
+    Arguments:
+
+    qs: percent-encoded query string to be parsed
+
+    keep_blank_values: flag indicating whether blank values in
+        percent-encoded queries should be treated as blank strings. A
+        true value indicates that blanks should be retained as blank
+        strings. The default false value indicates that blank values
+        are to be ignored and treated as if they were  not included.
+
+    strict_parsing: flag indicating what to do with parsing errors. If
+        false (the default), errors are silently ignored. If true,
+        errors raise a ValueError exception.
+
+    encoding and errors: specify how to decode percent-encoded sequences
+        into Unicode characters, as accepted by the bytes.decode() method.
+
+    fields_limit: maximum number of fields parsed or an exception
+        is raised. None means no limit and is the default.
+    """
+    if fields_limit:
+        pairs = FIELDS_MATCH.split(qs, fields_limit)
+        if len(pairs) > fields_limit:
+            raise TooManyFieldsSent(
+                'The number of GET/POST parameters exceeded '
+                'settings.DATA_UPLOAD_MAX_NUMBER_FIELDS.'
+            )
+    else:
+        pairs = FIELDS_MATCH.split(qs)
+    r = []
+    for name_value in pairs:
+        if not name_value and not strict_parsing:
+            continue
+        nv = name_value.split('=', 1)
+        if len(nv) != 2:
+            if strict_parsing:
+                raise ValueError("bad query field: %r" % (name_value,))
+            # Handle case of a control-name with no equal sign
+            if keep_blank_values:
+                nv.append('')
+            else:
+                continue
+        if len(nv[1]) or keep_blank_values:
+            name = nv[0].replace('+', ' ')
+            name = unquote(name, encoding=encoding, errors=errors)
+            value = nv[1].replace('+', ' ')
+            value = unquote(value, encoding=encoding, errors=errors)
+            r.append((name, value))
+    return r
+
+
+def escape_uri_path(path):
+    """
+    Escape the unreserved characters from the set of valid characters for a URI
+    path as defined in RFC 3986:
+
+    unreserved    = ALPHA / DIGIT / "-" / "." / "_" / "~"
+    """
+    # ~-._0-9A-Za-z are unreserved and never need to be encoded
+    # RFC 3986 section 2.3.
+    return quote(path, safe="!#$&'()*+,/:;=?@[]~")
+
+
+def _url_has_allowed_host_and_scheme(url, allowed_hosts, require_https=False):
+    # Chrome considers any URL with more than two slashes to be absolute, but
+    # urlparse is not so flexible. Treat any url with three slashes as unsafe.
+    if url.startswith('///'):
         return False
-
-    pattern = pattern.lower()
-    return (
-        pattern[0] == '.' and (host.endswith(pattern) or host == pattern[1:]) or
-        pattern == host
-    )
+    try:
+        url_info = _urlparse(url)
+    except ValueError:  # e.g. invalid IPv6 URL
+        return False
+    # Forbid URLs like http:///example.com - with a scheme, but without a hostname.
+    # In that URL, example.com is not the hostname but, a path component. However,
+    # Chrome will still consider example.com to be the hostname, so we must not
+    # allow this syntax.
+    if not url_info.netloc and url_info.scheme:
+        return False
+    # Forbid URLs that start with control characters. Some browsers (like
+    # Chrome) ignore quite a few control characters at the start of a
+    # URL and might consider the URL as scheme relative.
+    if unicodedata.category(url[0])[0] == 'C':
+        return False
+    scheme = url_info.scheme
+    # Consider URLs without a scheme (e.g. //example.com/p) to be http.
+    if not url_info.scheme and url_info.netloc:
+        scheme = 'http'
+    valid_schemes = ['https'] if require_https else ['http', 'https']
+    return ((not url_info.netloc or url_info.netloc in allowed_hosts) and
+            (not scheme or scheme in valid_schemes))
 
 
 def url_has_allowed_host_and_scheme(url, allowed_hosts, require_https=False):
@@ -301,7 +370,7 @@ def url_has_allowed_host_and_scheme(url, allowed_hosts, require_https=False):
     Always return ``False`` on an empty url.
 
     If ``require_https`` is ``True``, only 'https' will be considered a valid
-    scheme, as opposed to 'http' and 'https' with the default, ``False``.
+    scheme, as opposed to 'http' and 'https' with the default ``False``.
 
     Note: "True" doesn't entail that a URL is "safe". It may still be e.g.
     quoted incorrectly. Ensure to also use django.utils.encoding.iri_to_uri()
@@ -319,17 +388,10 @@ def url_has_allowed_host_and_scheme(url, allowed_hosts, require_https=False):
     # basic auth credentials so we need to check both URLs.
     return (
         _url_has_allowed_host_and_scheme(url, allowed_hosts, require_https=require_https) and
-        _url_has_allowed_host_and_scheme(url.replace('\\', '/'), allowed_hosts, require_https=require_https)
+        _url_has_allowed_host_and_scheme(
+            url.replace('\\', '/'), allowed_hosts, require_https=require_https
+        )
     )
-
-
-def is_safe_url(url, allowed_hosts, require_https=False):
-    warnings.warn(
-        'django.utils.http.is_safe_url() is deprecated in favor of '
-        'url_has_allowed_host_and_scheme().',
-        RemovedInDjango40Warning, stacklevel=2,
-    )
-    return url_has_allowed_host_and_scheme(url, allowed_hosts, require_https)
 
 
 # Copied from urllib.parse.urlparse() but uses fixed urlsplit() function.
@@ -377,98 +439,24 @@ def _urlsplit(url, scheme='', allow_fragments=True):
         url, fragment = url.split('#', 1)
     if '?' in url:
         url, query = url.split('?', 1)
-    v = SplitResult(scheme, netloc, url, query, fragment)
-    return _coerce_result(v)
+    result = SplitResult(scheme, netloc, url, query, fragment)
+    return _coerce_result(result)
 
 
-def _url_has_allowed_host_and_scheme(url, allowed_hosts, require_https=False):
-    # Chrome considers any URL with more than two slashes to be absolute, but
-    # urlparse is not so flexible. Treat any url with three slashes as unsafe.
-    if url.startswith('///'):
-        return False
-    try:
-        url_info = _urlparse(url)
-    except ValueError:  # e.g. invalid IPv6 addresses
-        return False
-    # Forbid URLs like http:///example.com - with a scheme, but without a hostname.
-    # In that URL, example.com is not the hostname but, a path component. However,
-    # Chrome will still consider example.com to be the hostname, so we must not
-    # allow this syntax.
-    if not url_info.netloc and url_info.scheme:
-        return False
-    # Forbid URLs that start with control characters. Some browsers (like
-    # Chrome) ignore quite a few control characters at the start of a
-    # URL and might consider the URL as scheme relative.
-    if unicodedata.category(url[0])[0] == 'C':
-        return False
-    scheme = url_info.scheme
-    # Consider URLs without a scheme (e.g. //example.com/p) to be http.
-    if not url_info.scheme and url_info.netloc:
-        scheme = 'http'
-    valid_schemes = ['https'] if require_https else ['http', 'https']
-    return ((not url_info.netloc or url_info.netloc in allowed_hosts) and
-            (not scheme or scheme in valid_schemes))
-
-
-def limited_parse_qsl(qs, keep_blank_values=False, encoding='utf-8',
-                      errors='replace', fields_limit=None):
+def is_same_domain(host, pattern):
     """
-    Return a list of key/value tuples parsed from query string.
+    Return ``True`` if the host is either an exact match or a match
+    to the wildcard pattern.
 
-    Copied from urlparse with an additional "fields_limit" argument.
-    Copyright (C) 2013 Python Software Foundation (see LICENSE.python).
-
-    Arguments:
-
-    qs: percent-encoded query string to be parsed
-
-    keep_blank_values: flag indicating whether blank values in
-        percent-encoded queries should be treated as blank strings. A
-        true value indicates that blanks should be retained as blank
-        strings. The default false value indicates that blank values
-        are to be ignored and treated as if they were  not included.
-
-    encoding and errors: specify how to decode percent-encoded sequences
-        into Unicode characters, as accepted by the bytes.decode() method.
-
-    fields_limit: maximum number of fields parsed or an exception
-        is raised. None means no limit and is the default.
+    Any pattern beginning with a period matches a domain and all of its
+    subdomains. (e.g. ``.example.com`` matches ``example.com`` and
+    ``foo.example.com``). Anything else is an exact string match.
     """
-    if fields_limit:
-        pairs = FIELDS_MATCH.split(qs, fields_limit)
-        if len(pairs) > fields_limit:
-            raise TooManyFieldsSent(
-                'The number of GET/POST parameters exceeded '
-                'settings.DATA_UPLOAD_MAX_NUMBER_FIELDS.'
-            )
-    else:
-        pairs = FIELDS_MATCH.split(qs)
-    r = []
-    for name_value in pairs:
-        if not name_value:
-            continue
-        nv = name_value.split('=', 1)
-        if len(nv) != 2:
-            # Handle case of a control-name with no equal sign
-            if keep_blank_values:
-                nv.append('')
-            else:
-                continue
-        if nv[1] or keep_blank_values:
-            name = nv[0].replace('+', ' ')
-            name = unquote(name, encoding=encoding, errors=errors)
-            value = nv[1].replace('+', ' ')
-            value = unquote(value, encoding=encoding, errors=errors)
-            r.append((name, value))
-    return r
+    if not pattern:
+        return False
 
-
-def escape_leading_slashes(url):
-    """
-    If redirecting to an absolute path (two leading slashes), a slash must be
-    escaped to prevent browsers from handling the path as schemaless and
-    redirecting to another host.
-    """
-    if url.startswith('//'):
-        url = '/%2F{}'.format(url[2:])
-    return url
+    pattern = pattern.lower()
+    return (
+        pattern[0] == '.' and (host.endswith(pattern) or host == pattern[1:]) or
+        pattern == host
+    )
