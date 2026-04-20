@@ -90,6 +90,8 @@ class SafeExceptionReporterFilter:
                 cleansed = self.cleansed_substitute
             elif isinstance(value, dict):
                 cleansed = {k: self.cleanse_setting(k, v) for k, v in value.items()}
+            elif isinstance(value, (list, tuple)):
+                cleansed = self._cleanse_iterable(value)
             else:
                 cleansed = value
         except TypeError:
@@ -101,10 +103,27 @@ class SafeExceptionReporterFilter:
 
         return cleansed
 
+    def _cleanse_iterable(self, iterable):
+        """
+        Recursively cleanse items in lists and tuples.
+        """
+        cleansed_items = []
+        for item in iterable:
+            if isinstance(item, dict):
+                cleansed_item = {k: self.cleanse_setting(k, v) for k, v in item.items()}
+            elif isinstance(item, (list, tuple)):
+                cleansed_item = self._cleanse_iterable(item)
+            else:
+                cleansed_item = item
+            cleansed_items.append(cleansed_item)
+        
+        # Preserve the original type (list or tuple)
+        return type(iterable)(cleansed_items)
+
     def get_safe_settings(self):
         """
-        Return a dictionary of the settings module with values of sensitive
-        settings replaced with stars (*********).
+        Return a dictionary of the settings module with sensitive settings
+        blurred out.
         """
         settings_dict = {}
         for k in dir(settings):
@@ -114,7 +133,7 @@ class SafeExceptionReporterFilter:
 
     def get_safe_request_meta(self, request):
         """
-        Return a dictionary of request.META with sensitive values redacted.
+        Return a dictionary of request.META with sensitive keys redacted.
         """
         if not hasattr(request, 'META'):
             return {}
@@ -143,98 +162,11 @@ class SafeExceptionReporterFilter:
                     multivaluedict[param] = self.cleansed_substitute
         return multivaluedict
 
-    def get_post_parameters(self, request):
-        """
-        Replace the values of POST parameters marked as sensitive with
-        stars (*********).
-        """
-        if request is None:
-            return {}
-        else:
-            sensitive_post_parameters = getattr(request, 'sensitive_post_parameters', [])
-            if self.is_active(request) and sensitive_post_parameters:
-                cleansed = request.POST.copy()
-                if sensitive_post_parameters == '__ALL__':
-                    # Cleanse all parameters.
-                    for k in cleansed:
-                        cleansed[k] = self.cleansed_substitute
-                    return cleansed
-                else:
-                    # Cleanse only the specified parameters.
-                    for param in sensitive_post_parameters:
-                        if param in cleansed:
-                            cleansed[param] = self.cleansed_substitute
-                    return cleansed
-            else:
-                return request.POST
-
-    def cleanse_special_types(self, request, value):
-        try:
-            # If value is lazy or a complex object of another kind, this check
-            # might raise an exception. isinstance checks that lazy
-            # MultiValueDicts will have a return value.
-            is_multivalue_dict = isinstance(value, MultiValueDict)
-        except Exception as e:
-            return '{!r} while evaluating {!r}'.format(e, value)
-
-        if is_multivalue_dict:
-            # Cleanse MultiValueDicts (request.POST is the one we usually care about)
-            value = self.get_cleansed_multivaluedict(request, value)
-        return value
-
-    def get_traceback_frame_variables(self, request, tb_frame):
-        """
-        Replace the values of variables marked as sensitive with
-        stars (*********).
-        """
-        # Loop through the frame's callers to see if the sensitive_variables
-        # decorator was used.
-        current_frame = tb_frame.f_back
-        sensitive_variables = None
-        while current_frame is not None:
-            if (current_frame.f_code.co_name == 'sensitive_variables_wrapper' and
-                    'sensitive_variables_wrapper' in current_frame.f_locals):
-                # The sensitive_variables decorator was used, so we take note
-                # of the sensitive variables' names.
-                wrapper = current_frame.f_locals['sensitive_variables_wrapper']
-                sensitive_variables = getattr(wrapper, 'sensitive_variables', None)
-                break
-            current_frame = current_frame.f_back
-
-        cleansed = {}
-        if self.is_active(request) and sensitive_variables:
-            if sensitive_variables == '__ALL__':
-                # Cleanse all variables
-                for name in tb_frame.f_locals:
-                    cleansed[name] = self.cleansed_substitute
-            else:
-                # Cleanse specified variables
-                for name, value in tb_frame.f_locals.items():
-                    if name in sensitive_variables:
-                        value = self.cleansed_substitute
-                    else:
-                        value = self.cleanse_special_types(request, value)
-                    cleansed[name] = value
-        else:
-            # Potentially cleanse the request and any MultiValueDicts if they
-            # are one of the frame variables.
-            for name, value in tb_frame.f_locals.items():
-                cleansed[name] = self.cleanse_special_types(request, value)
-
-        if (tb_frame.f_code.co_name == 'sensitive_variables_wrapper' and
-                'sensitive_variables_wrapper' in tb_frame.f_locals):
-            # For good measure, obfuscate the decorated function's arguments in
-            # the sensitive_variables decorator's frame, in case the variables
-            # associated with those arguments were meant to be obfuscated from
-            # the decorated function's frame.
-            cleansed['func_args'] = self.cleansed_substitute
-            cleansed['func_kwargs'] = self.cleansed_substitute
-
-        return cleansed.items()
-
 
 class ExceptionReporter:
-    """Organize and coordinate reporting on exceptions."""
+    """
+    Organize and coordinate reporting on exceptions.
+    """
     def __init__(self, request, exc_type, exc_value, tb, is_email=False):
         self.request = request
         self.filter = get_exception_reporter_filter(self.request)
@@ -243,7 +175,7 @@ class ExceptionReporter:
         self.tb = tb
         self.is_email = is_email
 
-        self.template_info = getattr(self.exc_value, 'template_debug', None)
+        self.template_info = None
         self.template_does_not_exist = False
         self.postmortem = None
 
@@ -251,7 +183,7 @@ class ExceptionReporter:
         """Return a dictionary containing traceback information."""
         if self.exc_type and issubclass(self.exc_type, TemplateDoesNotExist):
             self.template_does_not_exist = True
-            self.postmortem = self.exc_value.chain or [self.exc_value]
+            self.get_template_exception_info()
 
         frames = self.get_traceback_frames()
         for i, frame in enumerate(frames):
@@ -261,7 +193,7 @@ class ExceptionReporter:
                     v = pprint(v)
                     # Trim large blobs of data
                     if len(v) > 4096:
-                        v = '%s… <trimmed %d bytes string>' % (v[0:4096], len(v))
+                        v = '%s... <trimmed %d bytes string>' % (v[0:4096], len(v))
                     frame_vars.append((k, v))
                 frame['vars'] = frame_vars
             frames[i] = frame
@@ -295,7 +227,9 @@ class ExceptionReporter:
             'request': self.request,
             'request_meta': self.filter.get_safe_request_meta(self.request),
             'user_str': user_str,
-            'filtered_POST_items': list(self.filter.get_post_parameters(self.request).items()),
+            'filtered_POST_items': list(self.filter.get_cleansed_multivaluedict(
+                self.request, self.request.POST if self.request else {}
+            ).items()),
             'settings': self.filter.get_safe_settings(),
             'sys_executable': sys.executable,
             'sys_version_info': '%d.%d.%d' % sys.version_info[0:3],
@@ -330,7 +264,7 @@ class ExceptionReporter:
         """Return plain text version of debug 500 HTTP error page."""
         with Path(CURRENT_DIR, 'templates', 'technical_500.txt').open(encoding='utf-8') as fh:
             t = DEBUG_ENGINE.from_string(fh.read())
-        c = Context(self.get_traceback_data(), autoescape=False, use_l10n=False)
+        c = Context(self.get_traceback_data(), use_l10n=False)
         return t.render(c)
 
     def _get_source(self, filename, loader, module_name):
@@ -376,12 +310,10 @@ class ExceptionReporter:
         lower_bound = max(0, lineno - context_lines)
         upper_bound = lineno + context_lines
 
-        try:
-            pre_context = source[lower_bound:lineno]
-            context_line = source[lineno]
-            post_context = source[lineno + 1:upper_bound]
-        except IndexError:
-            return None, [], None, []
+        pre_context = source[lower_bound:lineno]
+        context_line = source[lineno]
+        post_context = source[lineno + 1:upper_bound]
+
         return lower_bound, pre_context, context_line, post_context
 
     def get_traceback_frames(self):
@@ -396,9 +328,6 @@ class ExceptionReporter:
         while exc_value:
             exceptions.append(exc_value)
             exc_value = explicit_or_implicit_cause(exc_value)
-            if exc_value in exceptions:
-                # Avoid infinite loop if there's a cyclic reference (#29393).
-                break
 
         frames = []
         # No exceptions were supplied to ExceptionReporter
@@ -409,12 +338,29 @@ class ExceptionReporter:
         exc_value = exceptions.pop()
         tb = self.tb if not exceptions else exc_value.__traceback__
 
+        while True:
+            frames.extend(self.get_exception_traceback_frames(exc_value, tb))
+            try:
+                exc_value = exceptions.pop()
+            except IndexError:
+                break
+            tb = exc_value.__traceback__
+        return frames
+
+    def get_exception_traceback_frames(self, exc_value, tb):
+        def explicit_or_implicit_cause(exc_value):
+            explicit = getattr(exc_value, '__cause__', None)
+            implicit = getattr(exc_value, '__context__', None)
+            return explicit or implicit
+
+        frames = []
         while tb is not None:
             # Support for __traceback_hide__ which is used by a few libraries
             # to hide internal frames.
             if tb.tb_frame.f_locals.get('__traceback_hide__'):
                 tb = tb.tb_next
                 continue
+
             filename = tb.tb_frame.f_code.co_filename
             function = tb.tb_frame.f_code.co_name
             lineno = tb.tb_lineno - 1
@@ -443,16 +389,64 @@ class ExceptionReporter:
                 'post_context': post_context,
                 'pre_context_lineno': pre_context_lineno + 1,
             })
-
-            # If the traceback for current exception is consumed, try the
-            # other exception.
-            if not tb.tb_next and exceptions:
-                exc_value = exceptions.pop()
-                tb = exc_value.__traceback__
-            else:
-                tb = tb.tb_next
+            tb = tb.tb_next
 
         return frames
+
+    def format_exception(self):
+        """
+        Return the same data as from traceback.format_exception.
+        """
+        import traceback
+        frames = self.get_traceback_frames()
+        tb = [(f['filename'], f['lineno'], f['function'], f['context_line']) for f in frames]
+        list_of_strings = ['Traceback (most recent call last):\n']
+        list_of_strings += traceback.format_list(tb)
+        if self.exc_type:
+            list_of_strings += traceback.format_exception_only(self.exc_type, self.exc_value)
+        return list_of_strings
+
+    def get_template_exception_info(self):
+        origin, (start, end) = self.exc_value.template_debug
+        template_source = origin.reload()
+        context_lines = 10
+        line = 0
+        upto = 0
+        source_lines = []
+        before = during = after = ""
+        for num, next in enumerate(linebreak_iter(template_source)):
+            if start >= upto and end <= next:
+                line = num
+                before = escape(template_source[upto:start])
+                during = escape(template_source[start:end])
+                after = escape(template_source[end:next])
+            source_lines.append((num, escape(template_source[upto:next])))
+            upto = next
+        total = len(source_lines)
+
+        top = max(1, line - context_lines)
+        bottom = min(total, line + 1 + context_lines)
+
+        # In some rare cases exc_value.template_debug returns None
+        # (for example, if template loader is broken and raises
+        # TemplateDoesNotExist with no arguments)
+        if origin and hasattr(origin, 'name'):
+            origin_name = origin.name
+        else:
+            origin_name = 'unknown'
+
+        self.template_info = {
+            'name': origin_name,
+            'message': self.exc_value.args[0] if self.exc_value.args else '',
+            'source_lines': source_lines[top:bottom],
+            'line': line,
+            'before': before,
+            'during': during,
+            'after': after,
+            'total': total,
+            'top': top,
+            'bottom': bottom,
+        }
 
 
 def technical_404_response(request, exception):
@@ -465,14 +459,11 @@ def technical_404_response(request, exception):
     try:
         tried = exception.args[0]['tried']
     except (IndexError, TypeError, KeyError):
-        tried = []
+        resolved = False
+        tried = request.resolver_match.tried if request.resolver_match else []
     else:
-        if (not tried or (                  # empty URLconf
-            request.path == '/' and
-            len(tried) == 1 and             # default URLconf
-            len(tried[0]) == 1 and
-            getattr(tried[0][0], 'app_name', '') == getattr(tried[0][0], 'namespace', '') == 'admin'
-        )):
+        resolved = True
+        if not tried:
             return default_urlconf(request)
 
     urlconf = getattr(request, 'urlconf', settings.ROOT_URLCONF)
@@ -504,6 +495,7 @@ def technical_404_response(request, exception):
         'root_urlconf': settings.ROOT_URLCONF,
         'request_path': error_url,
         'urlpatterns': tried,
+        'resolved': resolved,
         'reason': str(exception),
         'request': request,
         'settings': reporter_filter.get_safe_settings(),
@@ -519,5 +511,17 @@ def default_urlconf(request):
     c = Context({
         'version': get_docs_version(),
     })
+    return HttpResponseNotFound(t.render(c), content_type='text/html')
 
-    return HttpResponse(t.render(c), content_type='text/html')
+
+def linebreak_iter(template_source):
+    yield 0
+    p = template_source.find('\n')
+    while p >= 0:
+        yield p + 1
+        p = template_source.find('\n', p + 1)
+    yield len(template_source) + 1
+
+
+def escape(text):
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
