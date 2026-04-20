@@ -211,6 +211,28 @@ class TestUtilsHtml(SimpleTestCase):
             with self.subTest(arg=arg):
                 self.assertEqual(json_script(arg, "test_id"), expected)
 
+    def test_json_script_custom_encoder(self):
+        import json
+        
+        class CustomJSONEncoder(json.JSONEncoder):
+            def encode(self, obj):
+                if isinstance(obj, str) and obj == "custom":
+                    return '"CUSTOM_ENCODED"'
+                return super().encode(obj)
+        
+        # Test with custom encoder
+        result = json_script({"key": "custom"}, element_id="test", cls=CustomJSONEncoder)
+        self.assertIn('"CUSTOM_ENCODED"', result)
+        
+        # Test that default behavior is unchanged when no cls is provided
+        result_default = json_script({"key": "custom"}, element_id="test")
+        self.assertIn('"custom"', result_default)
+        self.assertNotIn('"CUSTOM_ENCODED"', result_default)
+        
+        # Test with None cls (should use default)
+        result_none = json_script({"key": "custom"}, element_id="test", cls=None)
+        self.assertEqual(result_none, result_default)
+
     def test_json_script_without_id(self):
         self.assertHTMLEqual(
             json_script({"key": "value"}),

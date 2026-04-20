@@ -29,7 +29,7 @@ def escape(text):
 
 _js_escapes = {
     ord("\\"): "\\u005C",
-    ord("'"): "\\u0027",
+    ord("'"):
     ord('"'): "\\u0022",
     ord(">"): "\\u003E",
     ord("<"): "\\u003C",
@@ -59,7 +59,7 @@ _json_script_escapes = {
 }
 
 
-def json_script(value, element_id=None):
+def json_script(value, element_id=None, cls=None):
     """
     Escape all the HTML/XML special characters with their unicode escapes, so
     value is safe to be output anywhere except for inside a tag attribute. Wrap
@@ -67,7 +67,10 @@ def json_script(value, element_id=None):
     """
     from django.core.serializers.json import DjangoJSONEncoder
 
-    json_str = json.dumps(value, cls=DjangoJSONEncoder).translate(_json_script_escapes)
+    if cls is None:
+        cls = DjangoJSONEncoder
+    
+    json_str = json.dumps(value, cls=cls).translate(_json_script_escapes)
     if element_id:
         template = '<script id="{}" type="application/json">{}</script>'
         args = (element_id, mark_safe(json_str))
@@ -234,7 +237,7 @@ class Urlizer:
     leading punctuation (opening parens) and it'll still do the right thing.
     """
 
-    trailing_punctuation_chars = ".,:;!"
+    trailing_punctuation_chars = ".,;!"
     wrapping_punctuation = [("(", ")"), ("[", "]")]
 
     simple_url_re = _lazy_re_compile(r"^https?://\[?\w", re.IGNORECASE)
