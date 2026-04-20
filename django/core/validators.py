@@ -70,7 +70,7 @@ class URLValidator(RegexValidator):
     # Host patterns
     hostname_re = r'[a-z' + ul + r'0-9](?:[a-z' + ul + r'0-9-]{0,61}[a-z' + ul + r'0-9])?'
     # Max length for domain name labels is 63 characters per RFC 1034 sec. 3.1
-    domain_re = r'(?:\.(?!-)[a-z' + ul + r'0-9-]{1,63}(?<!-))*'
+    domain_re = r'(?:\.(?!-)[a-z' + ul + r'0-9-]{1,63}(?<!-))*)'
     tld_re = (
         r'\.'                                # dot
         r'(?!-)'                             # can't start with a dash
@@ -127,7 +127,10 @@ class URLValidator(RegexValidator):
                 raise
         else:
             # Now verify IPv6 in the netloc part
-            host_match = re.search(r'^\[(.+)\](?::\d{1,5})?$', urlsplit(value).netloc)
+            try:
+                host_match = re.search(r'^\[(.+)\](?::\d{1,5})?$', urlsplit(value).netloc)
+            except ValueError:  # for example, "Invalid IPv6 URL"
+                raise ValidationError(self.message, code=self.code, params={'value': value})
             if host_match:
                 potential_ip = host_match[1]
                 try:
@@ -139,7 +142,11 @@ class URLValidator(RegexValidator):
         # section 3.1. It's defined to be 255 bytes or less, but this includes
         # one byte for the length of the name and one byte for the trailing dot
         # that's used to indicate absolute names in DNS.
-        if len(urlsplit(value).hostname) > 253:
+        try:
+            hostname = urlsplit(value).hostname
+        except ValueError:  # for example, "Invalid IPv6 URL"
+            raise ValidationError(self.message, code=self.code, params={'value': value})
+        if hostname and len(hostname) > 253:
             raise ValidationError(self.message, code=self.code, params={'value': value})
 
 
@@ -230,14 +237,14 @@ slug_re = _lazy_re_compile(r'^[-a-zA-Z0-9_]+\Z')
 validate_slug = RegexValidator(
     slug_re,
     # Translators: "letters" means latin letters: a-z and A-Z.
-    _('Enter a valid “slug” consisting of letters, numbers, underscores or hyphens.'),
+    _('Enter a valid "slug" consisting of letters, numbers, underscores or hyphens.'),
     'invalid'
 )
 
 slug_unicode_re = _lazy_re_compile(r'^[-\w]+\Z')
 validate_unicode_slug = RegexValidator(
     slug_unicode_re,
-    _('Enter a valid “slug” consisting of Unicode letters, numbers, underscores, or hyphens.'),
+    _('Enter a valid "slug" consisting of Unicode letters, numbers, underscores, or hyphens.'),
     'invalid'
 )
 
@@ -474,7 +481,7 @@ class DecimalValidator:
 @deconstructible
 class FileExtensionValidator:
     message = _(
-        'File extension “%(extension)s” is not allowed. '
+        'File extension "%(extension)s" is not allowed. '
         'Allowed extensions are: %(allowed_extensions)s.'
     )
     code = 'invalid_extension'
