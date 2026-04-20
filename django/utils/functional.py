@@ -405,6 +405,11 @@ class SimpleLazyObject(LazyObject):
     def _setup(self):
         self._wrapped = self._setupfunc()
 
+    def __radd__(self, other):
+        if self._wrapped is empty:
+            self._setup()
+        return other + self._wrapped
+
     # Return a meaningful representation of the lazy object for debugging
     # without evaluating the wrapped object.
     def __repr__(self):
