@@ -1,5 +1,6 @@
 import keyword
 import re
+from collections import defaultdict
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import DEFAULT_DB_ALIAS, connections
@@ -127,12 +128,33 @@ class Command(BaseCommand):
                     yield "# The error was: %s" % e
                     continue
 
+                # Track related models to generate related_name when needed
+                related_model_counts = defaultdict(int)
+                related_model_fields = defaultdict(list)
+                
+                # First pass: count relations to each model
+                for row in table_description:
+                    column_name = row.name
+                    if column_name in relations:
+                        ref_db_column, ref_db_table = relations[column_name]
+                        rel_to = (
+                            "self"
+                            if ref_db_table == table_name
+                            else table2model(ref_db_table)
+                        )
+                        related_model_counts[rel_to] += 1
+                        related_model_fields[rel_to].append(column_name)
+
                 yield ""
                 yield ""
                 yield "class %s(models.Model):" % table2model(table_name)
                 known_models.append(table2model(table_name))
                 used_column_names = []  # Holds column names used in the table so far
                 column_to_field_name = {}  # Maps column names to names of model fields
+                
+                # Track field names for related_name generation
+                related_name_counters = defaultdict(int)
+                
                 for row in table_description:
                     comment_notes = (
                         []
@@ -182,6 +204,12 @@ class Command(BaseCommand):
                             if ref_db_table == table_name
                             else table2model(ref_db_table)
                         )
+                        
+                        # Generate related_name if multiple fields reference the same model
+                        if related_model_counts[rel_to] > 1:
+                            # Use the field name as related_name to make it unique
+                            extra_params["related_name"] = f"{att_name}_set"
+                        
                         if rel_to in known_models:
                             field_type = "%s(%s" % (rel_type, rel_to)
                         else:
