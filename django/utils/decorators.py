@@ -38,6 +38,29 @@ def _multi_decorate(decorators, method):
         # 'func'. Also, wrap method.__get__() in a function because new
         # attributes can't be set on bound method objects, only on functions.
         bound_method = partial(method.__get__(self, type(self)))
+        # Copy function attributes from the original method to the partial object
+        # so that decorators can access them (e.g., __name__, __module__, etc.)
+        try:
+            bound_method.__name__ = method.__name__
+        except AttributeError:
+            pass
+        try:
+            bound_method.__module__ = method.__module__
+        except AttributeError:
+            pass
+        try:
+            bound_method.__doc__ = method.__doc__
+        except AttributeError:
+            pass
+        try:
+            bound_method.__qualname__ = method.__qualname__
+        except AttributeError:
+            pass
+        try:
+            bound_method.__annotations__ = method.__annotations__
+        except AttributeError:
+            pass
+        
         for dec in decorators:
             bound_method = dec(bound_method)
         return bound_method(*args, **kwargs)
