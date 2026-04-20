@@ -125,6 +125,29 @@ class EnumSerializer(BaseSerializer):
     def serialize(self):
         enum_class = self.value.__class__
         module = enum_class.__module__
+        
+        # Handle combined enum flags when .name is None
+        if self.value.name is None:
+            # Try to decompose the combined flags
+            try:
+                # Use enum._decompose to get constituent flags
+                decomposed = enum._decompose(enum_class, self.value.value)
+                if decomposed[1]:  # If there are constituent flags
+                    flag_names = []
+                    for flag in decomposed[1]:
+                        flag_names.append("%s.%s.%s" % (module, enum_class.__qualname__, flag.name))
+                    return " | ".join(flag_names), {"import %s" % module}
+            except (AttributeError, ValueError):
+                # Fall back to direct value if decomposition fails
+                pass
+            
+            # If decomposition fails or no constituent flags, use the raw value
+            return (
+                "%s.%s(%r)" % (module, enum_class.__qualname__, self.value.value),
+                {"import %s" % module},
+            )
+        
+        # Normal case: single enum value with a name
         return (
             "%s.%s[%r]" % (module, enum_class.__qualname__, self.value.name),
             {"import %s" % module},
