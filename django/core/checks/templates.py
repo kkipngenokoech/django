@@ -58,7 +58,9 @@ def check_for_template_tags_with_the_same_name(app_configs, **kwargs):
             libraries[module_name].append(module_path)
 
     for module_name, module_path in get_template_tag_modules():
-        libraries[module_name].append(module_path)
+        # Only add if this exact module_path is not already in the list for this module_name
+        if module_path not in libraries[module_name]:
+            libraries[module_name].append(module_path)
 
     for library_name, items in libraries.items():
         if len(items) > 1:
