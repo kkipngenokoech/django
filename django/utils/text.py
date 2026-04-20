@@ -20,7 +20,7 @@ def capfirst(x):
 # Set up regular expressions
 re_words = _lazy_re_compile(r'<[^>]+?>|([^<>\s]+)', re.S)
 re_chars = _lazy_re_compile(r'<[^>]+?>|(.)', re.S)
-re_tag = _lazy_re_compile(r'<(/)?(\S+?)(?:(\s*/)|\s.*?)?>', re.S)
+re_tag = _lazy_re_compile(r'<(/)?(\S+?)(?:(\s*/)\s.*?)?>', re.S)
 re_newlines = _lazy_re_compile(r'\r\n|\r')  # Used in normalize_newlines
 re_camel_case = _lazy_re_compile(r'(((?<=[a-z])[A-Z])|([A-Z](?![A-Z]|$)))')
 
@@ -90,19 +90,20 @@ class Truncator(SimpleLazyObject):
         length = int(num)
         text = unicodedata.normalize('NFC', self._wrapped)
 
-        # Calculate the length to truncate to (max length - end_text length)
+        # Calculate the length to truncate to
         truncate_len = length
-        for char in self.add_truncation_text('', truncate):
+        for char in self.add_truncation_text('', truncate or ''):
             if not unicodedata.combining(char):
                 truncate_len -= 1
-                if truncate_len == 0:
-                    break
+
         if html:
             return self._truncate_html(length, truncate, text, truncate_len, False)
         return self._text_chars(length, truncate, text, truncate_len)
 
     def _text_chars(self, length, truncate, text, truncate_len):
-        """Truncate a string after a certain number of chars."""
+        """
+        Truncate a string after a certain number of chars.
+        """
         s_len = 0
         end_index = None
         for i, char in enumerate(text):
@@ -123,9 +124,10 @@ class Truncator(SimpleLazyObject):
 
     def words(self, num, truncate=None, html=False):
         """
-        Truncate a string after a certain number of words. `truncate` specifies
-        what should be used to notify that the string has been truncated,
-        defaulting to ellipsis.
+        Truncate a string after a certain number of words.
+
+        `truncate` specifies what should be used to notify that the string has
+        been truncated, defaulting to ellipsis.
         """
         self._setup()
         length = int(num)
@@ -136,8 +138,6 @@ class Truncator(SimpleLazyObject):
     def _text_words(self, length, truncate):
         """
         Truncate a string after a certain number of words.
-
-        Strip newlines in the string.
         """
         words = self._wrapped.split()
         if len(words) > length:
@@ -147,7 +147,7 @@ class Truncator(SimpleLazyObject):
 
     def _truncate_html(self, length, truncate, text, truncate_len, words):
         """
-        Truncate HTML to a certain number of chars (not counting tags and
+        Truncate HTML to a certain number of chars (not counting markup and
         comments), or, if words is True, then to a certain number of words.
         Close opened tags if they were correctly closed in the given HTML.
 
@@ -157,8 +157,7 @@ class Truncator(SimpleLazyObject):
             return ''
 
         html4_singlets = (
-            'br', 'col', 'link', 'base', 'img',
-            'param', 'area', 'hr', 'input'
+            'br', 'col', 'link', 'base', 'img', 'param', 'area', 'hr', 'input'
         )
 
         # Count non-HTML chars/words and keep note of open tags
@@ -175,14 +174,13 @@ class Truncator(SimpleLazyObject):
                 # Checked through whole string
                 break
             pos = m.end(0)
-            if m[1]:
-                # It's an actual non-HTML word or char
+            if m.group(1):
                 current_len += 1
                 if current_len == truncate_len:
                     end_text_pos = pos
                 continue
             # Check for tag
-            tag = re_tag.match(m[0])
+            tag = re_tag.match(m.group(0))
             if not tag or current_len >= truncate_len:
                 # Don't worry about non tags or tags after our truncate point
                 continue
@@ -225,8 +223,6 @@ def get_valid_filename(s):
     filename. Remove leading and trailing spaces; convert other spaces to
     underscores; and remove anything that is not an alphanumeric, dash,
     underscore, or dot.
-    >>> get_valid_filename("john's portrait in 2004.jpg")
-    'johns_portrait_in_2004.jpg'
     """
     s = str(s).strip().replace(' ', '_')
     return re.sub(r'(?u)[^-\w.]', '', s)
@@ -271,7 +267,7 @@ def phone2numeric(phone):
         'o': '6', 'p': '7', 'q': '7', 'r': '7', 's': '7', 't': '8', 'u': '8',
         'v': '8', 'w': '9', 'x': '9', 'y': '9', 'z': '9',
     }
-    return ''.join(char2number.get(c, c) for c in phone.lower())
+    return ''.join(char2number.get(c.lower(), c) for c in phone)
 
 
 # From http://www.xhaus.com/alan/python/httpcomp.html#gzip
@@ -279,66 +275,17 @@ def phone2numeric(phone):
 def compress_string(s):
     zbuf = BytesIO()
     with GzipFile(mode='wb', compresslevel=6, fileobj=zbuf, mtime=0) as zfile:
-        zfile.write(s)
+        zfile.write(s.encode())
     return zbuf.getvalue()
 
 
-class StreamingBuffer(BytesIO):
-    def read(self):
-        ret = self.getvalue()
-        self.seek(0)
-        self.truncate()
-        return ret
-
-
-# Like compress_string, but for iterators of strings.
-def compress_sequence(sequence):
-    buf = StreamingBuffer()
-    with GzipFile(mode='wb', compresslevel=6, fileobj=buf, mtime=0) as zfile:
-        # Output headers...
-        yield buf.read()
-        for item in sequence:
-            zfile.write(item)
-            data = buf.read()
-            if data:
-                yield data
-    yield buf.read()
-
-
-# Expression to match some_token and some_token="with spaces" (and similarly
-# for single-quoted strings).
-smart_split_re = _lazy_re_compile(r"""
-    ((?:
-        [^\s'"]*
-        (?:
-            (?:"(?:[^"\\]|\\.)*" | '(?:[^'\\]|\\.)*')
-            [^\s'"]*
-        )+
-    ) | \S+)
-""", re.VERBOSE)
-
-
-def smart_split(text):
-    r"""
-    Generator that splits a string by spaces, leaving quoted phrases together.
-    Supports both single and double quotes, and supports escaping quotes with
-    backslashes. In the output, strings will keep their initial and trailing
-    quote marks and escaped quotes will remain escaped (the results can then
-    be further processed with unescape_string_literal()).
-
-    >>> list(smart_split(r'This is "a person\'s" test.'))
-    ['This', 'is', '"a person\\\'s"', 'test.']
-    >>> list(smart_split(r"Another 'person\'s' test."))
-    ['Another', "'person\\'s'", 'test.']
-    >>> list(smart_split(r'A "\"funky\" style" test.'))
-    ['A', '"\\"funky\\" style"', 'test.']
-    """
-    for bit in smart_split_re.finditer(str(text)):
-        yield bit[0]
+unescape_entities_re = _lazy_re_compile(
+    r'&(#?\w+);', re.UNICODE
+)
 
 
 def _replace_entity(match):
-    text = match[1]
+    text = match.group(1)
     if text[0] == '#':
         text = text[1:]
         try:
@@ -348,15 +295,12 @@ def _replace_entity(match):
                 c = int(text)
             return chr(c)
         except ValueError:
-            return match[0]
+            return match.group(0)
     else:
         try:
             return chr(html.entities.name2codepoint[text])
         except KeyError:
-            return match[0]
-
-
-_entity_re = _lazy_re_compile(r"&(#?[xX]?(?:[0-9a-fA-F]+|\w{1,8}));")
+            return match.group(0)
 
 
 @keep_lazy_text
@@ -366,25 +310,24 @@ def unescape_entities(text):
         'html.unescape().',
         RemovedInDjango40Warning, stacklevel=2,
     )
-    return _entity_re.sub(_replace_entity, str(text))
+    return unescape_entities_re.sub(_replace_entity, str(text))
 
 
 @keep_lazy_text
 def unescape_string_literal(s):
     r"""
-    Convert quoted string literals to unquoted strings with escaped quotes and
-    backslashes unquoted::
+    Unescape a string literal. For example:
 
         >>> unescape_string_literal('"abc"')
         'abc'
         >>> unescape_string_literal("'abc'")
         'abc'
-        >>> unescape_string_literal('"a \"bc\""')
-        'a "bc"'
-        >>> unescape_string_literal("'\'ab\' c'")
-        "'ab' c"
+        >>> unescape_string_literal('"a \"bc\" d"')
+        'a "bc" d'
+        >>> unescape_string_literal("'\\n'")
+        '\n'
     """
-    if s[0] not in "\"'" or s[-1] != s[0]:
+    if s[0] not in "'\"" or s[-1] != s[0]:
         raise ValueError("Not a string literal: %r" % s)
     quote = s[0]
     return s[1:-1].replace(r'\%s' % quote, quote).replace(r'\\', '\\')
@@ -393,17 +336,19 @@ def unescape_string_literal(s):
 @keep_lazy_text
 def slugify(value, allow_unicode=False):
     """
-    Convert to ASCII if 'allow_unicode' is False. Convert spaces to hyphens.
-    Remove characters that aren't alphanumerics, underscores, or hyphens.
-    Convert to lowercase. Also strip leading and trailing whitespace.
+    Convert to ASCII if 'allow_unicode' is False. Convert spaces or repeated
+    dashes to single dashes. Remove characters that aren't alphanumerics,
+    underscores, or hyphens. Convert to lowercase. Also strip leading and
+    trailing whitespace, dashes, and underscores.
     """
     value = str(value)
     if allow_unicode:
         value = unicodedata.normalize('NFKC', value)
     else:
         value = unicodedata.normalize('NFKD', value).encode('ascii', 'ignore').decode('ascii')
-    value = re.sub(r'[^\w\s-]', '', value.lower()).strip()
-    return re.sub(r'[-\s]+', '-', value)
+    value = re.sub(r'[^\w\s-]', '', value.lower())
+    value = re.sub(r'[-\s]+', '-', value)
+    return value.strip('-_')
 
 
 def camel_case_to_spaces(value):
