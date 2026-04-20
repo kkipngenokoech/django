@@ -236,7 +236,58 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 if delete_field.name not in index.fields
             ]
 
-        constraints = list(model._meta.constraints)
+        # Handle constraints properly for SQLite
+        constraints = []
+        for constraint in model._meta.constraints:
+            if isinstance(constraint, UniqueConstraint):
+                # For UniqueConstraint, we need to ensure field names are properly resolved
+                # and don't contain F() expressions or other complex references
+                constraint_fields = []
+                valid_constraint = True
+                
+                for field_name in constraint.fields:
+                    # Handle field renames
+                    resolved_field_name = rename_mapping.get(field_name, field_name)
+                    
+                    # Check if this field still exists after deletions
+                    if delete_field and resolved_field_name == delete_field.name:
+                        valid_constraint = False
+                        break
+                    
+                    # Ensure the field exists in the new model
+                    if resolved_field_name in body:
+                        constraint_fields.append(resolved_field_name)
+                    else:
+                        valid_constraint = False
+                        break
+                
+                if valid_constraint and constraint_fields:
+                    # Create a new constraint with the resolved field names
+                    new_constraint = UniqueConstraint(
+                        fields=constraint_fields,
+                        name=constraint.name,
+                        condition=constraint.condition,
+                        deferrable=constraint.deferrable,
+                        include=constraint.include,
+                        opclasses=constraint.opclasses,
+                    )
+                    constraints.append(new_constraint)
+            else:
+                # For other constraint types, keep them as-is but check field validity
+                constraint_fields = getattr(constraint, 'fields', [])
+                valid_constraint = True
+                
+                for field_name in constraint_fields:
+                    resolved_field_name = rename_mapping.get(field_name, field_name)
+                    if delete_field and resolved_field_name == delete_field.name:
+                        valid_constraint = False
+                        break
+                    if resolved_field_name not in body:
+                        valid_constraint = False
+                        break
+                
+                if valid_constraint:
+                    constraints.append(constraint)
 
         # Provide isolated instances of the fields to the new model body so
         # that the existing model's internals aren't interfered with when
@@ -419,26 +470,13 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         self.delete_model(old_field.remote_field.through)
 
     def add_constraint(self, model, constraint):
-        if isinstance(constraint, UniqueConstraint) and (
-            constraint.condition or
-            constraint.contains_expressions or
-            constraint.include or
-            constraint.deferrable
-        ):
+        if isinstance(constraint, UniqueConstraint) and constraint.condition:
             super().add_constraint(model, constraint)
         else:
             self._remake_table(model)
 
     def remove_constraint(self, model, constraint):
-        if isinstance(constraint, UniqueConstraint) and (
-            constraint.condition or
-            constraint.contains_expressions or
-            constraint.include or
-            constraint.deferrable
-        ):
+        if isinstance(constraint, UniqueConstraint) and constraint.condition:
             super().remove_constraint(model, constraint)
         else:
             self._remake_table(model)
-
-    def _collate_sql(self, collation):
-        return 'COLLATE ' + collation
