@@ -1,5 +1,7 @@
 from enum import Enum
 
+from django.core import checks
+from django.core.exceptions import FieldDoesNotExist
 from django.db.models.query_utils import Q
 from django.db.models.sql.query import Query
 
@@ -80,13 +82,17 @@ class UniqueConstraint(BaseConstraint):
     def __init__(self, *, fields, name, condition=None, deferrable=None):
         if not fields:
             raise ValueError('At least one field is required to define a unique constraint.')
-        if not isinstance(condition, (type(None), Q)):
-            raise ValueError('UniqueConstraint.condition must be a Q instance.')
-        if condition and deferrable:
+        if not isinstance(fields, (list, tuple)):
+            raise ValueError('UniqueConstraint.fields must be a list or tuple.')
+        if condition is not None and deferrable is not None:
             raise ValueError(
                 'UniqueConstraint with conditions cannot be deferred.'
             )
-        if not isinstance(deferrable, (type(None), Deferrable)):
+        if condition is not None and not getattr(condition, 'conditional', False):
+            raise TypeError(
+                'UniqueConstraint.condition must be a Q instance.'
+            )
+        if deferrable is not None and not isinstance(deferrable, Deferrable):
             raise ValueError(
                 'UniqueConstraint.deferrable must be a Deferrable instance.'
             )
@@ -94,6 +100,44 @@ class UniqueConstraint(BaseConstraint):
         self.condition = condition
         self.deferrable = deferrable
         super().__init__(name)
+
+    def check(self, **kwargs):
+        errors = super().check(**kwargs) if hasattr(super(), 'check') else []
+        return [
+            *errors,
+            *self._check_fields(**kwargs),
+        ]
+
+    def _check_fields(self, **kwargs):
+        errors = []
+        for field_name in self.fields:
+            try:
+                self.model._meta.get_field(field_name)
+            except FieldDoesNotExist:
+                errors.append(
+                    checks.Error(
+                        "'%s' refers to the nonexistent field '%s'." % (
+                            self.name, field_name,
+                        ),
+                        obj=self.model,
+                        id='models.E012',
+                    )
+                )
+        return errors
+
+    def constraint_sql(self, model, schema_editor):
+        fields = [model._meta.get_field(field_name).column for field_name in self.fields]
+        condition = self._get_condition_sql(model, schema_editor)
+        return schema_editor._unique_sql(fields, self.name, condition)
+
+    def create_sql(self, model, schema_editor):
+        fields = [model._meta.get_field(field_name).column for field_name in self.fields]
+        condition = self._get_condition_sql(model, schema_editor)
+        return schema_editor._create_unique_sql(model, fields, self.name, condition)
+
+    def remove_sql(self, model, schema_editor):
+        condition = self._get_condition_sql(model, schema_editor)
+        return schema_editor._delete_unique_sql(model, self.name, condition)
 
     def _get_condition_sql(self, model, schema_editor):
         if self.condition is None:
@@ -104,34 +148,8 @@ class UniqueConstraint(BaseConstraint):
         sql, params = where.as_sql(compiler, schema_editor.connection)
         return sql % tuple(schema_editor.quote_value(p) for p in params)
 
-    def constraint_sql(self, model, schema_editor):
-        fields = [model._meta.get_field(field_name).column for field_name in self.fields]
-        condition = self._get_condition_sql(model, schema_editor)
-        return schema_editor._unique_sql(
-            model, fields, self.name, condition=condition,
-            deferrable=self.deferrable,
-        )
-
-    def create_sql(self, model, schema_editor):
-        fields = [model._meta.get_field(field_name).column for field_name in self.fields]
-        condition = self._get_condition_sql(model, schema_editor)
-        return schema_editor._create_unique_sql(
-            model, fields, self.name, condition=condition,
-            deferrable=self.deferrable,
-        )
-
-    def remove_sql(self, model, schema_editor):
-        condition = self._get_condition_sql(model, schema_editor)
-        return schema_editor._delete_unique_sql(
-            model, self.name, condition=condition, deferrable=self.deferrable,
-        )
-
     def __repr__(self):
-        return '<%s: fields=%r name=%r%s%s>' % (
-            self.__class__.__name__, self.fields, self.name,
-            '' if self.condition is None else ' condition=%s' % self.condition,
-            '' if self.deferrable is None else ' deferrable=%s' % self.deferrable,
-        )
+        return '<%s: fields=%r name=%r>' % (self.__class__.__name__, self.fields, self.name)
 
     def __eq__(self, other):
         if isinstance(other, UniqueConstraint):
