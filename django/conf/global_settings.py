@@ -304,7 +304,7 @@ FILE_UPLOAD_TEMP_DIR = None
 
 # The numeric mode to set newly-uploaded files to. The value should be a mode
 # you'd pass directly to os.chmod; see https://docs.python.org/library/os.html#files-and-directories.
-FILE_UPLOAD_PERMISSIONS = None
+FILE_UPLOAD_PERMISSIONS = 0o644
 
 # The numeric mode to assign to newly-created directories, when uploading files.
 # The value should be a mode as you'd pass to os.chmod;
@@ -576,7 +576,7 @@ DEFAULT_EXCEPTION_REPORTER_FILTER = 'django.views.debug.SafeExceptionReporterFil
 TEST_RUNNER = 'django.test.runner.DiscoverRunner'
 
 # Apps that don't need to be serialized at test database creation time
-# (only apps with migrations are to start with)
+# (only apps with migrations are to begin with)
 TEST_NON_SERIALIZED_APPS = []
 
 ############
@@ -625,7 +625,7 @@ SILENCED_SYSTEM_CHECKS = []
 # SECURITY MIDDLEWARE #
 #######################
 SECURE_BROWSER_XSS_FILTER = False
-SECURE_CONTENT_TYPE_NOSNIFF = False
+SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_HSTS_INCLUDE_SUBDOMAINS = False
 SECURE_HSTS_PRELOAD = False
 SECURE_HSTS_SECONDS = 0
