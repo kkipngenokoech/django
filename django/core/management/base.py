@@ -130,6 +130,32 @@ class DjangoHelpFormatter(HelpFormatter):
     def add_arguments(self, actions):
         super().add_arguments(self._reordered_actions(actions))
 
+    def _fill_text(self, text, width, indent):
+        """
+        Preserve whitespace and formatting in help text that contains newlines.
+        """
+        if '\n' in text:
+            # For multiline text, preserve the formatting
+            lines = text.splitlines()
+            formatted_lines = []
+            for line in lines:
+                # Strip leading/trailing whitespace from each line but preserve relative indentation
+                stripped = line.strip()
+                if stripped:
+                    # Preserve indentation relative to the first non-empty line
+                    if not formatted_lines:
+                        # First line sets the base indentation
+                        base_indent = len(line) - len(line.lstrip())
+                    current_indent = len(line) - len(line.lstrip())
+                    relative_indent = max(0, current_indent - base_indent)
+                    formatted_lines.append(indent + ' ' * relative_indent + stripped)
+                else:
+                    formatted_lines.append('')
+            return '\n'.join(formatted_lines)
+        else:
+            # For single-line text, use default behavior
+            return super()._fill_text(text, width, indent)
+
 
 class OutputWrapper(TextIOBase):
     """
