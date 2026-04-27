@@ -48,14 +48,33 @@ class Media:
                 css = {}
             if js is None:
                 js = []
-        self._css = css
-        self._js = js
+        self._css_lists = [css]
+        self._js_lists = [js]
 
     def __repr__(self):
         return 'Media(css=%r, js=%r)' % (self._css, self._js)
 
     def __str__(self):
         return self.render()
+
+    @property
+    def _css(self):
+        css = self._css_lists[0]
+        # filter(None, ...) avoids calling merge with empty dicts.
+        for obj in filter(None, self._css_lists[1:]):
+            css = {
+                medium: self.merge(css.get(medium, []), obj.get(medium, []))
+                for medium in css.keys() | obj.keys()
+            }
+        return css
+
+    @property
+    def _js(self):
+        js = self._js_lists[0]
+        # filter(None, ...) avoids calling merge() with empty lists.
+        for obj in filter(None, self._js_lists[1:]):
+            js = self.merge(js, obj)
+        return js
 
     def render(self):
         return mark_safe('\n'.join(chain.from_iterable(getattr(self, 'render_' + name)() for name in MEDIA_TYPES)))
@@ -119,12 +138,31 @@ class Media:
                 # Add path to combined_list since it doesn't exist.
                 combined_list.insert(last_insert_index, path)
             else:
+                # Check if this creates a real conflict by examining if the relative
+                # order between this element and others in list_2 is violated
                 if index > last_insert_index:
-                    warnings.warn(
-                        'Detected duplicate Media files in an opposite order:\n'
-                        '%s\n%s' % (combined_list[last_insert_index], combined_list[index]),
-                        MediaOrderConflictWarning,
-                    )
+                    # Only warn if this represents a true ordering conflict
+                    # Check if any element from list_2 that should come after 'path'
+                    # is already positioned before 'path' in combined_list
+                    path_index_in_list2 = list_2.index(path)
+                    conflict_found = False
+                    
+                    for other_path in list_2[path_index_in_list2 + 1:]:
+                        try:
+                            other_index = combined_list.index(other_path)
+                            if other_index < index:
+                                conflict_found = True
+                                break
+                        except ValueError:
+                            # other_path not in combined_list yet, no conflict
+                            continue
+                    
+                    if conflict_found:
+                        warnings.warn(
+                            'Detected duplicate Media files in an opposite order:\n'
+                            '%s\n%s' % (combined_list[last_insert_index], combined_list[index]),
+                            MediaOrderConflictWarning,
+                        )
                 # path already exists in the list. Update last_insert_index so
                 # that the following elements are inserted in front of this one.
                 last_insert_index = index
@@ -132,11 +170,8 @@ class Media:
 
     def __add__(self, other):
         combined = Media()
-        combined._js = self.merge(self._js, other._js)
-        combined._css = {
-            medium: self.merge(self._css.get(medium, []), other._css.get(medium, []))
-            for medium in self._css.keys() | other._css.keys()
-        }
+        combined._css_lists = self._css_lists + other._css_lists
+        combined._js_lists = self._js_lists + other._js_lists
         return combined
 
 
