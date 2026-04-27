@@ -98,8 +98,8 @@ def iter_all_python_module_files():
     # modules based on the module name and pass it to iter_modules_and_files().
     # This ensures cached results are returned in the usual case that modules
     # aren't loaded on the fly.
-    modules_view = sorted(list(sys.modules.items()), key=lambda i: i[0])
-    modules = tuple(m[1] for m in modules_view if not isinstance(m[1], weakref.ProxyTypes))
+    keys = sorted(sys.modules)
+    modules = tuple(m for m in map(sys.modules.__getitem__, keys) if not isinstance(m, weakref.ProxyTypes))
     return iter_modules_and_files(modules, frozenset(_error_files))
 
 
@@ -111,7 +111,7 @@ def iter_modules_and_files(modules, extra_files):
         # During debugging (with PyDev) the 'typing.io' and 'typing.re' objects
         # are added to sys.modules, however they are types not modules and so
         # cause issues here.
-        if not isinstance(module, ModuleType) or module.__spec__ is None:
+        if not isinstance(module, ModuleType) or getattr(module, '__spec__', None) is None:
             continue
         spec = module.__spec__
         # Modules could be loaded from places without a concrete location. If
@@ -366,11 +366,12 @@ class WatchmanReloader(BaseReloader):
     def __init__(self):
         self.roots = defaultdict(set)
         self.processed_request = threading.Event()
+        self.client_timeout = int(os.environ.get('DJANGO_WATCHMAN_TIMEOUT', 5))
         super().__init__()
 
     @cached_property
     def client(self):
-        return pywatchman.client()
+        return pywatchman.client(timeout=self.client_timeout)
 
     def _watch_root(self, root):
         # In practice this shouldn't occur, however, it's possible that a
@@ -528,7 +529,7 @@ class WatchmanReloader(BaseReloader):
     def check_availability(cls):
         if not pywatchman:
             raise WatchmanUnavailable('pywatchman not installed.')
-        client = pywatchman.client(timeout=0.01)
+        client = pywatchman.client(timeout=0.1)
         try:
             result = client.capabilityCheck()
         except Exception:
@@ -578,10 +579,6 @@ def run_with_reloader(main_func, *args, **kwargs):
             logger.info('Watching for file changes with %s', reloader.__class__.__name__)
             start_django(reloader, main_func, *args, **kwargs)
         else:
-            try:
-                WatchmanReloader.check_availability()
-            except WatchmanUnavailable as e:
-                logger.info('Watchman unavailable: %s', e)
             exit_code = restart_with_reloader()
             sys.exit(exit_code)
     except KeyboardInterrupt:

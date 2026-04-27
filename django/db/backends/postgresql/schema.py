@@ -11,6 +11,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
     sql_create_sequence = "CREATE SEQUENCE %(sequence)s"
     sql_delete_sequence = "DROP SEQUENCE IF EXISTS %(sequence)s CASCADE"
     sql_set_sequence_max = "SELECT setval('%(sequence)s', MAX(%(column)s)) FROM %(table)s"
+    sql_set_sequence_owner = 'ALTER SEQUENCE %(sequence)s OWNED BY %(table)s.%(column)s'
 
     sql_create_index = "CREATE INDEX %(name)s ON %(table)s%(using)s (%(columns)s)%(extra)s%(condition)s"
     sql_delete_index = "DROP INDEX IF EXISTS %(name)s"
@@ -23,7 +24,8 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
     sql_delete_procedure = 'DROP FUNCTION %(procedure)s(%(param_types)s)'
 
     def quote_value(self, value):
-        return psycopg2.extensions.adapt(value)
+        # getquoted() returns a quoted bytestring of the adapted value.
+        return psycopg2.extensions.adapt(value).getquoted().decode()
 
     def _field_indexes_sql(self, model, field):
         output = super()._field_indexes_sql(model, field)
@@ -97,6 +99,14 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                             "table": self.quote_name(table),
                             "column": self.quote_name(column),
                             "sequence": self.quote_name(sequence_name),
+                        },
+                        [],
+                    ),
+                    (
+                        self.sql_set_sequence_owner % {
+                            'table': self.quote_name(table),
+                            'column': self.quote_name(column),
+                            'sequence': self.quote_name(sequence_name),
                         },
                         [],
                     ),

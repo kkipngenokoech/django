@@ -218,10 +218,10 @@ class BaseDatabaseOperations:
     def limit_offset_sql(self, low_mark, high_mark):
         """Return LIMIT/OFFSET SQL clause."""
         limit, offset = self._get_limit_offset_params(low_mark, high_mark)
-        return '%s%s' % (
-            (' LIMIT %d' % limit) if limit else '',
-            (' OFFSET %d' % offset) if offset else '',
-        )
+        return ' '.join(sql for sql in (
+            ('LIMIT %d' % limit) if limit else None,
+            ('OFFSET %d' % offset) if offset else None,
+        ) if sql)
 
     def last_executed_query(self, cursor, sql, params):
         """
@@ -394,7 +394,7 @@ class BaseDatabaseOperations:
         to tables with foreign keys pointing the tables being truncated.
         PostgreSQL requires a cascade even if these tables are empty.
         """
-        raise NotImplementedError('subclasses of BaseDatabaseOperations must provide an sql_flush() method')
+        raise NotImplementedError('subclasses of BaseDatabaseOperations must provide a sql_flush() method')
 
     def execute_sql_flush(self, using, sql_list):
         """Execute a list of SQL statements to flush the database."""
