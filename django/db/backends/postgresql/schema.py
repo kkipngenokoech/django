@@ -2,15 +2,15 @@ import psycopg2
 
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.backends.ddl_references import IndexColumns
+from django.db.backends.utils import strip_quotes
 
 
 class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
 
-    sql_alter_column_type = "ALTER COLUMN %(column)s TYPE %(type)s USING %(column)s::%(type)s"
-
     sql_create_sequence = "CREATE SEQUENCE %(sequence)s"
     sql_delete_sequence = "DROP SEQUENCE IF EXISTS %(sequence)s CASCADE"
     sql_set_sequence_max = "SELECT setval('%(sequence)s', MAX(%(column)s)) FROM %(table)s"
+    sql_set_sequence_owner = 'ALTER SEQUENCE %(sequence)s OWNED BY %(table)s.%(column)s'
 
     sql_create_index = "CREATE INDEX %(name)s ON %(table)s%(using)s (%(columns)s)%(extra)s%(condition)s"
     sql_delete_index = "DROP INDEX IF EXISTS %(name)s"
@@ -23,7 +23,10 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
     sql_delete_procedure = 'DROP FUNCTION %(procedure)s(%(param_types)s)'
 
     def quote_value(self, value):
-        return psycopg2.extensions.adapt(value)
+        if isinstance(value, str):
+            value = value.replace('%', '%%')
+        # getquoted() returns a quoted bytestring of the adapted value.
+        return psycopg2.extensions.adapt(value).getquoted().decode()
 
     def _field_indexes_sql(self, model, field):
         output = super()._field_indexes_sql(model, field)
@@ -31,6 +34,11 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         if like_index_statement is not None:
             output.append(like_index_statement)
         return output
+
+    def _field_data_type(self, field):
+        if field.is_relation:
+            return field.rel_db_type(self.connection)
+        return self.connection.data_types[field.get_internal_type()]
 
     def _create_like_index_sql(self, model, field):
         """
@@ -55,17 +63,21 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         return None
 
     def _alter_column_type_sql(self, model, old_field, new_field, new_type):
-        """Make ALTER TYPE with SERIAL make sense."""
-        table = model._meta.db_table
-        if new_type.lower() in ("serial", "bigserial"):
-            column = new_field.column
+        self.sql_alter_column_type = 'ALTER COLUMN %(column)s TYPE %(type)s'
+        # Cast when data type changed.
+        if self._field_data_type(old_field) != self._field_data_type(new_field):
+            self.sql_alter_column_type += ' USING %(column)s::%(type)s'
+        # Make ALTER TYPE with SERIAL make sense.
+        table = strip_quotes(model._meta.db_table)
+        serial_fields_map = {'bigserial': 'bigint', 'serial': 'integer', 'smallserial': 'smallint'}
+        if new_type.lower() in serial_fields_map:
+            column = strip_quotes(new_field.column)
             sequence_name = "%s_%s_seq" % (table, column)
-            col_type = "integer" if new_type.lower() == "serial" else "bigint"
             return (
                 (
                     self.sql_alter_column_type % {
                         "column": self.quote_name(column),
-                        "type": col_type,
+                        "type": serial_fields_map[new_type.lower()],
                     },
                     [],
                 ),
@@ -97,6 +109,14 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                             "table": self.quote_name(table),
                             "column": self.quote_name(column),
                             "sequence": self.quote_name(sequence_name),
+                        },
+                        [],
+                    ),
+                    (
+                        self.sql_set_sequence_owner % {
+                            'table': self.quote_name(table),
+                            'column': self.quote_name(column),
+                            'sequence': self.quote_name(sequence_name),
                         },
                         [],
                     ),
