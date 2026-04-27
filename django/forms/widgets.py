@@ -48,14 +48,39 @@ class Media:
                 css = {}
             if js is None:
                 js = []
-        self._css = css
-        self._js = js
+        self._css_lists = [css]
+        self._js_lists = [js]
 
     def __repr__(self):
         return 'Media(css=%r, js=%r)' % (self._css, self._js)
 
     def __str__(self):
         return self.render()
+
+    @property
+    def _css(self):
+        css = self._css_lists[0]
+        # filter(None, ...) avoids calling merge with empty dicts.
+        for obj in filter(None, self._css_lists[1:]):
+            css = {
+                medium: self.merge(css.get(medium, []), obj.get(medium, []))
+                for medium in css.keys() | obj.keys()
+            }
+        return css
+
+    @property
+    def _js(self):
+        # Use improved merging for multiple lists to avoid false conflicts
+        filtered_lists = [lst for lst in self._js_lists if lst]
+        if len(filtered_lists) <= 2:
+            # Use original pairwise merging for 1-2 lists
+            js = filtered_lists[0] if filtered_lists else []
+            for obj in filtered_lists[1:]:
+                js = self.merge(js, obj)
+            return js
+        else:
+            # Use topological sort for 3+ lists to avoid false conflicts
+            return self.merge_lists(filtered_lists)
 
     def render(self):
         return mark_safe('\n'.join(chain.from_iterable(getattr(self, 'render_' + name)() for name in MEDIA_TYPES)))
@@ -132,12 +157,66 @@ class Media:
 
     def __add__(self, other):
         combined = Media()
-        combined._js = self.merge(self._js, other._js)
-        combined._css = {
-            medium: self.merge(self._css.get(medium, []), other._css.get(medium, []))
-            for medium in self._css.keys() | other._css.keys()
-        }
+        combined._css_lists = self._css_lists + other._css_lists
+        combined._js_lists = self._js_lists + other._js_lists
         return combined
+
+    @staticmethod
+    def merge_lists(lists):
+        """
+        Merge multiple lists while preserving relative order and avoiding
+        false ordering conflicts that can occur with pairwise merging.
+        """
+        if not lists:
+            return []
+        if len(lists) == 1:
+            return list(lists[0])
+        
+        # Build a graph of dependencies from the lists
+        all_items = set()
+        dependencies = {}
+        
+        for lst in lists:
+            for item in lst:
+                all_items.add(item)
+                if item not in dependencies:
+                    dependencies[item] = set()
+        
+        # For each list, add dependencies between consecutive items
+        for lst in lists:
+            for i in range(len(lst) - 1):
+                dependencies[lst[i + 1]].add(lst[i])
+        
+        # Topological sort using Kahn's algorithm
+        result = []
+        in_degree = {item: len(deps) for item, deps in dependencies.items()}
+        queue = [item for item in all_items if in_degree[item] == 0]
+        
+        while queue:
+            # Sort queue to ensure deterministic output
+            queue.sort()
+            current = queue.pop(0)
+            result.append(current)
+            
+            # Update in-degrees of dependent items
+            for item, deps in dependencies.items():
+                if current in deps:
+                    in_degree[item] -= 1
+                    if in_degree[item] == 0:
+                        queue.append(item)
+        
+        # Check for cycles (shouldn't happen with valid media dependencies)
+        if len(result) != len(all_items):
+            # Fall back to simple concatenation if there are cycles
+            seen = set()
+            result = []
+            for lst in lists:
+                for item in lst:
+                    if item not in seen:
+                        result.append(item)
+                        seen.add(item)
+        
+        return result
 
 
 def media_property(cls):
