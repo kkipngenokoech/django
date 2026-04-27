@@ -261,33 +261,33 @@ class Command(BaseCommand):
             compute_time = self.verbosity > 1
             if action == "apply_start":
                 if compute_time:
-                    self.start = time.time()
-                self.stdout.write("  Applying %s…" % migration, ending="")
+                    self.start = time.monotonic()
+                self.stdout.write("  Applying %s..." % migration, ending="")
                 self.stdout.flush()
             elif action == "apply_success":
-                elapsed = " (%.3fs)" % (time.time() - self.start) if compute_time else ""
+                elapsed = " (%.3fs)" % (time.monotonic() - self.start) if compute_time else ""
                 if fake:
                     self.stdout.write(self.style.SUCCESS(" FAKED" + elapsed))
                 else:
                     self.stdout.write(self.style.SUCCESS(" OK" + elapsed))
             elif action == "unapply_start":
                 if compute_time:
-                    self.start = time.time()
-                self.stdout.write("  Unapplying %s…" % migration, ending="")
+                    self.start = time.monotonic()
+                self.stdout.write("  Unapplying %s..." % migration, ending="")
                 self.stdout.flush()
             elif action == "unapply_success":
-                elapsed = " (%.3fs)" % (time.time() - self.start) if compute_time else ""
+                elapsed = " (%.3fs)" % (time.monotonic() - self.start) if compute_time else ""
                 if fake:
                     self.stdout.write(self.style.SUCCESS(" FAKED" + elapsed))
                 else:
                     self.stdout.write(self.style.SUCCESS(" OK" + elapsed))
             elif action == "render_start":
                 if compute_time:
-                    self.start = time.time()
-                self.stdout.write("  Rendering model states…", ending="")
+                    self.start = time.monotonic()
+                self.stdout.write("  Rendering model states...", ending="")
                 self.stdout.flush()
             elif action == "render_success":
-                elapsed = " (%.3fs)" % (time.time() - self.start) if compute_time else ""
+                elapsed = " (%.3fs)" % (time.monotonic() - self.start) if compute_time else ""
                 self.stdout.write(self.style.SUCCESS(" DONE" + elapsed))
 
     def sync_apps(self, connection, app_labels):
@@ -320,7 +320,7 @@ class Command(BaseCommand):
 
         # Create the tables for each model
         if self.verbosity >= 1:
-            self.stdout.write("  Creating tables…\n")
+            self.stdout.write("  Creating tables...\n")
         with connection.schema_editor() as editor:
             for app_name, model_list in manifest.items():
                 for model in model_list:
@@ -337,27 +337,27 @@ class Command(BaseCommand):
 
             # Deferred SQL is executed when exiting the editor's context.
             if self.verbosity >= 1:
-                self.stdout.write("    Running deferred SQL…\n")
+                self.stdout.write("    Running deferred SQL...\n")
 
     @staticmethod
     def describe_operation(operation, backwards):
         """Return a string that describes a migration operation for --plan."""
         prefix = ''
+        is_error = False
         if hasattr(operation, 'code'):
             code = operation.reverse_code if backwards else operation.code
-            action = code.__doc__ if code else ''
+            action = (code.__doc__ or '') if code else None
         elif hasattr(operation, 'sql'):
             action = operation.reverse_sql if backwards else operation.sql
         else:
             action = ''
             if backwards:
                 prefix = 'Undo '
-        if action is None:
+        if action is not None:
+            action = str(action).replace('\n', '')
+        elif backwards:
             action = 'IRREVERSIBLE'
             is_error = True
-        else:
-            action = str(action).replace('\n', '')
-            is_error = False
         if action:
             action = ' -> ' + action
         truncated = Truncator(action)

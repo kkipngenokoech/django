@@ -24,6 +24,7 @@ arctangent
 arg
 args
 assistive
+async
 atomicity
 attr
 auth
@@ -115,6 +116,8 @@ conf
 config
 contenttypes
 contrib
+coroutine
+coroutines
 covariance
 criticals
 cron
@@ -133,6 +136,7 @@ customizations
 Dahl
 Daly
 Danga
+Daphne
 Darussalam
 databrowse
 datafile
@@ -190,6 +194,7 @@ elidable
 encodings
 Endian
 Enero
+enum
 environ
 esque
 Ess
@@ -304,6 +309,7 @@ ize
 JavaScript
 Jinja
 jQuery
+Jupyter
 jython
 Kaplan
 Kessler
@@ -660,6 +666,7 @@ th
 that'll
 Thejaswi
 This'll
+threadpool
 timeframe
 timeline
 timelines
@@ -750,6 +757,7 @@ utc
 UTF
 util
 utils
+Uvicorn
 uwsgi
 uWSGI
 validator

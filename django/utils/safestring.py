@@ -5,7 +5,7 @@ that the producer of the string has already turned characters that should not
 be interpreted by the HTML engine (e.g. '<') into the appropriate entities.
 """
 
-from django.utils.functional import wraps
+from functools import wraps
 
 
 class SafeData:
@@ -25,7 +25,7 @@ class SafeString(str, SafeData):
     """
     def __add__(self, rhs):
         """
-        Concatenating a safe string with another safe byte string or
+        Concatenating a safe string with another safe bytestring or
         safe string is safe. Otherwise, the result is no longer safe.
         """
         t = super().__add__(rhs)

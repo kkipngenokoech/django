@@ -45,7 +45,7 @@ class BaseDatabaseCreation:
             if keepdb:
                 action = "Using existing"
 
-            self.log('%s test database for alias %s…' % (
+            self.log('%s test database for alias %s...' % (
                 action,
                 self._get_database_display_str(verbosity, test_database_name),
             ))
@@ -61,16 +61,17 @@ class BaseDatabaseCreation:
         settings.DATABASES[self.connection.alias]["NAME"] = test_database_name
         self.connection.settings_dict["NAME"] = test_database_name
 
-        # We report migrate messages at one level lower than that requested.
-        # This ensures we don't get flooded with messages during testing
-        # (unless you really ask to be flooded).
-        call_command(
-            'migrate',
-            verbosity=max(verbosity - 1, 0),
-            interactive=False,
-            database=self.connection.alias,
-            run_syncdb=True,
-        )
+        if self.connection.settings_dict['TEST']['MIGRATE']:
+            # We report migrate messages at one level lower than that
+            # requested. This ensures we don't get flooded with messages during
+            # testing (unless you really ask to be flooded).
+            call_command(
+                'migrate',
+                verbosity=max(verbosity - 1, 0),
+                interactive=False,
+                database=self.connection.alias,
+                run_syncdb=True,
+            )
 
         # We then serialize the current state of the database into a string
         # and store it on the connection. This slightly horrific process is so people
@@ -182,7 +183,7 @@ class BaseDatabaseCreation:
                 if autoclobber or confirm == 'yes':
                     try:
                         if verbosity >= 1:
-                            self.log('Destroying old test database for alias %s…' % (
+                            self.log('Destroying old test database for alias %s...' % (
                                 self._get_database_display_str(verbosity, test_database_name),
                             ))
                         cursor.execute('DROP DATABASE %(dbname)s' % test_db_params)
@@ -206,7 +207,7 @@ class BaseDatabaseCreation:
             action = 'Cloning test database'
             if keepdb:
                 action = 'Using existing clone'
-            self.log('%s for alias %s…' % (
+            self.log('%s for alias %s...' % (
                 action,
                 self._get_database_display_str(verbosity, source_database_name),
             ))
@@ -248,7 +249,7 @@ class BaseDatabaseCreation:
             action = 'Destroying'
             if keepdb:
                 action = 'Preserving'
-            self.log('%s test database for alias %s…' % (
+            self.log('%s test database for alias %s...' % (
                 action,
                 self._get_database_display_str(verbosity, test_database_name),
             ))

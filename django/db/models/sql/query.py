@@ -6,8 +6,12 @@ themselves do not have to (and could be backed by things other than SQL
 databases). The abstraction barrier only works one way: this module has to know
 all about the internals of models in order to get the information it needs.
 """
+import copy
 import difflib
 import functools
+import inspect
+import sys
+import warnings
 from collections import Counter, namedtuple
 from collections.abc import Iterator, Mapping
 from itertools import chain, count, product
@@ -19,7 +23,7 @@ from django.core.exceptions import (
 from django.db import DEFAULT_DB_ALIAS, NotSupportedError, connections
 from django.db.models.aggregates import Count
 from django.db.models.constants import LOOKUP_SEP
-from django.db.models.expressions import Col, F, Ref, SimpleCol
+from django.db.models.expressions import BaseExpression, Col, F, OuterRef, Ref
 from django.db.models.fields import Field
 from django.db.models.fields.related_lookups import MultiColSource
 from django.db.models.lookups import Lookup
@@ -35,6 +39,7 @@ from django.db.models.sql.datastructures import (
 from django.db.models.sql.where import (
     AND, OR, ExtraWhere, NothingNode, WhereNode,
 )
+from django.utils.deprecation import RemovedInDjango40Warning
 from django.utils.functional import cached_property
 from django.utils.tree import Node
 
@@ -60,12 +65,6 @@ JoinInfo = namedtuple(
     'JoinInfo',
     ('final_field', 'targets', 'opts', 'joins', 'path', 'transform_function')
 )
-
-
-def _get_col(target, field, alias, simple_col):
-    if simple_col:
-        return SimpleCol(target, field)
-    return target.get_col(alias, field)
 
 
 class RawQuery:
@@ -136,7 +135,7 @@ class RawQuery:
         self.cursor.execute(self.sql, params)
 
 
-class Query:
+class Query(BaseExpression):
     """A single SQL query."""
 
     alias_prefix = 'T'
@@ -144,7 +143,7 @@ class Query:
 
     compiler = 'SQLCompiler'
 
-    def __init__(self, model, where=WhereNode):
+    def __init__(self, model, where=WhereNode, alias_cols=True):
         self.model = model
         self.alias_refcount = {}
         # alias_map is the most important data structure regarding joins.
@@ -153,10 +152,13 @@ class Query:
         # the table name) and the value is a Join-like object (see
         # sql.datastructures.Join for more information).
         self.alias_map = {}
+        # Whether to provide alias to columns during reference resolving.
+        self.alias_cols = alias_cols
         # Sometimes the query contains references to aliases in outer queries (as
         # a result of split_exclude). Correct alias quoting needs to know these
         # aliases too.
-        self.external_aliases = set()
+        # Map external tables to whether they are aliased.
+        self.external_aliases = {}
         self.table_map = {}     # Maps table names to list of aliases.
         self.default_cols = True
         self.default_ordering = True
@@ -229,6 +231,13 @@ class Query:
         self.explain_options = {}
 
     @property
+    def output_field(self):
+        if len(self.select) == 1:
+            return self.select[0].field
+        elif len(self.annotation_select) == 1:
+            return next(iter(self.annotation_select.values())).output_field
+
+    @property
     def has_select_fields(self):
         return bool(self.select or self.annotation_select_mask or self.extra_select_mask)
 
@@ -260,9 +269,6 @@ class Query:
         result = self.clone()
         memo[id(self)] = result
         return result
-
-    def _prepare(self, field):
-        return self
 
     def get_compiler(self, using=None, connection=None):
         if using is None and connection is None:
@@ -314,6 +320,10 @@ class Query:
             obj._extra_select_cache = None
         else:
             obj._extra_select_cache = self._extra_select_cache.copy()
+        if self.select_related is not False:
+            # Use deepcopy because select_related stores fields in nested
+            # dicts.
+            obj.select_related = copy.deepcopy(obj.select_related)
         if 'subq_aliases' in self.__dict__:
             obj.subq_aliases = self.subq_aliases.copy()
         obj.used_aliases = self.used_aliases.copy()
@@ -345,6 +355,11 @@ class Query:
         clone.change_aliases(change_map)
         return clone
 
+    def _get_col(self, target, field, alias):
+        if not self.alias_cols:
+            alias = None
+        return target.get_col(alias, field)
+
     def rewrite_cols(self, annotation, col_cnt):
         # We must make sure the inner query has the referred columns in it.
         # If we are aggregating over an annotation, then Django uses Ref()
@@ -373,18 +388,26 @@ class Query:
                 # before the contains_aggregate/is_summary condition below.
                 new_expr, col_cnt = self.rewrite_cols(expr, col_cnt)
                 new_exprs.append(new_expr)
-            elif isinstance(expr, Col) or (expr.contains_aggregate and not expr.is_summary):
-                # Reference to column. Make sure the referenced column
-                # is selected.
-                col_cnt += 1
-                col_alias = '__col%d' % col_cnt
-                self.annotations[col_alias] = expr
-                self.append_annotation_mask([col_alias])
-                new_exprs.append(Ref(col_alias, expr))
             else:
-                # Some other expression not referencing database values
-                # directly. Its subexpression might contain Cols.
-                new_expr, col_cnt = self.rewrite_cols(expr, col_cnt)
+                # Reuse aliases of expressions already selected in subquery.
+                for col_alias, selected_annotation in self.annotation_select.items():
+                    if selected_annotation == expr:
+                        new_expr = Ref(col_alias, expr)
+                        break
+                else:
+                    # An expression that is not selected the subquery.
+                    if isinstance(expr, Col) or (expr.contains_aggregate and not expr.is_summary):
+                        # Reference column or another aggregate. Select it
+                        # under a non-conflicting alias.
+                        col_cnt += 1
+                        col_alias = '__col%d' % col_cnt
+                        self.annotations[col_alias] = expr
+                        self.append_annotation_mask([col_alias])
+                        new_expr = Ref(col_alias, expr)
+                    else:
+                        # Some other expression not referencing database values
+                        # directly. Its subexpression might contain Cols.
+                        new_expr, col_cnt = self.rewrite_cols(expr, col_cnt)
                 new_exprs.append(new_expr)
         annotation.set_source_expressions(new_exprs)
         return annotation, col_cnt
@@ -395,12 +418,11 @@ class Query:
         """
         if not self.annotation_select:
             return {}
-        has_limit = self.low_mark != 0 or self.high_mark is not None
-        has_existing_annotations = any(
+        existing_annotations = [
             annotation for alias, annotation
             in self.annotations.items()
             if alias not in added_aggregate_names
-        )
+        ]
         # Decide if we need to use a subquery.
         #
         # Existing annotations would cause incorrect results as get_aggregation()
@@ -412,14 +434,15 @@ class Query:
         # those operations must be done in a subquery so that the query
         # aggregates on the limit and/or distinct results instead of applying
         # the distinct and limit after the aggregation.
-        if (isinstance(self.group_by, tuple) or has_limit or has_existing_annotations or
+        if (isinstance(self.group_by, tuple) or self.is_sliced or existing_annotations or
                 self.distinct or self.combinator):
             from django.db.models.sql.subqueries import AggregateQuery
             outer_query = AggregateQuery(self.model)
             inner_query = self.clone()
             inner_query.select_for_update = False
             inner_query.select_related = False
-            if not has_limit and not self.distinct_fields:
+            inner_query.set_annotation_mask(self.annotation_select)
+            if not self.is_sliced and not self.distinct_fields:
                 # Queries with distinct_fields need ordering and when a limit
                 # is applied we must take the slice from the ordered query.
                 # Otherwise no need for ordering.
@@ -430,7 +453,11 @@ class Query:
                 # query is grouped by the main model's primary key. However,
                 # clearing the select clause can alter results if distinct is
                 # used.
-                if inner_query.default_cols and has_existing_annotations:
+                has_existing_aggregate_annotations = any(
+                    annotation for annotation in existing_annotations
+                    if getattr(annotation, 'contains_aggregate', True)
+                )
+                if inner_query.default_cols and has_existing_aggregate_annotations:
                     inner_query.group_by = (self.model._meta.pk.get_col(inner_query.get_initial_alias()),)
                 inner_query.default_cols = False
 
@@ -440,10 +467,12 @@ class Query:
             # and move them to the outer AggregateQuery.
             col_cnt = 0
             for alias, expression in list(inner_query.annotation_select.items()):
+                annotation_select_mask = inner_query.annotation_select_mask
                 if expression.is_summary:
                     expression, col_cnt = inner_query.rewrite_cols(expression, col_cnt)
                     outer_query.annotations[alias] = expression.relabeled_clone(relabels)
                     del inner_query.annotations[alias]
+                    annotation_select_mask.remove(alias)
                 # Make sure the annotation_select wont use cached results.
                 inner_query.set_annotation_mask(inner_query.annotation_select_mask)
             if inner_query.select == () and not inner_query.default_cols and not inner_query.annotation_select_mask:
@@ -497,7 +526,9 @@ class Query:
         if not q.distinct:
             if q.group_by is True:
                 q.add_fields((f.attname for f in self.model._meta.concrete_fields), False)
-                q.set_group_by()
+                # Disable GROUP BY aliases to avoid orphaning references to the
+                # SELECT clause which is about to be cleared.
+                q.set_group_by(allow_aliases=False)
             q.clear_select_clause()
         q.clear_ordering(True)
         q.set_limits(high=1)
@@ -523,7 +554,7 @@ class Query:
         """
         assert self.model == rhs.model, \
             "Cannot combine queries on two different base models."
-        assert self.can_filter(), \
+        assert not self.is_sliced, \
             "Cannot combine queries once a slice has been taken."
         assert self.distinct == rhs.distinct, \
             "Cannot combine a unique query with a non-unique query."
@@ -597,7 +628,7 @@ class Query:
             # really make sense (or return consistent value sets). Not worth
             # the extra complexity when you can write a real query instead.
             if self.extra and rhs.extra:
-                raise ValueError("When merging querysets using 'or', you cannot have extra(select=…) on both sides.")
+                raise ValueError("When merging querysets using 'or', you cannot have extra(select=...) on both sides.")
         self.extra.update(rhs.extra)
         extra_select_mask = set()
         if self.extra_select_mask is not None:
@@ -827,8 +858,11 @@ class Query:
                 if alias == old_alias:
                     table_aliases[pos] = new_alias
                     break
-        self.external_aliases = {change_map.get(alias, alias)
-                                 for alias in self.external_aliases}
+        self.external_aliases = {
+            # Table is aliased or it's being changed and thus is aliased.
+            change_map.get(alias, alias): (aliased or alias in change_map)
+            for alias, aliased in self.external_aliases.items()
+        }
 
     def bump_prefix(self, outer_query):
         """
@@ -859,13 +893,17 @@ class Query:
             # No clashes between self and outer query should be possible.
             return
 
-        local_recursion_limit = 127  # explicitly avoid infinite loop
+        # Explicitly avoid infinite loop. The constant divider is based on how
+        # much depth recursive subquery references add to the stack. This value
+        # might need to be adjusted when adding or removing function calls from
+        # the code path in charge of performing these operations.
+        local_recursion_limit = sys.getrecursionlimit() // 16
         for pos, prefix in enumerate(prefix_gen()):
             if prefix not in self.subq_aliases:
                 self.alias_prefix = prefix
                 break
             if pos > local_recursion_limit:
-                raise RuntimeError(
+                raise RecursionError(
                     'Maximum recursion depth exceeded: too many subqueries.'
                 )
         self.subq_aliases = self.subq_aliases.union([self.alias_prefix])
@@ -994,29 +1032,45 @@ class Query:
                 not self.distinct_fields and
                 not self.select_for_update):
             clone.clear_ordering(True)
+        clone.where.resolve_expression(query, *args, **kwargs)
+        for key, value in clone.annotations.items():
+            resolved = value.resolve_expression(query, *args, **kwargs)
+            if hasattr(resolved, 'external_aliases'):
+                resolved.external_aliases.update(clone.external_aliases)
+            clone.annotations[key] = resolved
+        # Outer query's aliases are considered external.
+        for alias, table in query.alias_map.items():
+            clone.external_aliases[alias] = (
+                (isinstance(table, Join) and table.join_field.related_model._meta.db_table != alias) or
+                (isinstance(table, BaseTable) and table.table_name != table.table_alias)
+            )
         return clone
 
-    def as_sql(self, compiler, connection):
-        return self.get_compiler(connection=connection).as_sql()
+    def get_external_cols(self):
+        exprs = chain(self.annotations.values(), self.where.children)
+        return [
+            col for col in self._gen_cols(exprs)
+            if col.alias in self.external_aliases
+        ]
 
-    def resolve_lookup_value(self, value, can_reuse, allow_joins, simple_col):
+    def as_sql(self, compiler, connection):
+        sql, params = self.get_compiler(connection=connection).as_sql()
+        if self.subquery:
+            sql = '(%s)' % sql
+        return sql, params
+
+    def resolve_lookup_value(self, value, can_reuse, allow_joins):
         if hasattr(value, 'resolve_expression'):
-            kwargs = {'reuse': can_reuse, 'allow_joins': allow_joins}
-            if isinstance(value, F):
-                kwargs['simple_col'] = simple_col
-            value = value.resolve_expression(self, **kwargs)
+            value = value.resolve_expression(
+                self, reuse=can_reuse, allow_joins=allow_joins,
+            )
         elif isinstance(value, (list, tuple)):
             # The items of the iterable may be expressions and therefore need
             # to be resolved independently.
-            for sub_value in value:
-                if hasattr(sub_value, 'resolve_expression'):
-                    if isinstance(sub_value, F):
-                        sub_value.resolve_expression(
-                            self, reuse=can_reuse, allow_joins=allow_joins,
-                            simple_col=simple_col,
-                        )
-                    else:
-                        sub_value.resolve_expression(self, reuse=can_reuse, allow_joins=allow_joins)
+            return type(value)(
+                self.resolve_lookup_value(sub_value, can_reuse, allow_joins)
+                for sub_value in value
+            )
         return value
 
     def solve_lookup_type(self, lookup):
@@ -1067,6 +1121,17 @@ class Query:
             elif hasattr(value, '__iter__'):
                 for v in value:
                     self.check_query_object_type(v, opts, field)
+
+    def check_filterable(self, expression):
+        """Raise an error if expression cannot be used in a WHERE clause."""
+        if not getattr(expression, 'filterable', True):
+            raise NotSupportedError(
+                expression.__class__.__name__ + ' is disallowed in the filter '
+                'clause.'
+            )
+        if hasattr(expression, 'get_source_expressions'):
+            for expr in expression.get_source_expressions():
+                self.check_filterable(expr)
 
     def build_lookup(self, lookups, lhs, rhs):
         """
@@ -1135,7 +1200,7 @@ class Query:
 
     def build_filter(self, filter_expr, branch_negated=False, current_negated=False,
                      can_reuse=None, allow_joins=True, split_subq=True,
-                     reuse_with_filtered_relation=False, simple_col=False):
+                     reuse_with_filtered_relation=False, check_filterable=True):
         """
         Build a WhereNode for a single filter clause but don't add it
         to this Query. Query.add_q() will then add this filter to the where
@@ -1166,23 +1231,42 @@ class Query:
         """
         if isinstance(filter_expr, dict):
             raise FieldError("Cannot parse keyword query as dict")
+        if isinstance(filter_expr, Q):
+            return self._add_q(
+                filter_expr,
+                branch_negated=branch_negated,
+                current_negated=current_negated,
+                used_aliases=can_reuse,
+                allow_joins=allow_joins,
+                split_subq=split_subq,
+                check_filterable=check_filterable,
+            )
+        if hasattr(filter_expr, 'resolve_expression'):
+            if not getattr(filter_expr, 'conditional', False):
+                raise TypeError('Cannot filter against a non-conditional expression.')
+            condition = self.build_lookup(
+                ['exact'], filter_expr.resolve_expression(self, allow_joins=allow_joins), True
+            )
+            clause = self.where_class()
+            clause.add(condition, AND)
+            return clause, []
         arg, value = filter_expr
         if not arg:
             raise FieldError("Cannot parse keyword query %r" % arg)
         lookups, parts, reffed_expression = self.solve_lookup_type(arg)
 
-        if not getattr(reffed_expression, 'filterable', True):
-            raise NotSupportedError(
-                reffed_expression.__class__.__name__ + ' is disallowed in '
-                'the filter clause.'
-            )
+        if check_filterable:
+            self.check_filterable(reffed_expression)
 
         if not allow_joins and len(parts) > 1:
             raise FieldError("Joined field references are not permitted in this query")
 
         pre_joins = self.alias_refcount.copy()
-        value = self.resolve_lookup_value(value, can_reuse, allow_joins, simple_col)
+        value = self.resolve_lookup_value(value, can_reuse, allow_joins)
         used_joins = {k for k, v in self.alias_refcount.items() if v > pre_joins.get(k, 0)}
+
+        if check_filterable:
+            self.check_filterable(value)
 
         clause = self.where_class()
         if reffed_expression:
@@ -1224,11 +1308,11 @@ class Query:
             if num_lookups > 1:
                 raise FieldError('Related Field got invalid lookup: {}'.format(lookups[0]))
             if len(targets) == 1:
-                col = _get_col(targets[0], join_info.final_field, alias, simple_col)
+                col = self._get_col(targets[0], join_info.final_field, alias)
             else:
                 col = MultiColSource(alias, targets, join_info.targets, join_info.final_field)
         else:
-            col = _get_col(targets[0], join_info.final_field, alias, simple_col)
+            col = self._get_col(targets[0], join_info.final_field, alias)
 
         condition = self.build_lookup(lookups, col, value)
         lookup_type = condition.lookup_name
@@ -1250,7 +1334,7 @@ class Query:
                 #   <=>
                 # NOT (col IS NOT NULL AND col = someval).
                 lookup_class = targets[0].get_lookup('isnull')
-                col = _get_col(targets[0], join_info.targets[0], alias, simple_col)
+                col = self._get_col(targets[0], join_info.targets[0], alias)
                 clause.add(lookup_class(col, False), AND)
         return clause, used_joins if not require_outer else ()
 
@@ -1274,12 +1358,12 @@ class Query:
             self.where.add(clause, AND)
         self.demote_joins(existing_inner)
 
-    def build_where(self, q_object):
-        return self._add_q(q_object, used_aliases=set(), allow_joins=False, simple_col=True)[0]
+    def build_where(self, filter_expr):
+        return self.build_filter(filter_expr, allow_joins=False)[0]
 
     def _add_q(self, q_object, used_aliases, branch_negated=False,
                current_negated=False, allow_joins=True, split_subq=True,
-               simple_col=False):
+               check_filterable=True):
         """Add a Q-object to the current filter."""
         connector = q_object.connector
         current_negated = current_negated ^ q_object.negated
@@ -1288,18 +1372,12 @@ class Query:
                                          negated=q_object.negated)
         joinpromoter = JoinPromoter(q_object.connector, len(q_object.children), current_negated)
         for child in q_object.children:
-            if isinstance(child, Node):
-                child_clause, needed_inner = self._add_q(
-                    child, used_aliases, branch_negated,
-                    current_negated, allow_joins, split_subq)
-                joinpromoter.add_votes(needed_inner)
-            else:
-                child_clause, needed_inner = self.build_filter(
-                    child, can_reuse=used_aliases, branch_negated=branch_negated,
-                    current_negated=current_negated, allow_joins=allow_joins,
-                    split_subq=split_subq, simple_col=simple_col,
-                )
-                joinpromoter.add_votes(needed_inner)
+            child_clause, needed_inner = self.build_filter(
+                child, can_reuse=used_aliases, branch_negated=branch_negated,
+                current_negated=current_negated, allow_joins=allow_joins,
+                split_subq=split_subq, check_filterable=check_filterable,
+            )
+            joinpromoter.add_votes(needed_inner)
             if child_clause:
                 target_clause.add(child_clause, connector)
         needed_inner = joinpromoter.update_join_types(self)
@@ -1566,10 +1644,30 @@ class Query:
             self.unref_alias(joins.pop())
         return targets, joins[-1], joins
 
-    def resolve_ref(self, name, allow_joins=True, reuse=None, summarize=False, simple_col=False):
+    @classmethod
+    def _gen_cols(cls, exprs):
+        for expr in exprs:
+            if isinstance(expr, Col):
+                yield expr
+            else:
+                yield from cls._gen_cols(expr.get_source_expressions())
+
+    @classmethod
+    def _gen_col_aliases(cls, exprs):
+        yield from (expr.alias for expr in cls._gen_cols(exprs))
+
+    def resolve_ref(self, name, allow_joins=True, reuse=None, summarize=False):
         if not allow_joins and LOOKUP_SEP in name:
             raise FieldError("Joined field references are not permitted in this query")
-        if name in self.annotations:
+        annotation = self.annotations.get(name)
+        if annotation is not None:
+            if not allow_joins:
+                for alias in self._gen_col_aliases([annotation]):
+                    if isinstance(self.alias_map[alias], Join):
+                        raise FieldError(
+                            'Joined field references are not permitted in '
+                            'this query'
+                        )
             if summarize:
                 # Summarize currently means we are doing an aggregate() query
                 # which is executed as a wrapped subquery if any of the
@@ -1577,7 +1675,7 @@ class Query:
                 # that case we need to return a Ref to the subquery's annotation.
                 return Ref(name, self.annotation_select[name])
             else:
-                return self.annotations[name]
+                return annotation
         else:
             field_list = name.split(LOOKUP_SEP)
             join_info = self.setup_joins(field_list, self.get_meta(), self.get_initial_alias(), can_reuse=reuse)
@@ -1592,8 +1690,7 @@ class Query:
             join_info.transform_function(targets[0], final_alias)
             if reuse is not None:
                 reuse.update(join_list)
-            col = _get_col(targets[0], join_info.targets[0], join_list[-1], simple_col)
-            return col
+            return self._get_col(targets[0], join_info.targets[0], join_list[-1])
 
     def split_exclude(self, filter_expr, can_reuse, names_with_path):
         """
@@ -1614,8 +1711,14 @@ class Query:
         saner null handling, and is easier for the backend's optimizer to
         handle.
         """
+        filter_lhs, filter_rhs = filter_expr
+        if isinstance(filter_rhs, OuterRef):
+            filter_expr = (filter_lhs, OuterRef(filter_rhs))
+        elif isinstance(filter_rhs, F):
+            filter_expr = (filter_lhs, OuterRef(filter_rhs.name))
         # Generate the inner query.
         query = Query(self.model)
+        query._filtered_relations = self._filtered_relations
         query.add_filter(filter_expr)
         query.clear_ordering(True)
         # Try to have as simple as possible subquery -> trim leading joins from
@@ -1644,7 +1747,7 @@ class Query:
             lookup = lookup_class(pk.get_col(query.select[0].alias),
                                   pk.get_col(alias))
             query.where.add(lookup, AND)
-            query.external_aliases.add(alias)
+            query.external_aliases[alias] = True
 
         condition, needed_inner = self.build_filter(
             ('%s__in' % trimmed_prefix, query),
@@ -1695,6 +1798,10 @@ class Query:
         """Clear any existing limits."""
         self.low_mark, self.high_mark = 0, None
 
+    @property
+    def is_sliced(self):
+        return self.low_mark != 0 or self.high_mark is not None
+
     def has_limit_one(self):
         return self.high_mark is not None and (self.high_mark - self.low_mark) == 1
 
@@ -1704,7 +1811,7 @@ class Query:
 
         Typically, this means no limits or offsets have been put on the results.
         """
-        return not self.low_mark and self.high_mark is None
+        return not self.is_sliced
 
     def clear_select_clause(self):
         """Remove all fields from SELECT clause."""
@@ -1722,6 +1829,10 @@ class Query:
         """
         self.select = ()
         self.values_select = ()
+
+    def add_select_col(self, col):
+        self.select += col,
+        self.values_select += col.output_field.name,
 
     def set_select(self, cols):
         self.default_cols = False
@@ -1807,7 +1918,7 @@ class Query:
         if force_empty:
             self.default_ordering = False
 
-    def set_group_by(self):
+    def set_group_by(self, allow_aliases=True):
         """
         Expand the GROUP BY clause required by the query.
 
@@ -1818,9 +1929,21 @@ class Query:
         """
         group_by = list(self.select)
         if self.annotation_select:
-            for annotation in self.annotation_select.values():
-                for col in annotation.get_group_by_cols():
-                    group_by.append(col)
+            for alias, annotation in self.annotation_select.items():
+                signature = inspect.signature(annotation.get_group_by_cols)
+                if 'alias' not in signature.parameters:
+                    annotation_class = annotation.__class__
+                    msg = (
+                        '`alias=None` must be added to the signature of '
+                        '%s.%s.get_group_by_cols().'
+                    ) % (annotation_class.__module__, annotation_class.__qualname__)
+                    warnings.warn(msg, category=RemovedInDjango40Warning)
+                    group_by_cols = annotation.get_group_by_cols()
+                else:
+                    if not allow_aliases:
+                        alias = None
+                    group_by_cols = annotation.get_group_by_cols(alias=alias)
+                group_by.extend(group_by_cols)
         self.group_by = tuple(group_by)
 
     def add_select_related(self, fields):
@@ -1972,7 +2095,9 @@ class Query:
 
         if self.group_by is True:
             self.add_fields((f.attname for f in self.model._meta.concrete_fields), False)
-            self.set_group_by()
+            # Disable GROUP BY aliases to avoid orphaning references to the
+            # SELECT clause which is about to be cleared.
+            self.set_group_by(allow_aliases=False)
             self.clear_select_fields()
 
         if fields:
@@ -2079,9 +2204,13 @@ class Query:
             join_field.foreign_related_fields[0].name)
         trimmed_prefix = LOOKUP_SEP.join(trimmed_prefix)
         # Lets still see if we can trim the first join from the inner query
-        # (that is, self). We can't do this for LEFT JOINs because we would
-        # miss those rows that have nothing on the outer side.
-        if self.alias_map[lookup_tables[trimmed_paths + 1]].join_type != LOUTER:
+        # (that is, self). We can't do this for:
+        # - LEFT JOINs because we would miss those rows that have nothing on
+        #   the outer side,
+        # - INNER JOINs from filtered relations because we would miss their
+        #   filters.
+        first_join = self.alias_map[lookup_tables[trimmed_paths + 1]]
+        if first_join.join_type != LOUTER and not first_join.filtered_relation:
             select_fields = [r[0] for r in join_field.related_fields]
             select_alias = lookup_tables[trimmed_paths + 1]
             self.unref_alias(lookup_tables[trimmed_paths])

@@ -274,7 +274,7 @@ class GDALRasterTests(SimpleTestCase):
         result = rast.bands[0].data()
         if numpy:
             result = result.flatten().tolist()
-        # Band data is equal to zero becaues no nodata value has been specified.
+        # Band data is equal to zero because no nodata value has been specified.
         self.assertEqual(result, [0] * 4)
 
     def test_raster_metadata_property(self):
@@ -319,7 +319,7 @@ class GDALRasterTests(SimpleTestCase):
             return
         gdalinfo = """
         Driver: GTiff/GeoTIFF
-        Files: {0}
+        Files: {}
         Size is 163, 174
         Coordinate System is:
         PROJCS["NAD83 / Florida GDL Albers",

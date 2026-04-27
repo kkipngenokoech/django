@@ -55,9 +55,11 @@ class CastTests(TestCase):
         for field_class in (
             models.AutoField,
             models.BigAutoField,
+            models.SmallAutoField,
             models.IntegerField,
             models.BigIntegerField,
             models.SmallIntegerField,
+            models.PositiveBigIntegerField,
             models.PositiveIntegerField,
             models.PositiveSmallIntegerField,
         ):

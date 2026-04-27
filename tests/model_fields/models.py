@@ -12,6 +12,7 @@ from django.db.models.fields.files import ImageField, ImageFieldFile
 from django.db.models.fields.related import (
     ForeignKey, ForeignObject, ManyToManyField, OneToOneField,
 )
+from django.utils.translation import gettext_lazy as _
 
 try:
     from PIL import Image
@@ -46,6 +47,7 @@ class Whiz(models.Model):
         )
         ),
         (0, 'Other'),
+        (5, _('translated')),
     )
     c = models.IntegerField(choices=CHOICES, null=True)
 
@@ -90,6 +92,18 @@ class UnicodeSlugField(models.Model):
     s = models.SlugField(max_length=255, allow_unicode=True)
 
 
+class AutoModel(models.Model):
+    value = models.AutoField(primary_key=True)
+
+
+class BigAutoModel(models.Model):
+    value = models.BigAutoField(primary_key=True)
+
+
+class SmallAutoModel(models.Model):
+    value = models.SmallAutoField(primary_key=True)
+
+
 class SmallIntegerModel(models.Model):
     value = models.SmallIntegerField()
 
@@ -101,6 +115,10 @@ class IntegerModel(models.Model):
 class BigIntegerModel(models.Model):
     value = models.BigIntegerField()
     null_value = models.BigIntegerField(null=True, blank=True)
+
+
+class PositiveBigIntegerModel(models.Model):
+    value = models.PositiveBigIntegerField()
 
 
 class PositiveSmallIntegerModel(models.Model):
@@ -344,7 +362,7 @@ class AllFieldsModel(models.Model):
     fo = ForeignObject(
         'self',
         on_delete=models.CASCADE,
-        from_fields=['abstract_non_concrete_id'],
+        from_fields=['positive_integer'],
         to_fields=['id'],
         related_name='reverse'
     )
