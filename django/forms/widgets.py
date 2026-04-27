@@ -48,14 +48,34 @@ class Media:
                 css = {}
             if js is None:
                 js = []
-        self._css = css
-        self._js = js
+        self._css_lists = [css]
+        self._js_lists = [js]
 
     def __repr__(self):
         return 'Media(css=%r, js=%r)' % (self._css, self._js)
 
     def __str__(self):
         return self.render()
+
+    @property
+    def _css(self):
+        css = self._css_lists[0]
+        # filter(None, ...) avoids calling merge with empty dicts.
+        for obj in filter(None, self._css_lists[1:]):
+            css = {
+                medium: self.merge(css.get(medium, []), obj.get(medium, []))
+                for medium in css.keys() | obj.keys()
+            }
+        return css
+
+    @property
+    def _js(self):
+        # Use the new merge_lists method to avoid false ordering conflicts
+        # when merging multiple JS lists
+        js_lists = [lst for lst in self._js_lists if lst]
+        if not js_lists:
+            return []
+        return self.merge_lists(js_lists)
 
     def render(self):
         return mark_safe('\n'.join(chain.from_iterable(getattr(self, 'render_' + name)() for name in MEDIA_TYPES)))
@@ -130,13 +150,76 @@ class Media:
                 last_insert_index = index
         return combined_list
 
+    @staticmethod
+    def merge_lists(lists):
+        """
+        Merge multiple lists while preserving relative order and avoiding
+        false ordering conflicts that can occur with pairwise merging.
+        """
+        if not lists:
+            return []
+        if len(lists) == 1:
+            return list(lists[0])
+        
+        # Collect all unique items while preserving first occurrence order
+        seen = set()
+        all_items = []
+        for lst in lists:
+            for item in lst:
+                if item not in seen:
+                    all_items.append(item)
+                    seen.add(item)
+        
+        # Build a graph of ordering constraints
+        constraints = {}
+        for lst in lists:
+            for i in range(len(lst)):
+                item = lst[i]
+                if item not in constraints:
+                    constraints[item] = set()
+                # Add constraint that this item comes before all items after it in this list
+                for j in range(i + 1, len(lst)):
+                    constraints[item].add(lst[j])
+        
+        # Check for conflicts - if A must come before B in one list but B before A in another
+        for item_a in constraints:
+            for item_b in constraints[item_a]:
+                if item_b in constraints and item_a in constraints[item_b]:
+                    warnings.warn(
+                        'Detected duplicate Media files in an opposite order:\n'
+                        '%s\n%s' % (item_a, item_b),
+                        MediaOrderConflictWarning,
+                    )
+        
+        # Topological sort to resolve dependencies
+        result = []
+        remaining = set(all_items)
+        
+        while remaining:
+            # Find items with no remaining dependencies
+            available = []
+            for item in remaining:
+                if item not in constraints or not (constraints[item] & remaining):
+                    available.append(item)
+            
+            if not available:
+                # Circular dependency - just pick the first remaining item
+                available = [next(iter(remaining))]
+            
+            # Sort available items by their original appearance order to maintain stability
+            available.sort(key=lambda x: all_items.index(x))
+            
+            # Add the first available item to result
+            chosen = available[0]
+            result.append(chosen)
+            remaining.remove(chosen)
+        
+        return result
+
     def __add__(self, other):
         combined = Media()
-        combined._js = self.merge(self._js, other._js)
-        combined._css = {
-            medium: self.merge(self._css.get(medium, []), other._css.get(medium, []))
-            for medium in self._css.keys() | other._css.keys()
-        }
+        combined._css_lists = self._css_lists + other._css_lists
+        combined._js_lists = self._js_lists + other._js_lists
         return combined
 
 
