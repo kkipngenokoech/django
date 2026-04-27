@@ -79,35 +79,53 @@ class Collector:
 
     def add(self, objs, source=None, nullable=False, reverse_dependency=False):
         """
-        Add 'objs' to the collection of objects to be deleted.  If the call is
-        the result of a cascade, 'source' should be the model that caused it,
-        and 'nullable' should be set to True if the relation can be null.
-
-        Return a list of all objects that were not already collected.
+        Add 'objs' to the collection of objects to be deleted as well as all
+        parent instances.  'objs' must be a homogeneous iterable collection of
+        model instances (e.g. a QuerySet).  If 'source' is provided, this is a
+        reference to the object(s) that are the source of this addition to the
+        collector; if the source object is deleted, this object should be
+        deleted as well.
+        
+        If the call is the result of a cascade, 'source' should be the model
+        that caused it and 'nullable' should be set to True if the relation
+        can be null.
+        
+        If 'reverse_dependency' is True, 'source' will be deleted before the
+        current model, rather than after. (Needed for cascading to parent
+        models, the one case in which the cascade follows the forwards
+        direction of an FK rather than the reverse direction.)
+        
+        If the objs argument is a queryset, the queryset will be cleared first.
+        This is to avoid holding a reference to the queryset, which may be
+        expensive memory-wise.
+        
+        The 'objs' argument can be any iterable of objects, but it must be
+        homogeneous (all objects must be of the same model).
         """
         if not objs:
-            return []
-        new_objs = []
+            return
         model = objs[0].__class__
-        instances = self.data.setdefault(model, set())
-        for obj in objs:
-            if obj not in instances:
-                new_objs.append(obj)
-        instances.update(new_objs)
+        if not isinstance(objs, (list, tuple)):
+            objs = list(objs)
+        if model not in self.data:
+            self.data[model] = set()
+        self.data[model].update(objs)
         # Nullable relationships can be ignored -- they are nulled out before
         # deleting, and therefore do not affect the order in which objects have
         # to be deleted.
         if source is not None and not nullable:
-            if reverse_dependency:
-                source, model = model, source
-            self.dependencies.setdefault(
-                source._meta.concrete_model, set()).add(model._meta.concrete_model)
-        return new_objs
+            self.add_dependency(source, model, reverse_dependency)
+
+    def add_dependency(self, model, dependency, reverse_dependency=False):
+        if reverse_dependency:
+            model, dependency = dependency, model
+        self.dependencies.setdefault(model, set()).add(dependency)
+        self.data.setdefault(dependency, set())
 
     def add_field_update(self, field, value, objs):
         """
-        Schedule a field update. 'objs' must be a homogeneous iterable
-        collection of model instances (e.g. a QuerySet).
+        Schedule a field update. 'objs' must be a homogeneous iterable of
+        model instances (e.g. a QuerySet).
         """
         if not objs:
             return
@@ -120,24 +138,23 @@ class Collector:
         """
         Determine if the objects in the given queryset-like or single object
         can be fast-deleted. This can be done if there are no cascades, no
-        parents and no signal listeners for the object class.
-
+        parents and no signal handlers for the object class.
+        
         The 'from_field' tells where we are coming from - we need this to
-        determine if the objects are in fact to be deleted. Allow also
+        determine if the objects are in fact to be deleted. Allows also
         skipping parent -> child -> parent chain preventing fast delete of
         the child.
         """
         if from_field and from_field.remote_field.on_delete is not CASCADE:
             return False
         if hasattr(objs, '_meta'):
-            model = type(objs)
+            model = objs._meta.model
         elif hasattr(objs, 'model') and hasattr(objs, '_raw_delete'):
             model = objs.model
         else:
             return False
         if (signals.pre_delete.has_listeners(model) or
-                signals.post_delete.has_listeners(model) or
-                signals.m2m_changed.has_listeners(model)):
+                signals.post_delete.has_listeners(model)):
             return False
         # The use of from_field comes from the need to avoid cascade back to
         # parent when parent delete is cascading to child.
@@ -146,100 +163,53 @@ class Collector:
             all(link == from_field for link in opts.concrete_model._meta.parents.values()) and
             # Foreign keys pointing to this model.
             all(
-                related.field.remote_field.on_delete is DO_NOTHING
+                related.remote_field.on_delete is DO_NOTHING
                 for related in get_candidate_relations_to_delete(opts)
             ) and (
                 # Something like generic foreign key.
-                not any(hasattr(field, 'bulk_related_objects') for field in opts.private_fields)
+                not any(hasattr(field, 'bulk_related_objects')
+                        for field in model._meta.private_fields)
             )
         )
 
-    def get_del_batches(self, objs, field):
+    def collect(self, objs, source=None, nullable=False, reverse_dependency=False):
         """
-        Return the objs in suitably sized batches for the used connection.
+        Add 'objs' to the collection of objects to be deleted.  If the call is
+        the result of a cascade, 'source' should be the model that caused it,
+        and 'nullable' should be set to True if the relation can be null.
+        
+        Return a list of all objects that were not already collected.
         """
-        conn_batch_size = max(
-            connections[self.using].ops.bulk_batch_size([field.name], objs), 1)
-        if len(objs) > conn_batch_size:
-            return [objs[i:i + conn_batch_size]
-                    for i in range(0, len(objs), conn_batch_size)]
-        else:
-            return [objs]
+        if not objs:
+            return []
+        new_objs = []
+        model = objs[0].__class__
+        instances = self.data.setdefault(model, set())
+        for obj in objs:
+            if obj not in instances:
+                new_objs.append(obj)
+        instances.update(new_objs)
+        # Nullable relationships can be ignored -- they are nulled out before
+        # deleting, and therefore do not affect the order in which objects
+        # have to be deleted.
+        if source is not None and not nullable:
+            self.add_dependency(source, model, reverse_dependency)
+        return new_objs
 
-    def collect(self, objs, source=None, nullable=False, collect_related=True,
-                source_attr=None, reverse_dependency=False, keep_parents=False):
+    def related_objects(self, related_model, related_fields, objs):
         """
-        Add 'objs' to the collection of objects to be deleted as well as all
-        parent instances.  'objs' must be a homogeneous iterable collection of
-        model instances (e.g. a QuerySet).  If 'collect_related' is True,
-        related objects will be handled by their respective on_delete handler.
-
-        If the call is the result of a cascade, 'source' should be the model
-        that caused it and 'nullable' should be set to True, if the relation
-        can be null.
-
-        If 'reverse_dependency' is True, 'source' will be deleted before the
-        current model, rather than after. (Needed for cascading to parent
-        models, the one case in which the cascade follows the forwards
-        direction of an FK rather than the reverse direction.)
-
-        If 'keep_parents' is True, data of parent model's will be not deleted.
+        Get a QuerySet of the related model to objs via related fields.
         """
-        if self.can_fast_delete(objs):
-            self.fast_deletes.append(objs)
-            return
-        new_objs = self.add(objs, source, nullable,
-                            reverse_dependency=reverse_dependency)
-        if not new_objs:
-            return
-
-        model = new_objs[0].__class__
-
-        if not keep_parents:
-            # Recursively collect concrete model's parent models, but not their
-            # related objects. These will be found by meta.get_fields()
-            concrete_model = model._meta.concrete_model
-            for ptr in concrete_model._meta.parents.values():
-                if ptr:
-                    parent_objs = [getattr(obj, ptr.name) for obj in new_objs]
-                    self.collect(parent_objs, source=model,
-                                 source_attr=ptr.remote_field.related_name,
-                                 collect_related=False,
-                                 reverse_dependency=True)
-        if collect_related:
-            parents = model._meta.parents
-            for related in get_candidate_relations_to_delete(model._meta):
-                # Preserve parent reverse relationships if keep_parents=True.
-                if keep_parents and related.model in parents:
-                    continue
-                field = related.field
-                if field.remote_field.on_delete == DO_NOTHING:
-                    continue
-                batches = self.get_del_batches(new_objs, field)
-                for batch in batches:
-                    sub_objs = self.related_objects(related, batch)
-                    if self.can_fast_delete(sub_objs, from_field=field):
-                        self.fast_deletes.append(sub_objs)
-                    elif sub_objs:
-                        field.remote_field.on_delete(self, field, sub_objs, self.using)
-            for field in model._meta.private_fields:
-                if hasattr(field, 'bulk_related_objects'):
-                    # It's something like generic foreign key.
-                    sub_objs = field.bulk_related_objects(new_objs, self.using)
-                    self.collect(sub_objs, source=model, nullable=True)
-
-    def related_objects(self, related, objs):
-        """
-        Get a QuerySet of objects related to `objs` via the relation `related`.
-        """
-        return related.related_model._base_manager.using(self.using).filter(
-            **{"%s__in" % related.field.name: objs}
+        predicate = sql.Q.create(
+            [(related_field.name, objs) for related_field in related_fields],
+            connector=sql.Q.OR,
         )
+        return related_model._base_manager.using(self.using).filter(predicate)
 
     def instances_with_model(self):
         for model, instances in self.data.items():
-            for obj in instances:
-                yield model, obj
+            for instance in instances:
+                yield model, instance
 
     def sort(self):
         sorted_models = []
@@ -250,8 +220,8 @@ class Collector:
             for model in models:
                 if model in sorted_models:
                     continue
-                dependencies = self.dependencies.get(model._meta.concrete_model)
-                if not (dependencies and dependencies.difference(concrete_models)):
+                dependencies = self.dependencies.get(model, set())
+                if not (dependencies - concrete_models):
                     sorted_models.append(model)
                     concrete_models.add(model._meta.concrete_model)
                     found = True
@@ -272,12 +242,29 @@ class Collector:
         deleted_counter = Counter()
 
         # Optimize for the case with a single obj and no dependencies
-        if len(self.data) == 1 and len(instances) == 1:
-            instance = list(instances)[0]
-            if self.can_fast_delete(instance):
-                with transaction.mark_for_rollback_on_error():
+        if len(self.data) == 1 and len(self.dependencies) == 0:
+            model = list(self.data.keys())[0]
+            instances = self.data[model]
+            if len(instances) == 1 and self.can_fast_delete(instances):
+                instance = list(instances)[0]
+                with transaction.atomic(using=self.using, savepoint=False):
+                    # Send pre_delete signal
+                    if not model._meta.auto_created:
+                        signals.pre_delete.send(
+                            sender=model, instance=instance, using=self.using
+                        )
+                    # Delete the instance
                     count = sql.DeleteQuery(model).delete_batch([instance.pk], self.using)
-                return count, {model._meta.label: count}
+                    if count:
+                        deleted_counter[model._meta.label] += count
+                        # Clear the primary key
+                        setattr(instance, model._meta.pk.attname, None)
+                        # Send post_delete signal
+                        if not model._meta.auto_created:
+                            signals.post_delete.send(
+                                sender=model, instance=instance, using=self.using
+                            )
+                return sum(deleted_counter.values()), dict(deleted_counter)
 
         with transaction.atomic(using=self.using, savepoint=False):
             # send pre_delete signals
@@ -290,7 +277,8 @@ class Collector:
             # fast deletes
             for qs in self.fast_deletes:
                 count = qs._raw_delete(using=self.using)
-                deleted_counter[qs.model._meta.label] += count
+                if count:
+                    deleted_counter[qs.model._meta.label] += count
 
             # update fields
             for model, instances_for_fieldvalues in self.field_updates.items():
@@ -308,20 +296,22 @@ class Collector:
                 query = sql.DeleteQuery(model)
                 pk_list = [obj.pk for obj in instances]
                 count = query.delete_batch(pk_list, self.using)
-                deleted_counter[model._meta.label] += count
+                if count:
+                    deleted_counter[model._meta.label] += count
 
                 if not model._meta.auto_created:
                     for obj in instances:
                         signals.post_delete.send(
                             sender=model, instance=obj, using=self.using
                         )
+                        
+                # Clear primary keys for all deleted instances
+                for obj in instances:
+                    setattr(obj, model._meta.pk.attname, None)
 
         # update collected instances
         for instances_for_fieldvalues in self.field_updates.values():
             for (field, value), instances in instances_for_fieldvalues.items():
                 for obj in instances:
                     setattr(obj, field.attname, value)
-        for model, instances in self.data.items():
-            for instance in instances:
-                setattr(instance, model._meta.pk.attname, None)
         return sum(deleted_counter.values()), dict(deleted_counter)
