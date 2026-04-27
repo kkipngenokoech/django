@@ -64,7 +64,8 @@ Minor features
 :mod:`django.contrib.gis`
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* ...
+* Allowed MySQL spatial lookup functions to operate on real geometries.
+  Previous support was limited to bounding boxes.
 
 :mod:`django.contrib.messages`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -161,7 +162,7 @@ Migrations
 Models
 ~~~~~~
 
-* ...
+* Added the :class:`~django.db.models.functions.MD5` database function.
 
 Requests and Responses
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -186,7 +187,13 @@ Templates
 Tests
 ~~~~~
 
-* ...
+* The new test :class:`~django.test.Client` argument
+  ``raise_request_exception`` allows controlling whether or not exceptions
+  raised during the request should also be raised in the test. The value
+  defaults to ``True`` for backwards compatibility. If it is ``False`` and an
+  exception occurs, the test client will return a 500 response with the
+  attribute :attr:`~django.test.Response.exc_info`, a tuple providing
+  information of the exception that occurred.
 
 URLs
 ~~~~
@@ -225,11 +232,11 @@ backends.
 :mod:`django.contrib.gis`
 -------------------------
 
-* Supported for PostGIS 2.1 is removed.
+* Support for PostGIS 2.1 is removed.
 
 * Support for SpatiaLite 4.1 and 4.2 is removed.
 
-* Support for GDAL 1.11 is removed.
+* Support for GDAL 1.11 and GEOS 3.4 is removed.
 
 Dropped support for PostgreSQL 9.4
 ----------------------------------
@@ -284,11 +291,27 @@ Django 3.0, we're removing these APIs at this time.
 
 * ``django.utils.safestring.SafeBytes`` - Unused since Django 2.0.
 
+New default value for the ``FILE_UPLOAD_PERMISSIONS`` setting
+-------------------------------------------------------------
+
+In older versions, the :setting:`FILE_UPLOAD_PERMISSIONS` setting defaults to
+``None``. With the default :setting:`FILE_UPLOAD_HANDLERS`, this results in
+uploaded files having different permissions depending on their size and which
+upload handler is used.
+
+``FILE_UPLOAD_PERMISSION`` now defaults to ``0o644`` to avoid this
+inconsistency.
+
 Miscellaneous
 -------------
 
 * ``ContentType.__str__()`` now includes the model's ``app_label`` to
   disambiguate model's with the same name in different apps.
+
+* Because accessing the language in the session rather than in the cookie is
+  deprecated, ``LocaleMiddleware`` no longer looks for the user's language in
+  the session and :func:`django.contrib.auth.logout` no longer preserves the
+  session's language after logout.
 
 .. _deprecated-features-3.0:
 
@@ -319,6 +342,11 @@ Miscellaneous
   :func:`~django.utils.translation.gettext_noop`,
   :func:`~django.utils.translation.ngettext`, and
   :func:`~django.utils.translation.ngettext_lazy`.
+
+* To limit creation of sessions and hence favor some caching strategies,
+  :func:`django.views.i18n.set_language` will stop setting the user's language
+  in the session in Django 4.0. Since Django 2.1, the language is always stored
+  in the :setting:`LANGUAGE_COOKIE_NAME` cookie.
 
 .. _removed-features-3.0:
 
