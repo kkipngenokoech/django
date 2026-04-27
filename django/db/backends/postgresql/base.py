@@ -11,6 +11,9 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connections
 from django.db.backends.base.base import BaseDatabaseWrapper
+from django.db.backends.utils import (
+    CursorDebugWrapper as BaseCursorDebugWrapper,
+)
 from django.db.utils import DatabaseError as WrappedDatabaseError
 from django.utils.functional import cached_property
 from django.utils.safestring import SafeString
@@ -195,7 +198,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         return connection
 
     def ensure_timezone(self):
-        if not self.is_usable():
+        if self.connection is None:
             return False
         conn_timezone_name = self.connection.get_parameter_status('TimeZone')
         timezone_name = self.timezone_name
@@ -208,7 +211,6 @@ class DatabaseWrapper(BaseDatabaseWrapper):
     def init_connection_state(self):
         self.connection.set_client_encoding('UTF8')
 
-        self.ensure_connection()
         timezone_changed = self.ensure_timezone()
         if timezone_changed:
             # Commit after setting the time zone (see #17062)
@@ -248,8 +250,6 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         self.cursor().execute('SET CONSTRAINTS ALL DEFERRED')
 
     def is_usable(self):
-        if self.connection is None:
-            return False
         try:
             # Use a psycopg cursor directly, bypassing Django's utilities.
             self.connection.cursor().execute("SELECT 1")
@@ -277,7 +277,6 @@ class DatabaseWrapper(BaseDatabaseWrapper):
                     return self.__class__(
                         {**self.settings_dict, 'NAME': connection.settings_dict['NAME']},
                         alias=self.alias,
-                        allow_thread_sharing=False,
                     )
         return nodb_connection
 
@@ -285,3 +284,16 @@ class DatabaseWrapper(BaseDatabaseWrapper):
     def pg_version(self):
         with self.temporary_connection():
             return self.connection.server_version
+
+    def make_debug_cursor(self, cursor):
+        return CursorDebugWrapper(cursor, self)
+
+
+class CursorDebugWrapper(BaseCursorDebugWrapper):
+    def copy_expert(self, sql, file, *args):
+        with self.debug_sql(sql):
+            return self.cursor.copy_expert(sql, file, *args)
+
+    def copy_to(self, file, table, *args, **kwargs):
+        with self.debug_sql(sql='COPY %s TO STDOUT' % table):
+            return self.cursor.copy_to(file, table, *args, **kwargs)

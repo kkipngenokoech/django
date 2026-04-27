@@ -32,9 +32,11 @@ class SkippingTestCase(SimpleTestCase):
     def _assert_skipping(self, func, expected_exc, msg=None):
         try:
             if msg is not None:
-                self.assertRaisesMessage(expected_exc, msg, func)
+                with self.assertRaisesMessage(expected_exc, msg):
+                    func()
             else:
-                self.assertRaises(expected_exc, func)
+                with self.assertRaises(expected_exc):
+                    func()
         except unittest.SkipTest:
             self.fail('%s should not result in a skipped test.' % func.__name__)
 
@@ -1099,7 +1101,7 @@ class OverrideSettingsTests(SimpleTestCase):
         the file_permissions_mode attribute of
         django.core.files.storage.default_storage.
         """
-        self.assertIsNone(default_storage.file_permissions_mode)
+        self.assertEqual(default_storage.file_permissions_mode, 0o644)
         with self.settings(FILE_UPLOAD_PERMISSIONS=0o777):
             self.assertEqual(default_storage.file_permissions_mode, 0o777)
 

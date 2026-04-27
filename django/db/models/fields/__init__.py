@@ -732,10 +732,7 @@ class Field(RegisterLookupMixin):
         """
         self.set_attributes_from_name(name)
         self.model = cls
-        if private_only:
-            cls._meta.add_field(self, private=True)
-        else:
-            cls._meta.add_field(self)
+        cls._meta.add_field(self, private=private_only)
         if self.column:
             # Don't override classmethods with the descriptor. This means that
             # if you have a classmethod and a field with the same name, then
@@ -1587,7 +1584,7 @@ class DurationField(Field):
     empty_strings_allowed = False
     default_error_messages = {
         'invalid': _("'%(value)s' value has an invalid format. It must be in "
-                     "[DD] [HH:[MM:]]ss[.uuuuuu] format.")
+                     "[DD] [[HH:]MM:]ss[.uuuuuu] format.")
     }
     description = _("Duration")
 
@@ -1712,7 +1709,7 @@ class FilePathField(Field):
 
     def formfield(self, **kwargs):
         return super().formfield(**{
-            'path': self.path,
+            'path': self._get_path(),
             'match': self.match,
             'recursive': self.recursive,
             'form_class': forms.FilePathField,
@@ -1792,13 +1789,25 @@ class IntegerField(Field):
         validators_ = super().validators
         internal_type = self.get_internal_type()
         min_value, max_value = connection.ops.integer_field_range(internal_type)
-        if (min_value is not None and not
-            any(isinstance(validator, validators.MinValueValidator) and
-                validator.limit_value >= min_value for validator in validators_)):
+        if min_value is not None and not any(
+            (
+                isinstance(validator, validators.MinValueValidator) and (
+                    validator.limit_value()
+                    if callable(validator.limit_value)
+                    else validator.limit_value
+                ) >= min_value
+            ) for validator in validators_
+        ):
             validators_.append(validators.MinValueValidator(min_value))
-        if (max_value is not None and not
-            any(isinstance(validator, validators.MaxValueValidator) and
-                validator.limit_value <= max_value for validator in validators_)):
+        if max_value is not None and not any(
+            (
+                isinstance(validator, validators.MaxValueValidator) and (
+                    validator.limit_value()
+                    if callable(validator.limit_value)
+                    else validator.limit_value
+                ) <= max_value
+            ) for validator in validators_
+        ):
             validators_.append(validators.MaxValueValidator(max_value))
         return validators_
 
@@ -2252,6 +2261,21 @@ class BinaryField(Field):
         if self.max_length is not None:
             self.validators.append(validators.MaxLengthValidator(self.max_length))
 
+    def check(self, **kwargs):
+        return [*super().check(**kwargs), *self._check_str_default_value()]
+
+    def _check_str_default_value(self):
+        if self.has_default() and isinstance(self.default, str):
+            return [
+                checks.Error(
+                    "BinaryField's default cannot be a string. Use bytes "
+                    "content instead.",
+                    obj=self,
+                    id='fields.E170',
+                )
+            ]
+        return []
+
     def deconstruct(self):
         name, path, args, kwargs = super().deconstruct()
         if self.editable:
@@ -2309,6 +2333,10 @@ class UUIDField(Field):
 
     def get_internal_type(self):
         return "UUIDField"
+
+    def get_prep_value(self, value):
+        value = super().get_prep_value(value)
+        return self.to_python(value)
 
     def get_db_prep_value(self, value, connection, prepared=False):
         if value is None:
