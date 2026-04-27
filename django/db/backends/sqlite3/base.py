@@ -4,6 +4,7 @@ SQLite backend for the sqlite3 module in the standard library.
 import datetime
 import decimal
 import functools
+import hashlib
 import math
 import operator
 import re
@@ -217,6 +218,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         conn.create_function('LN', 1, none_guard(math.log))
         conn.create_function('LOG', 2, none_guard(lambda x, y: math.log(y, x)))
         conn.create_function('LPAD', 3, _sqlite_lpad)
+        conn.create_function('MD5', 1, none_guard(lambda x: hashlib.md5(x.encode()).hexdigest()))
         conn.create_function('MOD', 2, none_guard(math.fmod))
         conn.create_function('PI', 0, lambda: math.pi)
         conn.create_function('POWER', 2, none_guard(operator.pow))
@@ -224,6 +226,12 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         conn.create_function('REPEAT', 2, none_guard(operator.mul))
         conn.create_function('REVERSE', 1, none_guard(lambda x: x[::-1]))
         conn.create_function('RPAD', 3, _sqlite_rpad)
+        conn.create_function('SHA1', 1, none_guard(lambda x: hashlib.sha1(x.encode()).hexdigest()))
+        conn.create_function('SHA224', 1, none_guard(lambda x: hashlib.sha224(x.encode()).hexdigest()))
+        conn.create_function('SHA256', 1, none_guard(lambda x: hashlib.sha256(x.encode()).hexdigest()))
+        conn.create_function('SHA384', 1, none_guard(lambda x: hashlib.sha384(x.encode()).hexdigest()))
+        conn.create_function('SHA512', 1, none_guard(lambda x: hashlib.sha512(x.encode()).hexdigest()))
+        conn.create_function('SIGN', 1, none_guard(lambda x: (x > 0) - (x < 0)))
         conn.create_function('SIN', 1, none_guard(math.sin))
         conn.create_function('SQRT', 1, none_guard(math.sqrt))
         conn.create_function('TAN', 1, none_guard(math.tan))
