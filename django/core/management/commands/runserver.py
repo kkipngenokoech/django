@@ -113,7 +113,7 @@ class Command(BaseCommand):
         shutdown_message = options.get('shutdown_message', '')
         quit_command = 'CTRL-BREAK' if sys.platform == 'win32' else 'CONTROL-C'
 
-        self.stdout.write("Performing system checks…\n\n")
+        self.stdout.write("Performing system checks...\n\n")
         self.check(display_num_errors=True)
         # Need to check migrations here, so can't use the
         # requires_migrations_check attribute.
@@ -155,7 +155,3 @@ class Command(BaseCommand):
             if shutdown_message:
                 self.stdout.write(shutdown_message)
             sys.exit(0)
-
-
-# Kept for backward compatibility
-BaseRunserverCommand = Command

@@ -143,9 +143,10 @@ class BaseDatabaseFeatures:
     # Can the backend introspect a TimeField, instead of a DateTimeField?
     can_introspect_time_field = True
 
-    # Some backends may not be able to differentiate BigAutoField from other
-    # fields such as AutoField.
+    # Some backends may not be able to differentiate BigAutoField or
+    # SmallAutoField from other fields such as AutoField.
     introspected_big_auto_field_type = 'BigAutoField'
+    introspected_small_auto_field_type = 'SmallAutoField'
 
     # Some backends may not be able to differentiate BooleanField from other
     # fields such as IntegerField.
@@ -181,6 +182,8 @@ class BaseDatabaseFeatures:
     # Does it support CHECK constraints?
     supports_column_check_constraints = True
     supports_table_check_constraints = True
+    # Does the backend support introspection of CHECK constraints?
+    can_introspect_check_constraints = True
 
     # Does the backend support 'pyformat' style ("... %(name)s ...", {'name': value})
     # parameter passing? Note this can be provided by the backend even if not
@@ -239,6 +242,7 @@ class BaseDatabaseFeatures:
 
     # Does the backend support window expressions (expression OVER (...))?
     supports_over_clause = False
+    supports_frame_range_fixed_distance = False
 
     # Does the backend support CAST with precision?
     supports_cast_with_precision = True
@@ -280,6 +284,13 @@ class BaseDatabaseFeatures:
     supports_partial_indexes = True
     supports_functions_in_partial_indexes = True
 
+    # Does the database allow more than one constraint or index on the same
+    # field(s)?
+    allows_multiple_constraints_on_same_fields = True
+
+    # Does the backend support boolean expressions in the SELECT clause?
+    supports_boolean_expr_in_select_clause = True
+
     def __init__(self, connection):
         self.connection = connection
 
@@ -301,3 +312,8 @@ class BaseDatabaseFeatures:
             count, = cursor.fetchone()
             cursor.execute('DROP TABLE ROLLBACK_TEST')
         return count == 0
+
+    def allows_group_by_selected_pks_on_model(self, model):
+        if not self.allows_group_by_selected_pks:
+            return False
+        return model._meta.managed

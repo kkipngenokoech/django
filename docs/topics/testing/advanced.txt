@@ -35,7 +35,7 @@ restricted subset of the test client API:
 Example
 -------
 
-The following is a simple unit test using the request factory::
+The following is a unit test using the request factory::
 
     from django.contrib.auth.models import AnonymousUser, User
     from django.test import RequestFactory, TestCase
@@ -79,9 +79,8 @@ Projects that support multitenancy or otherwise alter business logic based on
 the request's host and use custom host names in tests must include those hosts
 in :setting:`ALLOWED_HOSTS`.
 
-The first and simplest option to do so is to add the hosts to your settings
-file. For example, the test suite for docs.djangoproject.com includes the
-following::
+The first option to do so is to add the hosts to your settings file. For
+example, the test suite for docs.djangoproject.com includes the following::
 
     from django.test import TestCase
 
@@ -424,7 +423,7 @@ behavior. This class defines the ``run_tests()`` entry point, plus a
 selection of other methods that are used to by ``run_tests()`` to set up,
 execute and tear down the test suite.
 
-.. class:: DiscoverRunner(pattern='test*.py', top_level=None, verbosity=1, interactive=True, failfast=False, keepdb=False, reverse=False, debug_mode=False, debug_sql=False, **kwargs)
+.. class:: DiscoverRunner(pattern='test*.py', top_level=None, verbosity=1, interactive=True, failfast=False, keepdb=False, reverse=False, debug_mode=False, debug_sql=False, test_name_patterns=None, **kwargs)
 
     ``DiscoverRunner`` will search for tests in any file matching ``pattern``.
 
@@ -462,6 +461,9 @@ execute and tear down the test suite.
     logged to the :ref:`django.db.backends logger <django-db-logger>` as well
     as the traceback. If ``verbosity`` is ``2``, then queries in all tests are
     output.
+
+    ``test_name_patterns`` can be used to specify a set of patterns for
+    filtering test methods and classes by their names.
 
     Django may, from time to time, extend the capabilities of the test runner
     by adding new arguments. The ``**kwargs`` declaration allows for this
@@ -625,10 +627,6 @@ utility methods in the ``django.test.utils`` module.
     The ``aliases`` argument determines which :setting:`DATABASES` aliases test
     databases should be setup for. If it's not provided, it defaults to all of
     :setting:`DATABASES` aliases.
-
-    .. versionadded:: 2.2
-
-        The ``aliases`` argument was added.
 
 .. function:: teardown_databases(old_config, parallel=0, keepdb=False)
 
