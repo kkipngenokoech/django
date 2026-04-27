@@ -5,7 +5,7 @@ import types
 from pathlib import Path
 
 from django.conf import settings
-from django.http import HttpResponse, HttpResponseNotFound
+from django.http import HttpResponse, HttpResponseNotFound, Http404
 from django.template import Context, Engine, TemplateDoesNotExist
 from django.template.defaultfilters import pprint
 from django.urls import Resolver404, resolve
@@ -483,7 +483,7 @@ def technical_404_response(request, exception):
     caller = ''
     try:
         resolver_match = resolve(request.path)
-    except Resolver404:
+    except (Resolver404, Http404):
         pass
     else:
         obj = resolver_match.func
@@ -507,7 +507,6 @@ def technical_404_response(request, exception):
         'reason': str(exception),
         'request': request,
         'settings': get_safe_settings(),
-        'raising_view_name': caller,
     })
     return HttpResponseNotFound(t.render(c), content_type='text/html')
 
@@ -520,4 +519,4 @@ def default_urlconf(request):
         'version': get_docs_version(),
     })
 
-    return HttpResponse(t.render(c), content_type='text/html')
+    return HttpResponseNotFound(t.render(c), content_type='text/html')
