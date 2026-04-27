@@ -15,6 +15,7 @@ from django.db import connection
 from django.test import SimpleTestCase, override_settings
 from django.test.utils import captured_stderr, extend_sys_path
 from django.utils import translation
+from django.utils.version import PY37
 
 from .management.commands import dance
 
@@ -213,15 +214,49 @@ class CommandTests(SimpleTestCase):
         management.call_command('common_args', stdout=out)
         self.assertIn('Detected that --version already exists', out.getvalue())
 
+    def test_mutually_exclusive_group_required_options(self):
+        out = StringIO()
+        management.call_command('mutually_exclusive_required', foo_id=1, stdout=out)
+        self.assertIn('foo_id', out.getvalue())
+        management.call_command('mutually_exclusive_required', foo_name='foo', stdout=out)
+        self.assertIn('foo_name', out.getvalue())
+        msg = 'Error: one of the arguments --foo-id --foo-name is required'
+        with self.assertRaisesMessage(CommandError, msg):
+            management.call_command('mutually_exclusive_required', stdout=out)
+
     def test_subparser(self):
         out = StringIO()
         management.call_command('subparser', 'foo', 12, stdout=out)
+        self.assertIn('bar', out.getvalue())
+
+    def test_subparser_dest_args(self):
+        out = StringIO()
+        management.call_command('subparser_dest', 'foo', bar=12, stdout=out)
+        self.assertIn('bar', out.getvalue())
+
+    def test_subparser_dest_required_args(self):
+        out = StringIO()
+        management.call_command('subparser_required', 'foo_1', 'foo_2', bar=12, stdout=out)
         self.assertIn('bar', out.getvalue())
 
     def test_subparser_invalid_option(self):
         msg = "Error: invalid choice: 'test' (choose from 'foo')"
         with self.assertRaisesMessage(CommandError, msg):
             management.call_command('subparser', 'test', 12)
+        if PY37:
+            # "required" option requires Python 3.7 and later.
+            msg = 'Error: the following arguments are required: subcommand'
+            with self.assertRaisesMessage(CommandError, msg):
+                management.call_command('subparser_dest', subcommand='foo', bar=12)
+        else:
+            msg = (
+                'Unknown option(s) for subparser_dest command: subcommand. '
+                'Valid options are: bar, force_color, help, no_color, '
+                'pythonpath, settings, skip_checks, stderr, stdout, '
+                'traceback, verbosity, version.'
+            )
+            with self.assertRaisesMessage(TypeError, msg):
+                management.call_command('subparser_dest', subcommand='foo', bar=12)
 
     def test_create_parser_kwargs(self):
         """BaseCommand.create_parser() passes kwargs to CommandParser."""
@@ -250,6 +285,16 @@ class CommandRunTests(AdminScriptTestCase):
         """
         self.write_settings('settings.py', apps=['user_commands'])
         out, err = self.run_manage(['set_option', '--set', 'foo'])
+        self.assertNoOutput(err)
+        self.assertEqual(out.strip(), 'Set foo')
+
+    def test_skip_checks(self):
+        self.write_settings('settings.py', apps=['django.contrib.staticfiles', 'user_commands'], sdict={
+            # (staticfiles.E001) The STATICFILES_DIRS setting is not a tuple or
+            # list.
+            'STATICFILES_DIRS': '"foo"',
+        })
+        out, err = self.run_manage(['set_option', '--skip-checks', '--set', 'foo'])
         self.assertNoOutput(err)
         self.assertEqual(out.strip(), 'Set foo')
 

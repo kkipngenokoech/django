@@ -1,29 +1,52 @@
-# This is an example test settings file for use with the Django test suite.
-#
-# The 'sqlite3' backend requires only the ENGINE setting (an in-
-# memory database will be used). All other backends will require a
-# NAME and potentially authentication information. See the
-# following section in the docs for more information:
-#
-# https://docs.djangoproject.com/en/dev/internals/contributing/writing-code/unit-tests/
-#
-# The different databases that Django supports behave differently in certain
-# situations, so it is recommended to run the test suite against as many
-# database backends as possible.  You may want to create a separate settings
-# file for each of the backends you test against.
+import tempfile
+import os
+
+# Build paths inside the project like this: os.path.join(BASE_DIR, ...)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Quick-start development settings - unsuitable for production
+
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = 'django_tests_secret_key'
+
+# SECURITY WARNING: don't run with debug turned on in production!
+DEBUG = True
 
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
+        'TEST': {
+            'NAME': 'test_default.sqlite3'
+        },
+        'OPTIONS': {
+            'timeout': 30,
+            'init_command': "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=memory; PRAGMA mmap_size=268435456;",
+        },
     },
     'other': {
         'ENGINE': 'django.db.backends.sqlite3',
+        'TEST': {
+            'NAME': 'test_other.sqlite3'
+        },
+        'OPTIONS': {
+            'timeout': 30,
+            'init_command': "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=memory; PRAGMA mmap_size=268435456;",
+        },
     }
 }
 
+USE_TZ = False
+
 SECRET_KEY = "django_tests_secret_key"
 
-# Use a fast hasher to speed up tests.
+USE_I18N = True
+
+USE_L10N = True
+
+STATIC_URL = '/static/'
+
 PASSWORD_HASHERS = [
     'django.contrib.auth.hashers.MD5PasswordHasher',
 ]
+
+DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'

@@ -16,6 +16,7 @@ from django.utils.log import (
     DEFAULT_LOGGING, AdminEmailHandler, CallbackFilter, RequireDebugFalse,
     RequireDebugTrue, ServerFormatter,
 )
+from django.views.debug import ExceptionReporter
 
 from . import views
 from .logconfig import MyEmailBackend
@@ -228,8 +229,8 @@ class CallbackFilterTest(SimpleTestCase):
         f_false = CallbackFilter(lambda r: False)
         f_true = CallbackFilter(lambda r: True)
 
-        self.assertEqual(f_false.filter("record"), False)
-        self.assertEqual(f_true.filter("record"), True)
+        self.assertFalse(f_false.filter('record'))
+        self.assertTrue(f_true.filter('record'))
 
     def test_passes_on_record(self):
         collector = []
@@ -251,11 +252,10 @@ class AdminEmailHandlerTest(SimpleTestCase):
     def get_admin_email_handler(self, logger):
         # AdminEmailHandler does not get filtered out
         # even with DEBUG=True.
-        admin_email_handler = [
+        return [
             h for h in logger.handlers
             if h.__class__.__name__ == "AdminEmailHandler"
         ][0]
-        return admin_email_handler
 
     def test_fail_silently(self):
         admin_email_handler = self.get_admin_email_handler(self.logger)
@@ -431,6 +431,20 @@ class AdminEmailHandlerTest(SimpleTestCase):
             self.client.get('/', HTTP_HOST='evil.com')
         finally:
             admin_email_handler.include_html = old_include_html
+
+    def test_default_exception_reporter_class(self):
+        admin_email_handler = self.get_admin_email_handler(self.logger)
+        self.assertEqual(admin_email_handler.reporter_class, ExceptionReporter)
+
+    @override_settings(ADMINS=[('A.N.Admin', 'admin@example.com')])
+    def test_custom_exception_reporter_is_used(self):
+        record = self.logger.makeRecord('name', logging.ERROR, 'function', 'lno', 'message', None, None)
+        record.request = self.request_factory.get('/')
+        handler = AdminEmailHandler(reporter_class='logging_tests.logconfig.CustomExceptionReporter')
+        handler.emit(record)
+        self.assertEqual(len(mail.outbox), 1)
+        msg = mail.outbox[0]
+        self.assertEqual(msg.body, 'message\n\ncustom traceback text')
 
 
 class SettingsConfigTest(AdminScriptTestCase):

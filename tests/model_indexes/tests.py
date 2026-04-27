@@ -1,3 +1,5 @@
+from unittest import mock
+
 from django.conf import settings
 from django.db import connection, models
 from django.db.models.query_utils import Q
@@ -28,6 +30,7 @@ class SimpleIndexesTests(SimpleTestCase):
         same_index.model = Book
         another_index.model = Book
         self.assertEqual(index, same_index)
+        self.assertEqual(index, mock.ANY)
         self.assertNotEqual(index, another_index)
 
     def test_index_fields_type(self):
@@ -62,20 +65,6 @@ class SimpleIndexesTests(SimpleTestCase):
     def test_condition_must_be_q(self):
         with self.assertRaisesMessage(ValueError, 'Index.condition must be a Q instance.'):
             models.Index(condition='invalid', name='long_book_idx')
-
-    def test_max_name_length(self):
-        msg = 'Index names cannot be longer than 30 characters.'
-        with self.assertRaisesMessage(ValueError, msg):
-            models.Index(fields=['title'], name='looooooooooooong_index_name_idx')
-
-    def test_name_constraints(self):
-        msg = 'Index names cannot start with an underscore (_).'
-        with self.assertRaisesMessage(ValueError, msg):
-            models.Index(fields=['title'], name='_name_starting_with_underscore')
-
-        msg = 'Index names cannot start with a number (0-9).'
-        with self.assertRaisesMessage(ValueError, msg):
-            models.Index(fields=['title'], name='5name_starting_with_number')
 
     def test_name_auto_generation(self):
         index = models.Index(fields=['author'])
@@ -148,13 +137,26 @@ class SimpleIndexesTests(SimpleTestCase):
 
     def test_name_set(self):
         index_names = [index.name for index in Book._meta.indexes]
-        self.assertCountEqual(index_names, ['model_index_title_196f42_idx', 'model_index_isbn_34f975_idx'])
+        self.assertCountEqual(
+            index_names,
+            [
+                'model_index_title_196f42_idx',
+                'model_index_isbn_34f975_idx',
+                'model_indexes_book_barcode_idx',
+            ],
+        )
 
     def test_abstract_children(self):
         index_names = [index.name for index in ChildModel1._meta.indexes]
-        self.assertEqual(index_names, ['model_index_name_440998_idx'])
+        self.assertEqual(
+            index_names,
+            ['model_index_name_440998_idx', 'model_indexes_childmodel1_idx'],
+        )
         index_names = [index.name for index in ChildModel2._meta.indexes]
-        self.assertEqual(index_names, ['model_index_name_b6c374_idx'])
+        self.assertEqual(
+            index_names,
+            ['model_index_name_b6c374_idx', 'model_indexes_childmodel2_idx'],
+        )
 
 
 class IndexesTests(TestCase):

@@ -64,6 +64,7 @@ class OracleOperations(BaseSpatialOperations, DatabaseOperations):
 
     function_names = {
         'Area': 'SDO_GEOM.SDO_AREA',
+        'AsGeoJSON': 'SDO_UTIL.TO_GEOJSON',
         'BoundingCircle': 'SDO_GEOM.SDO_MBC',
         'Centroid': 'SDO_GEOM.SDO_CENTROID',
         'Difference': 'SDO_GEOM.SDO_DIFFERENCE',
@@ -106,9 +107,9 @@ class OracleOperations(BaseSpatialOperations, DatabaseOperations):
     }
 
     unsupported_functions = {
-        'AsGeoJSON', 'AsKML', 'AsSVG', 'Azimuth', 'ForcePolygonCW', 'GeoHash',
-        'LineLocatePoint', 'MakeValid', 'MemSize', 'Scale', 'SnapToGrid',
-        'Translate',
+        'AsKML', 'AsSVG', 'Azimuth', 'ForcePolygonCW', 'GeoHash',
+        'GeometryDistance', 'LineLocatePoint', 'MakeValid', 'MemSize',
+        'Scale', 'SnapToGrid', 'Translate',
     }
 
     def geo_quote_name(self, name):
