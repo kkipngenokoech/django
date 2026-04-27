@@ -1,4 +1,5 @@
 import decimal
+import enum
 import json
 import unittest
 import uuid
@@ -8,6 +9,8 @@ from django.core import checks, exceptions, serializers, validators
 from django.core.exceptions import FieldError
 from django.core.management import call_command
 from django.db import IntegrityError, connection, models
+from django.db.models.expressions import RawSQL
+from django.db.models.functions import Cast
 from django.test import TransactionTestCase, modify_settings, override_settings
 from django.test.utils import isolate_apps
 from django.utils import timezone
@@ -16,13 +19,14 @@ from . import (
     PostgreSQLSimpleTestCase, PostgreSQLTestCase, PostgreSQLWidgetTestCase,
 )
 from .models import (
-    ArrayFieldSubclass, CharArrayModel, DateTimeArrayModel, IntegerArrayModel,
-    NestedIntegerArrayModel, NullableIntegerArrayModel, OtherTypesArrayModel,
-    PostgreSQLModel, Tag,
+    ArrayEnumModel, ArrayFieldSubclass, CharArrayModel, DateTimeArrayModel,
+    IntegerArrayModel, NestedIntegerArrayModel, NullableIntegerArrayModel,
+    OtherTypesArrayModel, PostgreSQLModel, Tag,
 )
 
 try:
     from django.contrib.postgres.fields import ArrayField
+    from django.contrib.postgres.fields.array import IndexTransform, SliceTransform
     from django.contrib.postgres.forms import (
         SimpleArrayField, SplitArrayField, SplitArrayWidget,
     )
@@ -147,6 +151,14 @@ class TestQuerying(PostgreSQLTestCase):
             NullableIntegerArrayModel(field=[20, 30, 40]),
             NullableIntegerArrayModel(field=None),
         ])
+
+    def test_empty_list(self):
+        NullableIntegerArrayModel.objects.create(field=[])
+        obj = NullableIntegerArrayModel.objects.annotate(
+            empty_array=models.Value([], output_field=ArrayField(models.IntegerField())),
+        ).filter(field=models.F('empty_array')).get()
+        self.assertEqual(obj.field, [])
+        self.assertEqual(obj.empty_array, [])
 
     def test_exact(self):
         self.assertSequenceEqual(
@@ -295,6 +307,18 @@ class TestQuerying(PostgreSQLTestCase):
             [instance]
         )
 
+    def test_index_transform_expression(self):
+        expr = RawSQL("string_to_array(%s, ';')", ['1;2'])
+        self.assertSequenceEqual(
+            NullableIntegerArrayModel.objects.filter(
+                field__0=Cast(
+                    IndexTransform(1, models.IntegerField, expr),
+                    output_field=models.IntegerField(),
+                ),
+            ),
+            self.objs[:1],
+        )
+
     def test_overlap(self):
         self.assertSequenceEqual(
             NullableIntegerArrayModel.objects.filter(field__overlap=[1, 2]),
@@ -349,12 +373,29 @@ class TestQuerying(PostgreSQLTestCase):
             [instance]
         )
 
+    def test_slice_transform_expression(self):
+        expr = RawSQL("string_to_array(%s, ';')", ['9;2;3'])
+        self.assertSequenceEqual(
+            NullableIntegerArrayModel.objects.filter(field__0_2=SliceTransform(2, 3, expr)),
+            self.objs[2:3],
+        )
+
     def test_usage_in_subquery(self):
         self.assertSequenceEqual(
             NullableIntegerArrayModel.objects.filter(
                 id__in=NullableIntegerArrayModel.objects.filter(field__len=3)
             ),
             [self.objs[3]]
+        )
+
+    def test_enum_lookup(self):
+        class TestEnum(enum.Enum):
+            VALUE_1 = 'value_1'
+
+        instance = ArrayEnumModel.objects.create(array_of_enums=[TestEnum.VALUE_1])
+        self.assertSequenceEqual(
+            ArrayEnumModel.objects.filter(array_of_enums__contains=[TestEnum.VALUE_1]),
+            [instance]
         )
 
     def test_unsupported_lookup(self):
@@ -365,6 +406,17 @@ class TestQuerying(PostgreSQLTestCase):
         msg = "Unsupported lookup '0bar' for ArrayField or join on the field not permitted."
         with self.assertRaisesMessage(FieldError, msg):
             list(NullableIntegerArrayModel.objects.filter(field__0bar=[2]))
+
+    def test_grouping_by_annotations_with_array_field_param(self):
+        value = models.Value([1], output_field=ArrayField(models.IntegerField()))
+        self.assertEqual(
+            NullableIntegerArrayModel.objects.annotate(
+                array_length=models.Func(value, 1, function='ARRAY_LENGTH'),
+            ).values('array_length').annotate(
+                count=models.Count('pk'),
+            ).get()['array_length'],
+            1,
+        )
 
 
 class TestDateTimeExactQuerying(PostgreSQLTestCase):
@@ -878,6 +930,18 @@ class TestSplitFormField(PostgreSQLSimpleTestCase):
         self.assertEqual(form.errors, {})
         obj = form.save(commit=False)
         self.assertEqual(obj.field, [1, 2])
+
+    def test_splitarrayfield_has_changed(self):
+        class Form(forms.ModelForm):
+            field = SplitArrayField(forms.IntegerField(), required=False, size=2)
+
+            class Meta:
+                model = IntegerArrayModel
+                fields = ('field',)
+
+        obj = IntegerArrayModel(field=[1, 2])
+        form = Form({'field_0': '1', 'field_1': '2'}, instance=obj)
+        self.assertFalse(form.has_changed())
 
 
 class TestSplitFormWidget(PostgreSQLWidgetTestCase):

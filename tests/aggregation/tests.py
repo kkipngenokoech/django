@@ -8,8 +8,9 @@ from django.db.models import (
     Avg, Count, DecimalField, DurationField, F, FloatField, Func, IntegerField,
     Max, Min, Sum, Value,
 )
-from django.db.models.expressions import Case, When
+from django.db.models.expressions import Case, Exists, OuterRef, Subquery, When
 from django.test import TestCase
+from django.test.testcases import skipUnlessDBFeature
 from django.test.utils import Approximate, CaptureQueriesContext
 from django.utils import timezone
 
@@ -387,9 +388,6 @@ class AggregateTestCase(TestCase):
         vals = Book.objects.aggregate(Count("rating"))
         self.assertEqual(vals, {"rating__count": 6})
 
-        vals = Book.objects.aggregate(Count("rating", distinct=True))
-        self.assertEqual(vals, {"rating__count": 4})
-
     def test_count_star(self):
         with self.assertNumQueries(1) as ctx:
             Book.objects.aggregate(n=Count("*"))
@@ -401,6 +399,16 @@ class AggregateTestCase(TestCase):
             distinct_ratings=Count(Case(When(pages__gt=300, then='rating')), distinct=True),
         )
         self.assertEqual(aggs['distinct_ratings'], 4)
+
+    def test_distinct_on_aggregate(self):
+        for aggregate, expected_result in (
+            (Avg, 4.125),
+            (Count, 4),
+            (Sum, 16.5),
+        ):
+            with self.subTest(aggregate=aggregate.__name__):
+                books = Book.objects.aggregate(ratings=aggregate('rating', distinct=True))
+                self.assertEqual(books['ratings'], expected_result)
 
     def test_non_grouped_annotation_not_in_group_by(self):
         """
@@ -883,7 +891,10 @@ class AggregateTestCase(TestCase):
         self.assertEqual(p2, {'avg_price': Approximate(Decimal('53.39'), places=2)})
 
     def test_combine_different_types(self):
-        msg = 'Expression contains mixed types. You must set output_field.'
+        msg = (
+            'Expression contains mixed types: FloatField, IntegerField. '
+            'You must set output_field.'
+        )
         qs = Book.objects.annotate(sums=Sum('rating') + Sum('pages') + Sum('price'))
         with self.assertRaisesMessage(FieldError, msg):
             qs.first()
@@ -1114,3 +1125,48 @@ class AggregateTestCase(TestCase):
             Book.objects.aggregate(is_book=True)
         with self.assertRaisesMessage(TypeError, msg % ', '.join([str(FloatField()), 'True'])):
             Book.objects.aggregate(FloatField(), Avg('price'), is_book=True)
+
+    def test_aggregation_subquery_annotation(self):
+        """Subquery annotations are excluded from the GROUP BY if they are
+        not explicitly grouped against."""
+        latest_book_pubdate_qs = Book.objects.filter(
+            publisher=OuterRef('pk')
+        ).order_by('-pubdate').values('pubdate')[:1]
+        publisher_qs = Publisher.objects.annotate(
+            latest_book_pubdate=Subquery(latest_book_pubdate_qs),
+        ).annotate(count=Count('book'))
+        with self.assertNumQueries(1) as ctx:
+            list(publisher_qs)
+        self.assertEqual(ctx[0]['sql'].count('SELECT'), 2)
+
+    @skipUnlessDBFeature('supports_subqueries_in_group_by')
+    def test_group_by_subquery_annotation(self):
+        """
+        Subquery annotations are included in the GROUP BY if they are
+        grouped against.
+        """
+        long_books_count_qs = Book.objects.filter(
+            publisher=OuterRef('pk'),
+            pages__gt=400,
+        ).values(
+            'publisher'
+        ).annotate(count=Count('pk')).values('count')
+        long_books_count_breakdown = Publisher.objects.values_list(
+            Subquery(long_books_count_qs, IntegerField()),
+        ).annotate(total=Count('*'))
+        self.assertEqual(dict(long_books_count_breakdown), {None: 1, 1: 4})
+
+    @skipUnlessDBFeature('supports_subqueries_in_group_by')
+    def test_group_by_exists_annotation(self):
+        """
+        Exists annotations are included in the GROUP BY if they are
+        grouped against.
+        """
+        long_books_qs = Book.objects.filter(
+            publisher=OuterRef('pk'),
+            pages__gt=800,
+        )
+        has_long_books_breakdown = Publisher.objects.values_list(
+            Exists(long_books_qs),
+        ).annotate(total=Count('*'))
+        self.assertEqual(dict(has_long_books_breakdown), {True: 2, False: 3})
