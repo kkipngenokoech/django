@@ -70,6 +70,10 @@ class BasicExpressionsTests(TestCase):
             ['<Company: Example Inc.>', '<Company: Foobar Ltd.>', '<Company: Test GmbH>'],
         )
 
+    def test_annotate_values_count(self):
+        companies = Company.objects.annotate(foo=RawSQL('%s', ['value']))
+        self.assertEqual(companies.count(), 3)
+
     @unittest.skipIf(connection.vendor == 'oracle', "Oracle doesn't support using boolean type in SELECT")
     def test_filtering_on_annotate_that_uses_q(self):
         self.assertEqual(
@@ -551,6 +555,26 @@ class BasicExpressionsTests(TestCase):
         )
         self.assertEqual(qs.get().float, 1.2)
 
+    def test_aggregate_subquery_annotation(self):
+        with self.assertNumQueries(1) as ctx:
+            aggregate = Company.objects.annotate(
+                ceo_salary=Subquery(
+                    Employee.objects.filter(
+                        id=OuterRef('ceo_id'),
+                    ).values('salary')
+                ),
+            ).aggregate(
+                ceo_salary_gt_20=Count('pk', filter=Q(ceo_salary__gt=20)),
+            )
+        self.assertEqual(aggregate, {'ceo_salary_gt_20': 1})
+        # Aggregation over a subquery annotation doesn't annotate the subquery
+        # twice in the inner query.
+        sql = ctx.captured_queries[0]['sql']
+        self.assertLessEqual(sql.count('SELECT'), 3)
+        # GROUP BY isn't required to aggregate over a query that doesn't
+        # contain nested aggregates.
+        self.assertNotIn('GROUP BY', sql)
+
     def test_explicit_output_field(self):
         class FuncA(Func):
             output_field = models.CharField()
@@ -570,6 +594,17 @@ class BasicExpressionsTests(TestCase):
         inner = Company.objects.filter(num_employees=OuterRef('ceo__salary') + 2)
         outer = Company.objects.filter(pk__in=Subquery(inner.values('pk')))
         self.assertEqual(outer.get().name, 'Test GmbH')
+
+    def test_annotation_with_outerref(self):
+        gmbh_salary = Company.objects.annotate(
+            max_ceo_salary_raise=Subquery(
+                Company.objects.annotate(
+                    salary_raise=OuterRef('num_employees') + F('num_employees'),
+                ).order_by('-salary_raise').values('salary_raise')[:1],
+                output_field=models.IntegerField(),
+            ),
+        ).get(pk=self.gmbh.pk)
+        self.assertEqual(gmbh_salary.max_ceo_salary_raise, 2332)
 
     def test_pickle_expression(self):
         expr = Value(1, output_field=models.IntegerField())

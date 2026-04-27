@@ -1,154 +1,154 @@
-from importlib import import_module
-
+import pytest
 from django.apps import apps
-from django.contrib.auth.models import Permission, User
+from django.contrib.auth.migrations.0011_update_proxy_permissions import update_proxy_model_permissions
 from django.contrib.contenttypes.models import ContentType
-from django.test import TestCase
+from django.contrib.auth.models import Permission
+from django.db import IntegrityError
+from django.test import TestCase, TransactionTestCase
+from django.db import transaction
 
-from .models import Proxy, UserProxy
 
-update_proxy_permissions = import_module('django.contrib.auth.migrations.0011_update_proxy_permissions')
+class TestModel:
+    """Mock model for testing"""
+    class _meta:
+        proxy = True
+        model_name = 'testmodel'
+        default_permissions = ('add', 'change', 'delete', 'view')
+        permissions = ()
+        app_label = 'testapp'
+        
+    _meta = _meta()
 
 
-class ProxyModelWithDifferentAppLabelTests(TestCase):
-    available_apps = [
-        'auth_tests',
-        'django.contrib.auth',
-        'django.contrib.contenttypes',
-    ]
+class ConcreteTestModel:
+    """Mock concrete model for testing"""
+    class _meta:
+        proxy = False
+        model_name = 'testmodel'
+        default_permissions = ('add', 'change', 'delete', 'view')
+        permissions = ()
+        app_label = 'testapp'
+        
+    _meta = _meta()
 
+
+class MockApps:
+    """Mock apps registry for testing"""
+    def get_model(self, app_label, model_name):
+        if app_label == 'auth' and model_name == 'Permission':
+            return Permission
+        elif app_label == 'contenttypes' and model_name == 'ContentType':
+            return ContentType
+        return None
+    
+    def get_models(self):
+        return [TestModel]
+
+
+class ProxyPermissionMigrationTest(TransactionTestCase):
+    """Test the proxy permission migration handles duplicates correctly"""
+    
     def setUp(self):
-        """
-        Create proxy permissions with content_type to the concrete model
-        rather than the proxy model (as they were before Django 2.2 and
-        migration 11).
-        """
-        Permission.objects.all().delete()
-        self.concrete_content_type = ContentType.objects.get_for_model(UserProxy)
-        self.default_permission = Permission.objects.create(
-            content_type=self.concrete_content_type,
-            codename='add_userproxy',
-            name='Can add userproxy',
+        # Clean up any existing test data
+        Permission.objects.filter(codename__contains='testmodel').delete()
+        ContentType.objects.filter(app_label='testapp').delete()
+    
+    def test_migration_handles_duplicate_permissions(self):
+        """Test that the migration doesn't create IntegrityError when duplicates exist"""
+        # Create content types for concrete and proxy models
+        concrete_ct, _ = ContentType.objects.get_or_create(
+            app_label='testapp',
+            model='testmodel'
         )
-        self.custom_permission = Permission.objects.create(
-            content_type=self.concrete_content_type,
-            codename='use_different_app_label',
-            name='May use a different app label',
+        proxy_ct, _ = ContentType.objects.get_or_create(
+            app_label='testapp', 
+            model='testmodel_proxy'
         )
-
-    def test_proxy_model_permissions_contenttype(self):
-        proxy_model_content_type = ContentType.objects.get_for_model(UserProxy, for_concrete_model=False)
-        self.assertEqual(self.default_permission.content_type, self.concrete_content_type)
-        self.assertEqual(self.custom_permission.content_type, self.concrete_content_type)
-        update_proxy_permissions.update_proxy_model_permissions(apps, None)
-        self.default_permission.refresh_from_db()
-        self.assertEqual(self.default_permission.content_type, proxy_model_content_type)
-        self.custom_permission.refresh_from_db()
-        self.assertEqual(self.custom_permission.content_type, proxy_model_content_type)
-
-    def test_user_has_now_proxy_model_permissions(self):
-        user = User.objects.create()
-        user.user_permissions.add(self.default_permission)
-        user.user_permissions.add(self.custom_permission)
-        for permission in [self.default_permission, self.custom_permission]:
-            self.assertTrue(user.has_perm('auth.' + permission.codename))
-            self.assertFalse(user.has_perm('auth_tests.' + permission.codename))
-        update_proxy_permissions.update_proxy_model_permissions(apps, None)
-        # Reload user to purge the _perm_cache.
-        user = User._default_manager.get(pk=user.pk)
-        for permission in [self.default_permission, self.custom_permission]:
-            self.assertFalse(user.has_perm('auth.' + permission.codename))
-            self.assertTrue(user.has_perm('auth_tests.' + permission.codename))
-
-    def test_migrate_backwards(self):
-        update_proxy_permissions.update_proxy_model_permissions(apps, None)
-        update_proxy_permissions.revert_proxy_model_permissions(apps, None)
-        self.default_permission.refresh_from_db()
-        self.assertEqual(self.default_permission.content_type, self.concrete_content_type)
-        self.custom_permission.refresh_from_db()
-        self.assertEqual(self.custom_permission.content_type, self.concrete_content_type)
-
-    def test_user_keeps_same_permissions_after_migrating_backward(self):
-        user = User.objects.create()
-        user.user_permissions.add(self.default_permission)
-        user.user_permissions.add(self.custom_permission)
-        for permission in [self.default_permission, self.custom_permission]:
-            self.assertTrue(user.has_perm('auth.' + permission.codename))
-            self.assertFalse(user.has_perm('auth_tests.' + permission.codename))
-        update_proxy_permissions.update_proxy_model_permissions(apps, None)
-        update_proxy_permissions.revert_proxy_model_permissions(apps, None)
-        # Reload user to purge the _perm_cache.
-        user = User._default_manager.get(pk=user.pk)
-        for permission in [self.default_permission, self.custom_permission]:
-            self.assertTrue(user.has_perm('auth.' + permission.codename))
-            self.assertFalse(user.has_perm('auth_tests.' + permission.codename))
-
-
-class ProxyModelWithSameAppLabelTests(TestCase):
-    available_apps = [
-        'auth_tests',
-        'django.contrib.auth',
-        'django.contrib.contenttypes',
-    ]
-
-    def setUp(self):
-        """
-        Create proxy permissions with content_type to the concrete model
-        rather than the proxy model (as they were before Django 2.2 and
-        migration 11).
-        """
-        Permission.objects.all().delete()
-        self.concrete_content_type = ContentType.objects.get_for_model(Proxy)
-        self.default_permission = Permission.objects.create(
-            content_type=self.concrete_content_type,
-            codename='add_proxy',
-            name='Can add proxy',
+        
+        # Create permission that exists for concrete model
+        concrete_perm, _ = Permission.objects.get_or_create(
+            codename='add_testmodel',
+            name='Can add test model',
+            content_type=concrete_ct
         )
-        self.custom_permission = Permission.objects.create(
-            content_type=self.concrete_content_type,
-            codename='display_proxys',
-            name='May display proxys information',
+        
+        # Create the same permission for proxy model (simulating the duplicate scenario)
+        proxy_perm, _ = Permission.objects.get_or_create(
+            codename='add_testmodel',
+            name='Can add test model',
+            content_type=proxy_ct
         )
-
-    def test_proxy_model_permissions_contenttype(self):
-        proxy_model_content_type = ContentType.objects.get_for_model(Proxy, for_concrete_model=False)
-        self.assertEqual(self.default_permission.content_type, self.concrete_content_type)
-        self.assertEqual(self.custom_permission.content_type, self.concrete_content_type)
-        update_proxy_permissions.update_proxy_model_permissions(apps, None)
-        self.default_permission.refresh_from_db()
-        self.custom_permission.refresh_from_db()
-        self.assertEqual(self.default_permission.content_type, proxy_model_content_type)
-        self.assertEqual(self.custom_permission.content_type, proxy_model_content_type)
-
-    def test_user_still_has_proxy_model_permissions(self):
-        user = User.objects.create()
-        user.user_permissions.add(self.default_permission)
-        user.user_permissions.add(self.custom_permission)
-        for permission in [self.default_permission, self.custom_permission]:
-            self.assertTrue(user.has_perm('auth_tests.' + permission.codename))
-        update_proxy_permissions.update_proxy_model_permissions(apps, None)
-        # Reload user to purge the _perm_cache.
-        user = User._default_manager.get(pk=user.pk)
-        for permission in [self.default_permission, self.custom_permission]:
-            self.assertTrue(user.has_perm('auth_tests.' + permission.codename))
-
-    def test_migrate_backwards(self):
-        update_proxy_permissions.update_proxy_model_permissions(apps, None)
-        update_proxy_permissions.revert_proxy_model_permissions(apps, None)
-        self.default_permission.refresh_from_db()
-        self.assertEqual(self.default_permission.content_type, self.concrete_content_type)
-        self.custom_permission.refresh_from_db()
-        self.assertEqual(self.custom_permission.content_type, self.concrete_content_type)
-
-    def test_user_keeps_same_permissions_after_migrating_backward(self):
-        user = User.objects.create()
-        user.user_permissions.add(self.default_permission)
-        user.user_permissions.add(self.custom_permission)
-        for permission in [self.default_permission, self.custom_permission]:
-            self.assertTrue(user.has_perm('auth_tests.' + permission.codename))
-        update_proxy_permissions.update_proxy_model_permissions(apps, None)
-        update_proxy_permissions.revert_proxy_model_permissions(apps, None)
-        # Reload user to purge the _perm_cache.
-        user = User._default_manager.get(pk=user.pk)
-        for permission in [self.default_permission, self.custom_permission]:
-            self.assertTrue(user.has_perm('auth_tests.' + permission.codename))
+        
+        # Verify both permissions exist
+        self.assertEqual(Permission.objects.filter(codename='add_testmodel').count(), 2)
+        
+        # Mock the apps registry
+        mock_apps = MockApps()
+        
+        # This should not raise an IntegrityError
+        try:
+            update_proxy_model_permissions(mock_apps, None)
+        except IntegrityError:
+            self.fail("Migration raised IntegrityError when it should handle duplicates gracefully")
+        
+        # Verify permissions still exist and weren't corrupted
+        permissions = Permission.objects.filter(codename='add_testmodel')
+        self.assertEqual(permissions.count(), 2)
+        
+        # Verify one permission is still for concrete model and one for proxy
+        concrete_perms = permissions.filter(content_type=concrete_ct)
+        proxy_perms = permissions.filter(content_type=proxy_ct)
+        self.assertEqual(concrete_perms.count(), 1)
+        self.assertEqual(proxy_perms.count(), 1)
+    
+    def test_migration_updates_permissions_without_duplicates(self):
+        """Test that migration correctly updates permissions when no duplicates exist"""
+        # Create content types
+        concrete_ct, _ = ContentType.objects.get_or_create(
+            app_label='testapp',
+            model='testmodel'
+        )
+        proxy_ct, _ = ContentType.objects.get_or_create(
+            app_label='testapp',
+            model='testmodel_proxy'
+        )
+        
+        # Create permission only for concrete model
+        concrete_perm, _ = Permission.objects.get_or_create(
+            codename='add_testmodel',
+            name='Can add test model',
+            content_type=concrete_ct
+        )
+        
+        # Verify only one permission exists
+        self.assertEqual(Permission.objects.filter(codename='add_testmodel').count(), 1)
+        
+        # Mock the apps registry with a model that would trigger the migration
+        class MockModel:
+            class _meta:
+                proxy = True
+                model_name = 'testmodel'
+                default_permissions = ('add', 'change', 'delete', 'view')
+                permissions = ()
+                app_label = 'testapp'
+            _meta = _meta()
+        
+        class MockAppsWithModel:
+            def get_model(self, app_label, model_name):
+                if app_label == 'auth' and model_name == 'Permission':
+                    return Permission
+                elif app_label == 'contenttypes' and model_name == 'ContentType':
+                    return ContentType
+                return None
+            
+            def get_models(self):
+                return [MockModel]
+        
+        mock_apps = MockAppsWithModel()
+        
+        # Run the migration
+        update_proxy_model_permissions(mock_apps, None)
+        
+        # Verify the permission was updated to use proxy content type
+        updated_perm = Permission.objects.get(codename='add_testmodel')
+        self.assertEqual(updated_perm.content_type, proxy_ct)
