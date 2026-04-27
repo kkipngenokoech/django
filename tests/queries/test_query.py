@@ -23,6 +23,21 @@ class TestQuery(SimpleTestCase):
         self.assertEqual(lookup.rhs, 2)
         self.assertEqual(lookup.lhs.target, Author._meta.get_field('num'))
 
+    def test_simplecol_query(self):
+        query = Query(Author)
+        where = query.build_where(Q(num__gt=2, name__isnull=False) | Q(num__lt=F('id')))
+
+        name_isnull_lookup, num_gt_lookup = where.children[0].children
+        self.assertIsInstance(num_gt_lookup, GreaterThan)
+        self.assertIsInstance(num_gt_lookup.lhs, SimpleCol)
+        self.assertIsInstance(name_isnull_lookup, IsNull)
+        self.assertIsInstance(name_isnull_lookup.lhs, SimpleCol)
+
+        num_lt_lookup = where.children[1]
+        self.assertIsInstance(num_lt_lookup, LessThan)
+        self.assertIsInstance(num_lt_lookup.rhs, SimpleCol)
+        self.assertIsInstance(num_lt_lookup.lhs, SimpleCol)
+
     def test_complex_query(self):
         query = Query(Author)
         where = query.build_where(Q(num__gt=2) | Q(num__lt=0))
@@ -91,3 +106,10 @@ class TestQuery(SimpleTestCase):
         self.assertIsInstance(b_isnull, RelatedIsNull)
         self.assertIsInstance(b_isnull.lhs, SimpleCol)
         self.assertEqual(b_isnull.lhs.target, ObjectC._meta.get_field('objectb'))
+
+    def test_clone_select_related(self):
+        query = Query(Item)
+        query.add_select_related(['creator'])
+        clone = query.clone()
+        clone.add_select_related(['note', 'creator__extra'])
+        self.assertEqual(query.select_related, {'creator': {}})
