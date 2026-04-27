@@ -239,6 +239,7 @@ class BaseDatabaseFeatures:
 
     # Does the backend support window expressions (expression OVER (...))?
     supports_over_clause = False
+    supports_frame_range_fixed_distance = False
 
     # Does the backend support CAST with precision?
     supports_cast_with_precision = True
@@ -279,6 +280,10 @@ class BaseDatabaseFeatures:
     # Does the backend support partial indexes (CREATE INDEX ... WHERE ...)?
     supports_partial_indexes = True
     supports_functions_in_partial_indexes = True
+
+    # Does the database allow more than one constraint or index on the same
+    # field(s)?
+    allows_multiple_constraints_on_same_fields = True
 
     def __init__(self, connection):
         self.connection = connection
