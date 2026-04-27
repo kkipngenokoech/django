@@ -259,3 +259,29 @@ class UsernameValidatorsTests(SimpleTestCase):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(ValidationError):
                     v(invalid)
+
+    def test_unicode_validator_rejects_newlines(self):
+        """Test that UnicodeUsernameValidator rejects usernames with newlines."""
+        v = validators.UnicodeUsernameValidator()
+        invalid_usernames_with_newlines = [
+            'validuser\n',  # trailing newline
+            '\nvaliduser',  # leading newline
+            'valid\nuser',  # newline in middle
+        ]
+        for invalid in invalid_usernames_with_newlines:
+            with self.subTest(invalid=repr(invalid)):
+                with self.assertRaises(ValidationError):
+                    v(invalid)
+
+    def test_ascii_validator_rejects_newlines(self):
+        """Test that ASCIIUsernameValidator rejects usernames with newlines."""
+        v = validators.ASCIIUsernameValidator()
+        invalid_usernames_with_newlines = [
+            'validuser\n',  # trailing newline
+            '\nvaliduser',  # leading newline
+            'valid\nuser',  # newline in middle
+        ]
+        for invalid in invalid_usernames_with_newlines:
+            with self.subTest(invalid=repr(invalid)):
+                with self.assertRaises(ValidationError):
+                    v(invalid)
