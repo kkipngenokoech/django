@@ -100,47 +100,18 @@ class HttpResponseBase:
 
     __bytes__ = serialize_headers
 
-    @property
-    def _content_type_for_repr(self):
-        return ', "%s"' % self['Content-Type'] if 'Content-Type' in self else ''
-
-    def _convert_to_charset(self, value, charset, mime_encode=False):
-        """
-        Convert headers key/value to ascii/latin-1 native strings.
-
-        `charset` must be 'ascii' or 'latin-1'. If `mime_encode` is True and
-        `value` can't be represented in the given charset, apply MIME-encoding.
-        """
-        if not isinstance(value, (bytes, str)):
-            value = str(value)
-        if ((isinstance(value, bytes) and (b'\n' in value or b'\r' in value)) or
-                isinstance(value, str) and ('\n' in value or '\r' in value)):
-            raise BadHeaderError("Header values can't contain newlines (got %r)" % value)
-        try:
-            if isinstance(value, str):
-                # Ensure string is valid in given charset
-                value.encode(charset)
-            else:
-                # Convert bytestring using given charset
-                value = value.decode(charset)
-        except UnicodeError as e:
-            if mime_encode:
-                value = Header(value, 'utf-8', maxlinelen=sys.maxsize).encode()
-            else:
-                e.reason += ', HTTP response headers must be in %s format' % charset
-                raise
-        return value
-
     def __setitem__(self, header, value):
-        header = self._convert_to_charset(header, 'ascii')
-        value = self._convert_to_charset(value, 'latin-1', mime_encode=True)
-        self._headers[header.lower()] = (header, value)
+        header = header.lower()
+        self._headers[header] = (header, value)
 
     def __delitem__(self, header):
         self._headers.pop(header.lower(), False)
 
     def __getitem__(self, header):
         return self._headers[header.lower()][1]
+
+    def get(self, header, alternate=None):
+        return self._headers.get(header.lower(), (None, alternate))[1]
 
     def has_header(self, header):
         """Case-insensitive check for a header."""
@@ -151,8 +122,10 @@ class HttpResponseBase:
     def items(self):
         return self._headers.values()
 
-    def get(self, header, alternate=None):
-        return self._headers.get(header.lower(), (None, alternate))[1]
+    def setdefault(self, key, value):
+        """Set a header unless it has already been set."""
+        if key not in self:
+            self[key] = value
 
     def set_cookie(self, key, value='', max_age=None, expires=None, path='/',
                    domain=None, secure=False, httponly=False, samesite=None):
@@ -163,10 +136,15 @@ class HttpResponseBase:
         - a string in the correct format,
         - a naive ``datetime.datetime`` object in UTC,
         - an aware ``datetime.datetime`` object in any time zone.
-        If it is a ``datetime.datetime`` object then calculate ``max_age``.
+        When it is a ``datetime.datetime`` object, ``max_age`` will be calculated.
         """
         self.cookies[key] = value
-        if expires is not None:
+        if max_age is not None:
+            self.cookies[key]['max-age'] = max_age
+            # IE requires expires, so set it if hasn't been already.
+            if not expires:
+                expires = datetime.datetime.utcnow() + datetime.timedelta(seconds=max_age)
+        if expires:
             if isinstance(expires, datetime.datetime):
                 if timezone.is_aware(expires):
                     expires = timezone.make_naive(expires, timezone.utc)
@@ -176,17 +154,9 @@ class HttpResponseBase:
                 # then the date string).
                 delta = delta + datetime.timedelta(seconds=1)
                 # Just set max_age - the max_age logic will set expires.
-                expires = None
-                max_age = max(0, delta.days * 86400 + delta.seconds)
-            else:
-                self.cookies[key]['expires'] = expires
-        else:
-            self.cookies[key]['expires'] = ''
-        if max_age is not None:
-            self.cookies[key]['max-age'] = max_age
-            # IE requires expires, so set it if hasn't been already.
-            if not expires:
-                self.cookies[key]['expires'] = http_date(time.time() + max_age)
+                expires = datetime.datetime.utcnow() + delta
+            expires = http_date(expires.timestamp())
+            self.cookies[key]['expires'] = expires
         if path is not None:
             self.cookies[key]['path'] = path
         if domain is not None:
@@ -196,26 +166,17 @@ class HttpResponseBase:
         if httponly:
             self.cookies[key]['httponly'] = True
         if samesite:
-            if samesite.lower() not in ('lax', 'strict'):
-                raise ValueError('samesite must be "lax" or "strict".')
+            if samesite.lower() not in ('lax', 'none', 'strict'):
+                raise ValueError('samesite must be "lax", "none", or "strict".')
             self.cookies[key]['samesite'] = samesite
 
-    def setdefault(self, key, value):
-        """Set a header unless it has already been set."""
-        if key not in self:
-            self[key] = value
-
-    def set_signed_cookie(self, key, value, salt='', **kwargs):
-        value = signing.get_cookie_signer(salt=key + salt).sign(value)
-        return self.set_cookie(key, value, **kwargs)
-
-    def delete_cookie(self, key, path='/', domain=None):
+    def delete_cookie(self, key, path='/', domain=None, samesite=None):
         # Most browsers ignore the Set-Cookie header if the cookie name starts
         # with __Host- or __Secure- and the cookie doesn't use the secure flag.
         secure = key.startswith(('__Secure-', '__Host-'))
         self.set_cookie(
             key, max_age=0, path=path, domain=domain, secure=secure,
-            expires='Thu, 01 Jan 1970 00:00:00 GMT',
+            expires='Thu, 01 Jan 1970 00:00:00 GMT', samesite=samesite,
         )
 
     # Common methods used by subclasses
@@ -224,68 +185,31 @@ class HttpResponseBase:
         """Turn a value into a bytestring encoded in the output charset."""
         # Per PEP 3333, this response body must be bytes. To avoid returning
         # an instance of a subclass, this function returns `bytes(value)`.
-        # This doesn't make a copy when `value` already contains bytes.
-
-        # Handle string types -- we can't rely on force_bytes here because:
-        # - Python attempts str conversion first
-        # - when self._charset != 'utf-8' it re-encodes the content
+        # This doesn't make a copy when `value` already is a `bytes` instance.
         if isinstance(value, bytes):
             return bytes(value)
+        if isinstance(value, memoryview):
+            return bytes(value)
         if isinstance(value, str):
-            return bytes(value.encode(self.charset))
-        # Handle non-string types.
+            return value.encode(self.charset)
         return str(value).encode(self.charset)
 
-    # These methods partially implement the file-like object interface.
-    # See https://docs.python.org/library/io.html#io.IOBase
-
-    # The WSGI server must call this method upon completion of the request.
-    # See http://blog.dscpl.com.au/2012/10/obligations-for-calling-close-on.html
-    def close(self):
-        for closable in self._closable_objects:
-            try:
-                closable.close()
-            except Exception:
-                pass
-        self.closed = True
-        signals.request_finished.send(sender=self._handler_class)
-
-    def write(self, content):
-        raise OSError('This %s instance is not writable' % self.__class__.__name__)
-
-    def flush(self):
-        pass
-
-    def tell(self):
-        raise OSError('This %s instance cannot tell its position' % self.__class__.__name__)
-
-    # These methods partially implement a stream-like object interface.
-    # See https://docs.python.org/library/io.html#io.IOBase
-
-    def readable(self):
-        return False
-
-    def seekable(self):
-        return False
-
-    def writable(self):
-        return False
-
-    def writelines(self, lines):
-        raise OSError('This %s instance is not writable' % self.__class__.__name__)
+    def __iter__(self):
+        return iter(self._container)
 
 
 class HttpResponse(HttpResponseBase):
     """
     An HTTP response class with a string as content.
 
-    This content that can be read, appended to, or replaced.
+    This content can be read, appended to, and replaced.
     """
 
     streaming = False
 
-    def __init__(self, content=b'', *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, content=b'', content_type=None, status=None,
+                 reason=None, charset=None):
+        super().__init__(content_type, status, reason, charset)
         # Content is a bytestring. See the `content` property methods.
         self.content = content
 
@@ -293,7 +217,7 @@ class HttpResponse(HttpResponseBase):
         return '<%(cls)s status_code=%(status_code)d%(content_type)s>' % {
             'cls': self.__class__.__name__,
             'status_code': self.status_code,
-            'content_type': self._content_type_for_repr,
+            'content_type': (', "%s"' % self['Content-Type']) if self.get('Content-Type') else '',
         }
 
     def serialize(self):
@@ -309,7 +233,7 @@ class HttpResponse(HttpResponseBase):
     @content.setter
     def content(self, value):
         # Consume iterators upon assignment to allow repeated iteration.
-        if hasattr(value, '__iter__') and not isinstance(value, (bytes, str)):
+        if hasattr(value, '__iter__') and not isinstance(value, (bytes, str, memoryview)):
             content = b''.join(self.make_bytes(chunk) for chunk in value)
             if hasattr(value, 'close'):
                 try:
@@ -345,18 +269,24 @@ class StreamingHttpResponse(HttpResponseBase):
     """
     A streaming HTTP response class with an iterator as content.
 
-    This should only be iterated once, when the response is streamed to the
-    client. However, it can be appended to or replaced with a new iterator
-    that wraps the original content (or yields entirely new content).
+    This should only be used if you know the size of the content ahead of
+    time or if the content is too large to hold in memory.
     """
-
     streaming = True
 
-    def __init__(self, streaming_content=(), *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, streaming_content=(), content_type=None, status=None,
+                 reason=None, charset=None):
+        super().__init__(content_type, status, reason, charset)
         # `streaming_content` should be an iterable of bytestrings.
         # See the `streaming_content` property methods.
         self.streaming_content = streaming_content
+
+    def __repr__(self):
+        return '<%(cls)s status_code=%(status_code)d%(content_type)s>' % {
+            'cls': self.__class__.__name__,
+            'status_code': self.status_code,
+            'content_type': (', "%s"' % self['Content-Type']) if self.get('Content-Type') else '',
+        }
 
     @property
     def content(self):
@@ -392,63 +322,46 @@ class FileResponse(StreamingHttpResponse):
     """
     block_size = 4096
 
-    def __init__(self, *args, as_attachment=False, filename='', **kwargs):
-        self.as_attachment = as_attachment
-        self.filename = filename
+    def __init__(self, *args, **kwargs):
+        self.file_to_stream = None
+        self.as_attachment = kwargs.pop('as_attachment', False)
+        self.filename = kwargs.pop('filename', '')
         super().__init__(*args, **kwargs)
 
     def _set_streaming_content(self, value):
-        if not hasattr(value, 'read'):
+        if hasattr(value, 'read'):
+            self.file_to_stream = value
+            filelike = value
+        else:
             self.file_to_stream = None
-            return super()._set_streaming_content(value)
-
-        self.file_to_stream = filelike = value
-        if hasattr(filelike, 'close'):
-            self._closable_objects.append(filelike)
-        value = iter(lambda: filelike.read(self.block_size), b'')
-        self.set_headers(filelike)
+            filelike = None
         super()._set_streaming_content(value)
+        if self.file_to_stream is not None:
+            # Add to closable objects before setting the iterator, since
+            # _set_streaming_content() will consume the iterator on Django 2.0.
+            self._closable_objects.append(filelike)
 
-    def set_headers(self, filelike):
-        """
-        Set some common response headers (Content-Length, Content-Type, and
-        Content-Disposition) based on the `filelike` response content.
-        """
-        encoding_map = {
-            'bzip2': 'application/x-bzip',
-            'gzip': 'application/gzip',
-            'xz': 'application/x-xz',
-        }
-        filename = getattr(filelike, 'name', None)
-        filename = filename if (isinstance(filename, str) and filename) else self.filename
-        if os.path.isabs(filename):
-            self['Content-Length'] = os.path.getsize(filelike.name)
-        elif hasattr(filelike, 'getbuffer'):
-            self['Content-Length'] = filelike.getbuffer().nbytes
+    @property
+    def filename(self):
+        return self._filename
 
-        if self.get('Content-Type', '').startswith('text/html'):
-            if filename:
-                content_type, encoding = mimetypes.guess_type(filename)
-                # Encoding isn't set to prevent browsers from automatically
-                # uncompressing files.
-                content_type = encoding_map.get(encoding, content_type)
-                self['Content-Type'] = content_type or 'application/octet-stream'
-            else:
-                self['Content-Type'] = 'application/octet-stream'
-
-        if self.as_attachment:
-            filename = self.filename or os.path.basename(filename)
-            if filename:
-                try:
-                    filename.encode('ascii')
-                    file_expr = 'filename="{}"'.format(filename)
-                except UnicodeEncodeError:
-                    file_expr = "filename*=utf-8''{}".format(quote(filename))
-                self['Content-Disposition'] = 'attachment; {}'.format(file_expr)
+    @filename.setter
+    def filename(self, filename):
+        self._filename = filename
+        if filename:
+            disposition = 'attachment' if self.as_attachment else 'inline'
+            try:
+                filename.encode('ascii')
+                file_expr = 'filename="{}"'.format(filename)
+            except UnicodeEncodeError:
+                file_expr = "filename*=utf-8''{}".format(quote(filename))
+            self['Content-Disposition'] = '{}; {}'.format(disposition, file_expr)
+        elif self.get('Content-Disposition'):
+            del self['Content-Disposition']
 
 
-class HttpResponseRedirectBase(HttpResponse):
-    allowed_schemes = ['http', 'https', 'ftp']
+class HttpResponseRedirect(HttpResponse):
+    status_code = 302
 
     def __init__(self, redirect_to, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -457,22 +370,10 @@ class HttpResponseRedirectBase(HttpResponse):
         if parsed.scheme and parsed.scheme not in self.allowed_schemes:
             raise DisallowedRedirect("Unsafe redirect to URL with protocol '%s'" % parsed.scheme)
 
-    url = property(lambda self: self['Location'])
-
-    def __repr__(self):
-        return '<%(cls)s status_code=%(status_code)d%(content_type)s, url="%(url)s">' % {
-            'cls': self.__class__.__name__,
-            'status_code': self.status_code,
-            'content_type': self._content_type_for_repr,
-            'url': self.url,
-        }
+    allowed_schemes = ['http', 'https', 'ftp']
 
 
-class HttpResponseRedirect(HttpResponseRedirectBase):
-    status_code = 302
-
-
-class HttpResponsePermanentRedirect(HttpResponseRedirectBase):
+class HttpResponsePermanentRedirect(HttpResponseRedirect):
     status_code = 301
 
 
@@ -508,14 +409,6 @@ class HttpResponseNotAllowed(HttpResponse):
     def __init__(self, permitted_methods, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self['Allow'] = ', '.join(permitted_methods)
-
-    def __repr__(self):
-        return '<%(cls)s [%(methods)s] status_code=%(status_code)d%(content_type)s>' % {
-            'cls': self.__class__.__name__,
-            'status_code': self.status_code,
-            'content_type': self._content_type_for_repr,
-            'methods': self['Allow'],
-        }
 
 
 class HttpResponseGone(HttpResponse):

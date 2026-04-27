@@ -754,8 +754,9 @@ subclass::
 
     * Elements of ``list_display`` can also be properties. Please note however,
       that due to the way properties work in Python, setting
-      ``short_description`` on a property is only possible when using the
-      ``property()`` function and **not** with the ``@property`` decorator.
+      ``short_description`` or ``admin_order_field`` on a property is only
+      possible when using the ``property()`` function and **not** with the
+      ``@property`` decorator.
 
       For example::
 
@@ -766,6 +767,7 @@ subclass::
               def my_property(self):
                   return self.first_name + ' ' + self.last_name
               my_property.short_description = "Full name of the person"
+              my_property.admin_order_field = 'last_name'
 
               full_name = property(my_property)
 
@@ -1036,6 +1038,17 @@ subclass::
 
     If you need to specify a dynamic order (for example depending on user or
     language) you can implement a :meth:`~ModelAdmin.get_ordering` method.
+
+    .. admonition:: Performance considerations with ordering and sorting
+
+        To ensure a deterministic ordering of results, the changelist adds
+        ``pk`` to the ordering if it can't find a single or unique together set
+        of fields that provide total ordering.
+
+        For example, if the default ordering is by a non-unique ``name`` field,
+        then the changelist is sorted by ``name`` and ``pk``. This could
+        perform poorly if you have a lot of rows and don't have an index on
+        ``name`` and ``pk``.
 
 .. attribute:: ModelAdmin.paginator
 
