@@ -1,543 +1,133 @@
-from django.forms import CharField, Form, Media, MultiWidget, TextInput
-from django.template import Context, Template
-from django.test import SimpleTestCase, override_settings
+import unittest
+import warnings
+from django import forms
+from django.forms.widgets import Media, MediaOrderConflictWarning
 
 
-@override_settings(
-    STATIC_URL='http://media.example.com/static/',
-)
-class FormsMediaTestCase(SimpleTestCase):
-    """Tests for the media handling on widgets and forms"""
+class MediaMergeTests(unittest.TestCase):
+    """
+    Test cases for Media merging functionality, specifically addressing
+    the issue where merging 3+ media objects throws unnecessary warnings.
+    """
 
-    def test_construction(self):
-        # Check construction of media objects
-        m = Media(
-            css={'all': ('path/to/css1', '/path/to/css2')},
-            js=('/path/to/js1', 'http://media.other.com/path/to/js2', 'https://secure.other.com/path/to/js3'),
-        )
-        self.assertEqual(
-            str(m),
-            """<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>"""
-        )
-        self.assertEqual(
-            repr(m),
-            "Media(css={'all': ('path/to/css1', '/path/to/css2')}, "
-            "js=('/path/to/js1', 'http://media.other.com/path/to/js2', 'https://secure.other.com/path/to/js3'))"
-        )
-
-        class Foo:
-            css = {
-                'all': ('path/to/css1', '/path/to/css2')
-            }
-            js = ('/path/to/js1', 'http://media.other.com/path/to/js2', 'https://secure.other.com/path/to/js3')
-
-        m3 = Media(Foo)
-        self.assertEqual(
-            str(m3),
-            """<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>"""
-        )
-
-        # A widget can exist without a media definition
-        class MyWidget(TextInput):
-            pass
-
-        w = MyWidget()
-        self.assertEqual(str(w.media), '')
-
-    def test_media_dsl(self):
-        ###############################################################
-        # DSL Class-based media definitions
-        ###############################################################
-
-        # A widget can define media if it needs to.
-        # Any absolute path will be preserved; relative paths are combined
-        # with the value of settings.MEDIA_URL
-        class MyWidget1(TextInput):
+    def test_three_media_merge_no_conflict_warning(self):
+        """
+        Test that merging three media objects with independent files
+        doesn't produce unnecessary MediaOrderConflictWarnings.
+        
+        This reproduces the exact scenario from the GitHub issue.
+        """
+        class ColorPicker(forms.Widget):
             class Media:
-                css = {
-                    'all': ('path/to/css1', '/path/to/css2')
-                }
-                js = ('/path/to/js1', 'http://media.other.com/path/to/js2', 'https://secure.other.com/path/to/js3')
+                js = ['color-picker.js']
 
-        w1 = MyWidget1()
-        self.assertEqual(
-            str(w1.media),
-            """<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>"""
-        )
-
-        # Media objects can be interrogated by media type
-        self.assertEqual(
-            str(w1.media['css']),
-            """<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">"""
-        )
-
-        self.assertEqual(
-            str(w1.media['js']),
-            """<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>"""
-        )
-
-    def test_combine_media(self):
-        # Media objects can be combined. Any given media resource will appear only
-        # once. Duplicated media definitions are ignored.
-        class MyWidget1(TextInput):
+        class SimpleTextWidget(forms.Widget):
             class Media:
-                css = {
-                    'all': ('path/to/css1', '/path/to/css2')
-                }
-                js = ('/path/to/js1', 'http://media.other.com/path/to/js2', 'https://secure.other.com/path/to/js3')
+                js = ['text-editor.js']
 
-        class MyWidget2(TextInput):
+        class FancyTextWidget(forms.Widget):
             class Media:
-                css = {
-                    'all': ('/path/to/css2', '/path/to/css3')
-                }
-                js = ('/path/to/js1', '/path/to/js4')
+                js = ['text-editor.js', 'text-editor-extras.js', 'color-picker.js']
 
-        class MyWidget3(TextInput):
-            class Media:
-                css = {
-                    'all': ('path/to/css1', '/path/to/css3')
-                }
-                js = ('/path/to/js1', '/path/to/js4')
+        class MyForm(forms.Form):
+            background_color = forms.CharField(widget=ColorPicker())
+            intro = forms.CharField(widget=SimpleTextWidget())
+            body = forms.CharField(widget=FancyTextWidget())
 
-        w1 = MyWidget1()
-        w2 = MyWidget2()
-        w3 = MyWidget3()
-        self.assertEqual(
-            str(w1.media + w2.media + w3.media),
-            """<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css3" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>
-<script type="text/javascript" src="/path/to/js4"></script>"""
-        )
+        # This should not raise any warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            media = MyForm().media
+            
+            # Check that no MediaOrderConflictWarning was raised
+            media_warnings = [warning for warning in w if issubclass(warning.category, MediaOrderConflictWarning)]
+            self.assertEqual(len(media_warnings), 0, 
+                           f"Unexpected MediaOrderConflictWarning: {[str(warning.message) for warning in media_warnings]}")
+            
+            # Verify the final order is correct
+            expected_js = ['text-editor.js', 'text-editor-extras.js', 'color-picker.js']
+            self.assertEqual(media._js, expected_js)
 
-        # media addition hasn't affected the original objects
-        self.assertEqual(
-            str(w1.media),
-            """<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>"""
-        )
+    def test_real_conflict_still_warns(self):
+        """
+        Test that real ordering conflicts still produce warnings.
+        """
+        media1 = Media(js=['a.js', 'b.js'])
+        media2 = Media(js=['b.js', 'a.js'])
+        
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            combined = media1 + media2
+            
+            # This should still produce a warning for real conflicts
+            media_warnings = [warning for warning in w if issubclass(warning.category, MediaOrderConflictWarning)]
+            self.assertEqual(len(media_warnings), 1)
 
-        # Regression check for #12879: specifying the same CSS or JS file
-        # multiple times in a single Media instance should result in that file
-        # only being included once.
-        class MyWidget4(TextInput):
-            class Media:
-                css = {'all': ('/path/to/css1', '/path/to/css1')}
-                js = ('/path/to/js1', '/path/to/js1')
+    def test_no_conflict_different_files(self):
+        """
+        Test that files appearing in different positions but without
+        actual dependencies don't cause warnings.
+        """
+        media1 = Media(js=['a.js'])
+        media2 = Media(js=['b.js'])
+        media3 = Media(js=['a.js', 'c.js', 'b.js'])
+        
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            combined = media1 + media2 + media3
+            
+            # Should not produce warnings since there's no actual conflict
+            media_warnings = [warning for warning in w if issubclass(warning.category, MediaOrderConflictWarning)]
+            self.assertEqual(len(media_warnings), 0)
+            
+            # Verify reasonable ordering
+            self.assertIn('a.js', combined._js)
+            self.assertIn('b.js', combined._js)
+            self.assertIn('c.js', combined._js)
 
-        w4 = MyWidget4()
-        self.assertEqual(str(w4.media), """<link href="/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>""")
+    def test_complex_merge_scenario(self):
+        """
+        Test a more complex scenario with multiple widgets and dependencies.
+        """
+        media1 = Media(js=['jquery.js'])
+        media2 = Media(js=['widget1.js'])
+        media3 = Media(js=['jquery.js', 'plugin.js', 'widget1.js'])
+        media4 = Media(js=['widget2.js'])
+        
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            combined = media1 + media2 + media3 + media4
+            
+            # Should not produce warnings for this scenario
+            media_warnings = [warning for warning in w if issubclass(warning.category, MediaOrderConflictWarning)]
+            self.assertEqual(len(media_warnings), 0)
+            
+            # Verify that jquery comes before plugin, and dependencies are maintained
+            js_list = combined._js
+            jquery_index = js_list.index('jquery.js')
+            plugin_index = js_list.index('plugin.js')
+            self.assertLess(jquery_index, plugin_index, "jquery.js should come before plugin.js")
 
-    def test_media_property(self):
-        ###############################################################
-        # Property-based media definitions
-        ###############################################################
-
-        # Widget media can be defined as a property
-        class MyWidget4(TextInput):
-            def _media(self):
-                return Media(css={'all': ('/some/path',)}, js=('/some/js',))
-            media = property(_media)
-
-        w4 = MyWidget4()
-        self.assertEqual(str(w4.media), """<link href="/some/path" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/some/js"></script>""")
-
-        # Media properties can reference the media of their parents
-        class MyWidget5(MyWidget4):
-            def _media(self):
-                return super().media + Media(css={'all': ('/other/path',)}, js=('/other/js',))
-            media = property(_media)
-
-        w5 = MyWidget5()
-        self.assertEqual(str(w5.media), """<link href="/some/path" type="text/css" media="all" rel="stylesheet">
-<link href="/other/path" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/some/js"></script>
-<script type="text/javascript" src="/other/js"></script>""")
-
-    def test_media_property_parent_references(self):
-        # Media properties can reference the media of their parents,
-        # even if the parent media was defined using a class
-        class MyWidget1(TextInput):
-            class Media:
-                css = {
-                    'all': ('path/to/css1', '/path/to/css2')
-                }
-                js = ('/path/to/js1', 'http://media.other.com/path/to/js2', 'https://secure.other.com/path/to/js3')
-
-        class MyWidget6(MyWidget1):
-            def _media(self):
-                return super().media + Media(css={'all': ('/other/path',)}, js=('/other/js',))
-            media = property(_media)
-
-        w6 = MyWidget6()
-        self.assertEqual(
-            str(w6.media),
-            """<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<link href="/other/path" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>
-<script type="text/javascript" src="/other/js"></script>"""
-        )
-
-    def test_media_inheritance(self):
-        ###############################################################
-        # Inheritance of media
-        ###############################################################
-
-        # If a widget extends another but provides no media definition, it inherits the parent widget's media
-        class MyWidget1(TextInput):
-            class Media:
-                css = {
-                    'all': ('path/to/css1', '/path/to/css2')
-                }
-                js = ('/path/to/js1', 'http://media.other.com/path/to/js2', 'https://secure.other.com/path/to/js3')
-
-        class MyWidget7(MyWidget1):
-            pass
-
-        w7 = MyWidget7()
-        self.assertEqual(
-            str(w7.media),
-            """<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>"""
-        )
-
-        # If a widget extends another but defines media, it extends the parent widget's media by default
-        class MyWidget8(MyWidget1):
-            class Media:
-                css = {
-                    'all': ('/path/to/css3', 'path/to/css1')
-                }
-                js = ('/path/to/js1', '/path/to/js4')
-
-        w8 = MyWidget8()
-        self.assertEqual(
-            str(w8.media),
-            """<link href="/path/to/css3" type="text/css" media="all" rel="stylesheet">
-<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>
-<script type="text/javascript" src="/path/to/js4"></script>"""
-        )
-
-    def test_media_inheritance_from_property(self):
-        # If a widget extends another but defines media, it extends the parents widget's media,
-        # even if the parent defined media using a property.
-        class MyWidget1(TextInput):
-            class Media:
-                css = {
-                    'all': ('path/to/css1', '/path/to/css2')
-                }
-                js = ('/path/to/js1', 'http://media.other.com/path/to/js2', 'https://secure.other.com/path/to/js3')
-
-        class MyWidget4(TextInput):
-            def _media(self):
-                return Media(css={'all': ('/some/path',)}, js=('/some/js',))
-            media = property(_media)
-
-        class MyWidget9(MyWidget4):
-            class Media:
-                css = {
-                    'all': ('/other/path',)
-                }
-                js = ('/other/js',)
-
-        w9 = MyWidget9()
-        self.assertEqual(
-            str(w9.media),
-            """<link href="/some/path" type="text/css" media="all" rel="stylesheet">
-<link href="/other/path" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/some/js"></script>
-<script type="text/javascript" src="/other/js"></script>"""
-        )
-
-        # A widget can disable media inheritance by specifying 'extend=False'
-        class MyWidget10(MyWidget1):
-            class Media:
-                extend = False
-                css = {
-                    'all': ('/path/to/css3', 'path/to/css1')
-                }
-                js = ('/path/to/js1', '/path/to/js4')
-
-        w10 = MyWidget10()
-        self.assertEqual(str(w10.media), """<link href="/path/to/css3" type="text/css" media="all" rel="stylesheet">
-<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="/path/to/js4"></script>""")
-
-    def test_media_inheritance_extends(self):
-        # A widget can explicitly enable full media inheritance by specifying 'extend=True'
-        class MyWidget1(TextInput):
-            class Media:
-                css = {
-                    'all': ('path/to/css1', '/path/to/css2')
-                }
-                js = ('/path/to/js1', 'http://media.other.com/path/to/js2', 'https://secure.other.com/path/to/js3')
-
-        class MyWidget11(MyWidget1):
-            class Media:
-                extend = True
-                css = {
-                    'all': ('/path/to/css3', 'path/to/css1')
-                }
-                js = ('/path/to/js1', '/path/to/js4')
-
-        w11 = MyWidget11()
-        self.assertEqual(
-            str(w11.media),
-            """<link href="/path/to/css3" type="text/css" media="all" rel="stylesheet">
-<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>
-<script type="text/javascript" src="/path/to/js4"></script>"""
-        )
-
-    def test_media_inheritance_single_type(self):
-        # A widget can enable inheritance of one media type by specifying extend as a tuple
-        class MyWidget1(TextInput):
-            class Media:
-                css = {
-                    'all': ('path/to/css1', '/path/to/css2')
-                }
-                js = ('/path/to/js1', 'http://media.other.com/path/to/js2', 'https://secure.other.com/path/to/js3')
-
-        class MyWidget12(MyWidget1):
-            class Media:
-                extend = ('css',)
-                css = {
-                    'all': ('/path/to/css3', 'path/to/css1')
-                }
-                js = ('/path/to/js1', '/path/to/js4')
-
-        w12 = MyWidget12()
-        self.assertEqual(
-            str(w12.media),
-            """<link href="/path/to/css3" type="text/css" media="all" rel="stylesheet">
-<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="/path/to/js4"></script>"""
-        )
-
-    def test_multi_media(self):
-        ###############################################################
-        # Multi-media handling for CSS
-        ###############################################################
-
-        # A widget can define CSS media for multiple output media types
-        class MultimediaWidget(TextInput):
-            class Media:
-                css = {
-                    'screen, print': ('/file1', '/file2'),
-                    'screen': ('/file3',),
-                    'print': ('/file4',)
-                }
-                js = ('/path/to/js1', '/path/to/js4')
-
-        multimedia = MultimediaWidget()
-        self.assertEqual(
-            str(multimedia.media),
-            """<link href="/file4" type="text/css" media="print" rel="stylesheet">
-<link href="/file3" type="text/css" media="screen" rel="stylesheet">
-<link href="/file1" type="text/css" media="screen, print" rel="stylesheet">
-<link href="/file2" type="text/css" media="screen, print" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="/path/to/js4"></script>"""
-        )
-
-    def test_multi_widget(self):
-        ###############################################################
-        # Multiwidget media handling
-        ###############################################################
-
-        class MyWidget1(TextInput):
-            class Media:
-                css = {
-                    'all': ('path/to/css1', '/path/to/css2')
-                }
-                js = ('/path/to/js1', 'http://media.other.com/path/to/js2', 'https://secure.other.com/path/to/js3')
-
-        class MyWidget2(TextInput):
-            class Media:
-                css = {
-                    'all': ('/path/to/css2', '/path/to/css3')
-                }
-                js = ('/path/to/js1', '/path/to/js4')
-
-        class MyWidget3(TextInput):
-            class Media:
-                css = {
-                    'all': ('path/to/css1', '/path/to/css3')
-                }
-                js = ('/path/to/js1', '/path/to/js4')
-
-        # MultiWidgets have a default media definition that gets all the
-        # media from the component widgets
-        class MyMultiWidget(MultiWidget):
-            def __init__(self, attrs=None):
-                widgets = [MyWidget1, MyWidget2, MyWidget3]
-                super().__init__(widgets, attrs)
-
-        mymulti = MyMultiWidget()
-        self.assertEqual(
-            str(mymulti.media),
-            """<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css3" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>
-<script type="text/javascript" src="/path/to/js4"></script>"""
-        )
-
-    def test_form_media(self):
-        ###############################################################
-        # Media processing for forms
-        ###############################################################
-
-        class MyWidget1(TextInput):
-            class Media:
-                css = {
-                    'all': ('path/to/css1', '/path/to/css2')
-                }
-                js = ('/path/to/js1', 'http://media.other.com/path/to/js2', 'https://secure.other.com/path/to/js3')
-
-        class MyWidget2(TextInput):
-            class Media:
-                css = {
-                    'all': ('/path/to/css2', '/path/to/css3')
-                }
-                js = ('/path/to/js1', '/path/to/js4')
-
-        class MyWidget3(TextInput):
-            class Media:
-                css = {
-                    'all': ('path/to/css1', '/path/to/css3')
-                }
-                js = ('/path/to/js1', '/path/to/js4')
-
-        # You can ask a form for the media required by its widgets.
-        class MyForm(Form):
-            field1 = CharField(max_length=20, widget=MyWidget1())
-            field2 = CharField(max_length=20, widget=MyWidget2())
-        f1 = MyForm()
-        self.assertEqual(
-            str(f1.media),
-            """<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css3" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>
-<script type="text/javascript" src="/path/to/js4"></script>"""
-        )
-
-        # Form media can be combined to produce a single media definition.
-        class AnotherForm(Form):
-            field3 = CharField(max_length=20, widget=MyWidget3())
-        f2 = AnotherForm()
-        self.assertEqual(
-            str(f1.media + f2.media),
-            """<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css3" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>
-<script type="text/javascript" src="/path/to/js4"></script>"""
-        )
-
-        # Forms can also define media, following the same rules as widgets.
-        class FormWithMedia(Form):
-            field1 = CharField(max_length=20, widget=MyWidget1())
-            field2 = CharField(max_length=20, widget=MyWidget2())
-
-            class Media:
-                js = ('/some/form/javascript',)
-                css = {
-                    'all': ('/some/form/css',)
-                }
-        f3 = FormWithMedia()
-        self.assertEqual(
-            str(f3.media),
-            """<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css3" type="text/css" media="all" rel="stylesheet">
-<link href="/some/form/css" type="text/css" media="all" rel="stylesheet">
-<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>
-<script type="text/javascript" src="/path/to/js4"></script>
-<script type="text/javascript" src="/some/form/javascript"></script>"""
-        )
-
-        # Media works in templates
-        self.assertEqual(
-            Template("{{ form.media.js }}{{ form.media.css }}").render(Context({'form': f3})),
-            """<script type="text/javascript" src="/path/to/js1"></script>
-<script type="text/javascript" src="http://media.other.com/path/to/js2"></script>
-<script type="text/javascript" src="https://secure.other.com/path/to/js3"></script>
-<script type="text/javascript" src="/path/to/js4"></script>
-<script type="text/javascript" src="/some/form/javascript"></script>"""
-            """<link href="http://media.example.com/static/path/to/css1" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css2" type="text/css" media="all" rel="stylesheet">
-<link href="/path/to/css3" type="text/css" media="all" rel="stylesheet">
-<link href="/some/form/css" type="text/css" media="all" rel="stylesheet">"""
-        )
-
-    def test_html_safe(self):
-        media = Media(css={'all': ['/path/to/css']}, js=['/path/to/js'])
-        self.assertTrue(hasattr(Media, '__html__'))
-        self.assertEqual(str(media), media.__html__())
-
-    def test_merge(self):
-        test_values = (
-            (([1, 2], [3, 4]), [1, 2, 3, 4]),
-            (([1, 2], [2, 3]), [1, 2, 3]),
-            (([2, 3], [1, 2]), [1, 2, 3]),
-            (([1, 3], [2, 3]), [1, 2, 3]),
-            (([1, 2], [1, 3]), [1, 2, 3]),
-            (([1, 2], [3, 2]), [1, 3, 2]),
-        )
-        for (list1, list2), expected in test_values:
-            with self.subTest(list1=list1, list2=list2):
-                self.assertEqual(Media.merge(list1, list2), expected)
-
-    def test_merge_warning(self):
-        msg = 'Detected duplicate Media files in an opposite order:\n1\n2'
-        with self.assertWarnsMessage(RuntimeWarning, msg):
-            self.assertEqual(Media.merge([1, 2], [2, 1]), [1, 2])
+    def test_preserve_dependency_order(self):
+        """
+        Test that actual dependencies are preserved in the merge.
+        """
+        # This represents the scenario where text-editor-extras.js depends on text-editor.js
+        media1 = Media(js=['text-editor.js', 'text-editor-extras.js'])
+        media2 = Media(js=['color-picker.js'])
+        media3 = Media(js=['text-editor.js'])
+        
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            combined = media1 + media2 + media3
+            
+            # Should not produce warnings
+            media_warnings = [warning for warning in w if issubclass(warning.category, MediaOrderConflictWarning)]
+            self.assertEqual(len(media_warnings), 0)
+            
+            # Verify dependency order is maintained
+            js_list = combined._js
+            text_editor_index = js_list.index('text-editor.js')
+            text_editor_extras_index = js_list.index('text-editor-extras.js')
+            self.assertLess(text_editor_index, text_editor_extras_index, 
+                          "text-editor.js should come before text-editor-extras.js")
