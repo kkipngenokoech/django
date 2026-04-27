@@ -344,6 +344,25 @@ class AdminViewBasicTest(AdminViewBasicTestCase):
             "Results of sorting on callable are out of order."
         )
 
+    def test_change_list_sorting_property(self):
+        """
+        Sort on a list_display field that is a property (column 10 is
+        a property in Article model).
+        """
+        response = self.client.get(reverse('admin:admin_views_article_changelist'), {'o': 10})
+        self.assertContentBefore(
+            response,
+            'Oldest content',
+            'Middle content',
+            'Results of sorting on property are out of order.',
+        )
+        self.assertContentBefore(
+            response,
+            'Middle content',
+            'Newest content',
+            'Results of sorting on property are out of order.',
+        )
+
     def test_change_list_sorting_callable_query_expression(self):
         """
         Query expressions may be used for admin_order_field. (column 9 is
@@ -4960,6 +4979,13 @@ class ReadonlyTest(AdminFieldExtractionMixin, TestCase):
         response = self.client.get(reverse('admin:admin_views_section_change', args=(section.pk,)))
         self.assertNotContains(response, "<a>evil</a>", status_code=200)
         self.assertContains(response, "&lt;a&gt;evil&lt;/a&gt;", status_code=200)
+
+    def test_label_suffix_translated(self):
+        pizza = Pizza.objects.create(name='Americano')
+        url = reverse('admin:admin_views_pizza_change', args=(pizza.pk,))
+        with self.settings(LANGUAGE_CODE='fr'):
+            response = self.client.get(url)
+        self.assertContains(response, '<label>Toppings\u00A0:</label>', html=True)
 
 
 @override_settings(ROOT_URLCONF='admin_views.urls')
