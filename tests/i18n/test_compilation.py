@@ -4,7 +4,7 @@ import stat
 import unittest
 from io import StringIO
 from pathlib import Path
-from subprocess import Popen
+from subprocess import run
 from unittest import mock
 
 from django.core.management import (
@@ -184,7 +184,7 @@ class CompilationErrorHandling(MessageCompilationTests):
         # Make sure the output of msgfmt is unaffected by the current locale.
         env = os.environ.copy()
         env.update({'LANG': 'C'})
-        with mock.patch('django.core.management.utils.Popen', lambda *args, **kwargs: Popen(*args, env=env, **kwargs)):
+        with mock.patch('django.core.management.utils.run', lambda *args, **kwargs: run(*args, env=env, **kwargs)):
             cmd = MakeMessagesCommand()
             if cmd.gettext_version < (0, 18, 3):
                 self.skipTest("python-brace-format is a recent gettext addition.")
@@ -227,3 +227,12 @@ class AppCompilationTest(ProjectAndAppTests):
         call_command('compilemessages', locale=[self.LOCALE], stdout=StringIO())
         self.assertTrue(os.path.exists(self.PROJECT_MO_FILE))
         self.assertTrue(os.path.exists(self.APP_MO_FILE))
+
+
+class PathLibLocaleCompilationTests(MessageCompilationTests):
+    work_subdir = 'exclude'
+
+    def test_locale_paths_pathlib(self):
+        with override_settings(LOCALE_PATHS=[Path(self.test_dir) / 'canned_locale']):
+            call_command('compilemessages', locale=['fr'], stdout=StringIO())
+            self.assertTrue(os.path.exists('canned_locale/fr/LC_MESSAGES/django.mo'))

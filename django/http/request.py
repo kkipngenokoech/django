@@ -1,5 +1,6 @@
+import cgi
+import codecs
 import copy
-import re
 from io import BytesIO
 from itertools import chain
 from urllib.parse import quote, urlencode, urljoin, urlsplit
@@ -17,9 +18,10 @@ from django.utils.datastructures import (
 from django.utils.encoding import escape_uri_path, iri_to_uri
 from django.utils.functional import cached_property
 from django.utils.http import is_same_domain, limited_parse_qsl
+from django.utils.regex_helper import _lazy_re_compile
 
 RAISE_ERROR = object()
-host_validation_re = re.compile(r"^([a-z0-9.-]+|\[[a-f0-9]*:[a-f0-9\.:]+\])(:\d+)?$")
+host_validation_re = _lazy_re_compile(r"^([a-z0-9.-]+|\[[a-f0-9]*:[a-f0-9\.:]+\])(:\d+)?$")
 
 
 class UnreadablePostError(OSError):
@@ -68,6 +70,17 @@ class HttpRequest:
     @cached_property
     def headers(self):
         return HttpHeaders(self.META)
+
+    def _set_content_type_params(self, meta):
+        """Set content_type, content_params, and encoding."""
+        self.content_type, self.content_params = cgi.parse_header(meta.get('CONTENT_TYPE', ''))
+        if 'charset' in self.content_params:
+            try:
+                codecs.lookup(self.content_params['charset'])
+            except LookupError:
+                pass
+            else:
+                self.encoding = self.content_params['charset']
 
     def _get_raw_host(self):
         """
@@ -213,13 +226,14 @@ class HttpRequest:
     def scheme(self):
         if settings.SECURE_PROXY_SSL_HEADER:
             try:
-                header, value = settings.SECURE_PROXY_SSL_HEADER
+                header, secure_value = settings.SECURE_PROXY_SSL_HEADER
             except ValueError:
                 raise ImproperlyConfigured(
                     'The SECURE_PROXY_SSL_HEADER setting must be a tuple containing two values.'
                 )
-            if self.META.get(header) == value:
-                return 'https'
+            header_value = self.META.get(header)
+            if header_value is not None:
+                return 'https' if header_value == secure_value else 'http'
         return self._get_scheme()
 
     def is_secure(self):
@@ -368,6 +382,10 @@ class HttpHeaders(CaseInsensitiveMapping):
             if name:
                 headers[name] = value
         super().__init__(headers)
+
+    def __getitem__(self, key):
+        """Allow header lookup using underscores in place of hyphens."""
+        return super().__getitem__(key.replace('_', '-'))
 
     @classmethod
     def parse_header_name(cls, header):

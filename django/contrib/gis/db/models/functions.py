@@ -48,7 +48,7 @@ class GeoFuncMixin:
         return self.source_expressions[self.geom_param_pos[0]].field
 
     def as_sql(self, compiler, connection, function=None, **extra_context):
-        if not self.function and not function:
+        if self.function is None and function is None:
             function = connection.ops.spatial_function_name(self.name)
         return super().as_sql(compiler, connection, function=function, **extra_context)
 
@@ -161,6 +161,12 @@ class AsGeoJSON(GeoFunc):
         if options:
             expressions.append(options)
         super().__init__(*expressions, **extra)
+
+    def as_oracle(self, compiler, connection, **extra_context):
+        source_expressions = self.get_source_expressions()
+        clone = self.copy()
+        clone.set_source_expressions(source_expressions[:1])
+        return super(AsGeoJSON, clone).as_sql(compiler, connection, **extra_context)
 
 
 class AsGML(GeoFunc):
@@ -297,6 +303,14 @@ class GeoHash(GeoFunc):
         if len(clone.source_expressions) < 2:
             clone.source_expressions.append(Value(100))
         return clone.as_sql(compiler, connection, **extra_context)
+
+
+class GeometryDistance(GeoFunc):
+    output_field = FloatField()
+    arity = 2
+    function = ''
+    arg_joiner = ' <-> '
+    geom_param_pos = (0, 1)
 
 
 class Intersection(OracleToleranceMixin, GeomOutputGeoFunc):

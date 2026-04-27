@@ -61,6 +61,7 @@ class LayerMapping:
     FIELD_TYPES = {
         models.AutoField: OFTInteger,
         models.BigAutoField: OFTInteger64,
+        models.SmallAutoField: OFTInteger,
         models.BooleanField: (OFTInteger, OFTReal, OFTString),
         models.IntegerField: (OFTInteger, OFTReal, OFTString),
         models.FloatField: (OFTInteger, OFTReal),
@@ -76,6 +77,8 @@ class LayerMapping:
         models.UUIDField: OFTString,
         models.BigIntegerField: (OFTInteger, OFTReal, OFTString),
         models.SmallIntegerField: (OFTInteger, OFTReal, OFTString),
+        models.PositiveBigIntegerField: (OFTInteger, OFTReal, OFTString),
+        models.PositiveIntegerField: (OFTInteger, OFTReal, OFTString),
         models.PositiveSmallIntegerField: (OFTInteger, OFTReal, OFTString),
     }
 
@@ -596,7 +599,7 @@ class LayerMapping:
 
                 # Printing progress information, if requested.
                 if progress and num_feat % progress_interval == 0:
-                    stream.write('Processed %d features, saved %d …\n' % (num_feat, num_saved))
+                    stream.write('Processed %d features, saved %d ...\n' % (num_feat, num_saved))
 
             # Only used for status output purposes -- incremental saving uses the
             # values returned here.
