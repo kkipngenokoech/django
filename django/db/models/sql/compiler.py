@@ -5,7 +5,7 @@ from itertools import chain
 
 from django.core.exceptions import EmptyResultSet, FieldError
 from django.db.models.constants import LOOKUP_SEP
-from django.db.models.expressions import OrderBy, Random, RawSQL, Ref, Subquery
+from django.db.models.expressions import OrderBy, Random, RawSQL, Ref
 from django.db.models.query_utils import QueryWrapper, select_related_descend
 from django.db.models.sql.constants import (
     CURSOR, GET_ITERATOR_CHUNK_SIZE, MULTI, NO_RESULTS, ORDER_DIR, SINGLE,
@@ -126,11 +126,6 @@ class SQLCompiler:
 
         for expr in expressions:
             sql, params = self.compile(expr)
-            if isinstance(expr, Subquery) and not sql.startswith('('):
-                # Subquery expression from HAVING clause may not contain
-                # wrapping () because they could be removed when a subquery is
-                # the "rhs" in an expression (see Subquery._prepare()).
-                sql = '(%s)' % sql
             if (sql, tuple(params)) not in seen:
                 result.append((sql, params))
                 seen.add((sql, tuple(params)))
@@ -1191,9 +1186,15 @@ class SQLInsertCompiler(SQLCompiler):
                     'can only be used to update, not to insert.' % (value, field)
                 )
             if value.contains_aggregate:
-                raise FieldError("Aggregate functions are not allowed in this query")
+                raise FieldError(
+                    'Aggregate functions are not allowed in this query '
+                    '(%s=%r).' % (field.name, value)
+                )
             if value.contains_over_clause:
-                raise FieldError('Window expressions are not allowed in this query.')
+                raise FieldError(
+                    'Window expressions are not allowed in this query (%s=%r).'
+                    % (field.name, value)
+                )
         else:
             value = field.get_db_prep_save(value, connection=self.connection)
         return value
@@ -1356,9 +1357,15 @@ class SQLUpdateCompiler(SQLCompiler):
             if hasattr(val, 'resolve_expression'):
                 val = val.resolve_expression(self.query, allow_joins=False, for_save=True)
                 if val.contains_aggregate:
-                    raise FieldError("Aggregate functions are not allowed in this query")
+                    raise FieldError(
+                        'Aggregate functions are not allowed in this query '
+                        '(%s=%r).' % (field.name, val)
+                    )
                 if val.contains_over_clause:
-                    raise FieldError('Window expressions are not allowed in this query.')
+                    raise FieldError(
+                        'Window expressions are not allowed in this query '
+                        '(%s=%r).' % (field.name, val)
+                    )
             elif hasattr(val, 'prepare_database_save'):
                 if field.remote_field:
                     val = field.get_db_prep_save(
