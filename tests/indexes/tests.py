@@ -108,7 +108,7 @@ class PartialIndexConditionIgnoredTests(TransactionTestCase):
             editor.add_index(Article, index)
 
         self.assertNotIn(
-            'WHERE %s.%s' % (editor.quote_name(Article._meta.db_table), 'published'),
+            'WHERE %s' % editor.quote_name('published'),
             str(index.create_sql(Article, editor))
         )
 
@@ -196,6 +196,33 @@ class SchemaIndexesPostgreSQLTests(TransactionTestCase):
             cursor.execute(self.get_opclass_query % indexname)
             self.assertCountEqual(cursor.fetchall(), [('text_pattern_ops', indexname)])
 
+    def test_ops_class_descending(self):
+        indexname = 'test_ops_class_ordered'
+        index = Index(
+            name=indexname,
+            fields=['-body'],
+            opclasses=['text_pattern_ops'],
+        )
+        with connection.schema_editor() as editor:
+            editor.add_index(IndexedArticle2, index)
+        with editor.connection.cursor() as cursor:
+            cursor.execute(self.get_opclass_query % indexname)
+            self.assertCountEqual(cursor.fetchall(), [('text_pattern_ops', indexname)])
+
+    def test_ops_class_descending_partial(self):
+        indexname = 'test_ops_class_ordered_partial'
+        index = Index(
+            name=indexname,
+            fields=['-body'],
+            opclasses=['text_pattern_ops'],
+            condition=Q(headline__contains='China'),
+        )
+        with connection.schema_editor() as editor:
+            editor.add_index(IndexedArticle2, index)
+        with editor.connection.cursor() as cursor:
+            cursor.execute(self.get_opclass_query % indexname)
+            self.assertCountEqual(cursor.fetchall(), [('text_pattern_ops', indexname)])
+
 
 @skipUnless(connection.vendor == 'mysql', 'MySQL tests')
 class SchemaIndexesMySQLTests(TransactionTestCase):
@@ -258,7 +285,7 @@ class PartialIndexTests(TransactionTestCase):
                 )
             )
             self.assertIn(
-                'WHERE %s.%s' % (editor.quote_name(Article._meta.db_table), editor.quote_name("pub_date")),
+                'WHERE %s' % editor.quote_name('pub_date'),
                 str(index.create_sql(Article, schema_editor=editor))
             )
             editor.add_index(index=index, model=Article)
@@ -275,7 +302,7 @@ class PartialIndexTests(TransactionTestCase):
                 condition=Q(pk__gt=1),
             )
             self.assertIn(
-                'WHERE %s.%s' % (editor.quote_name(Article._meta.db_table), editor.quote_name('id')),
+                'WHERE %s' % editor.quote_name('id'),
                 str(index.create_sql(Article, schema_editor=editor))
             )
             editor.add_index(index=index, model=Article)
@@ -292,7 +319,7 @@ class PartialIndexTests(TransactionTestCase):
                 condition=Q(published=True),
             )
             self.assertIn(
-                'WHERE %s.%s' % (editor.quote_name(Article._meta.db_table), editor.quote_name('published')),
+                'WHERE %s' % editor.quote_name('published'),
                 str(index.create_sql(Article, schema_editor=editor))
             )
             editor.add_index(index=index, model=Article)
@@ -319,7 +346,7 @@ class PartialIndexTests(TransactionTestCase):
             sql = str(index.create_sql(Article, schema_editor=editor))
             where = sql.find('WHERE')
             self.assertIn(
-                'WHERE (%s.%s' % (editor.quote_name(Article._meta.db_table), editor.quote_name("pub_date")),
+                'WHERE (%s' % editor.quote_name('pub_date'),
                 sql
             )
             # Because each backend has different syntax for the operators,
@@ -339,7 +366,7 @@ class PartialIndexTests(TransactionTestCase):
                 condition=Q(pub_date__isnull=False),
             )
             self.assertIn(
-                'WHERE %s.%s IS NOT NULL' % (editor.quote_name(Article._meta.db_table), editor.quote_name("pub_date")),
+                'WHERE %s IS NOT NULL' % editor.quote_name('pub_date'),
                 str(index.create_sql(Article, schema_editor=editor))
             )
             editor.add_index(index=index, model=Article)

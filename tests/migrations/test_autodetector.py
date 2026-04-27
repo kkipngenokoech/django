@@ -352,6 +352,11 @@ class AutodetectorTests(TestCase):
         ("author", models.ForeignKey("migrations.UnmigratedModel", models.CASCADE)),
         ("title", models.CharField(max_length=200)),
     ])
+    book_with_no_author_fk = ModelState("otherapp", "Book", [
+        ("id", models.AutoField(primary_key=True)),
+        ("author", models.IntegerField()),
+        ("title", models.CharField(max_length=200)),
+    ])
     book_with_no_author = ModelState("otherapp", "Book", [
         ("id", models.AutoField(primary_key=True)),
         ("title", models.CharField(max_length=200)),
@@ -927,6 +932,30 @@ class AutodetectorTests(TestCase):
             changes, 'app', 0, 1, model_name='bar', old_name='second', new_name='second_renamed',
         )
 
+    def test_rename_referenced_primary_key(self):
+        before = [
+            ModelState('app', 'Foo', [
+                ('id', models.CharField(primary_key=True, serialize=False)),
+            ]),
+            ModelState('app', 'Bar', [
+                ('id', models.AutoField(primary_key=True)),
+                ('foo', models.ForeignKey('app.Foo', models.CASCADE)),
+            ]),
+        ]
+        after = [
+            ModelState('app', 'Foo', [
+                ('renamed_id', models.CharField(primary_key=True, serialize=False))
+            ]),
+            ModelState('app', 'Bar', [
+                ('id', models.AutoField(primary_key=True)),
+                ('foo', models.ForeignKey('app.Foo', models.CASCADE)),
+            ]),
+        ]
+        changes = self.get_changes(before, after, MigrationQuestioner({'ask_rename': True}))
+        self.assertNumberMigrations(changes, 'app', 1)
+        self.assertOperationTypes(changes, 'app', 0, ['RenameField'])
+        self.assertOperationAttributes(changes, 'app', 0, 0, old_name='id', new_name='renamed_id')
+
     def test_rename_field_preserved_db_column(self):
         """
         RenameField is used if a field is renamed and db_column equal to the
@@ -1275,7 +1304,7 @@ class AutodetectorTests(TestCase):
             "testapp", "model", [("id", models.AutoField(primary_key=True, validators=[
                 RegexValidator(
                     re.compile('^[-a-zA-Z0-9_]+\\Z'),
-                    "Enter a valid 'slug' consisting of letters, numbers, underscores or hyphens.",
+                    'Enter a valid “slug” consisting of letters, numbers, underscores or hyphens.',
                     'invalid'
                 )
             ]))]
@@ -1292,7 +1321,7 @@ class AutodetectorTests(TestCase):
             "testapp", "model", [("id", models.AutoField(primary_key=True, validators=[
                 RegexValidator(
                     re.compile('^[a-z]+\\Z', 32),
-                    "Enter a valid 'slug' consisting of letters, numbers, underscores or hyphens.",
+                    'Enter a valid “slug” consisting of letters, numbers, underscores or hyphens.',
                     'invalid'
                 )
             ]))]
@@ -2250,6 +2279,15 @@ class AutodetectorTests(TestCase):
         self.assertOperationTypes(changes, 'testapp', 0, ["AddField"])
         self.assertOperationAttributes(changes, 'testapp', 0, 0, name="book")
         self.assertMigrationDependencies(changes, 'testapp', 0, [("otherapp", "__first__")])
+
+    def test_alter_field_to_fk_dependency_other_app(self):
+        changes = self.get_changes(
+            [self.author_empty, self.book_with_no_author_fk],
+            [self.author_empty, self.book],
+        )
+        self.assertNumberMigrations(changes, 'otherapp', 1)
+        self.assertOperationTypes(changes, 'otherapp', 0, ['AlterField'])
+        self.assertMigrationDependencies(changes, 'otherapp', 0, [('testapp', '__first__')])
 
     def test_circular_dependency_mixed_addcreate(self):
         """

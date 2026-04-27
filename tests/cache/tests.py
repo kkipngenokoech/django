@@ -274,6 +274,11 @@ class BaseCacheTests:
         cache.set("key", "value")
         self.assertEqual(cache.get("key"), "value")
 
+    def test_default_used_when_none_is_set(self):
+        """If None is cached, get() returns it instead of the default."""
+        cache.set('key_default_none', None)
+        self.assertIsNone(cache.get('key_default_none', default='default'))
+
     def test_add(self):
         # A key can be added to a cache
         cache.add("addkey1", "value")
@@ -1365,6 +1370,14 @@ class MemcachedCacheTests(BaseMemcachedTests, TestCase):
     def test_memcached_options(self):
         self.assertEqual(cache._cache.server_max_value_length, 9999)
 
+    def test_default_used_when_none_is_set(self):
+        """
+        python-memcached doesn't support default in get() so this test
+        overrides the one in BaseCacheTests.
+        """
+        cache.set('key_default_none', None)
+        self.assertEqual(cache.get('key_default_none', default='default'), 'default')
+
 
 @unittest.skipUnless(PyLibMCCache_params, "PyLibMCCache backend not configured")
 @override_settings(CACHES=caches_setting_for_tests(
@@ -1612,6 +1625,8 @@ class CacheUtils(SimpleTestCase):
             (None, ('Accept-Encoding', 'COOKIE'), 'Accept-Encoding, COOKIE'),
             ('Cookie,     Accept-Encoding', ('Accept-Encoding', 'cookie'), 'Cookie, Accept-Encoding'),
             ('Cookie    ,     Accept-Encoding', ('Accept-Encoding', 'cookie'), 'Cookie, Accept-Encoding'),
+            ('*', ('Accept-Language', 'Cookie'), '*'),
+            ('Accept-Language, Cookie', ('*',), '*'),
         )
         for initial_vary, newheaders, resulting_vary in headers:
             with self.subTest(initial_vary=initial_vary, newheaders=newheaders):
@@ -1685,7 +1700,17 @@ class CacheUtils(SimpleTestCase):
             # Initial Cache-Control, kwargs to patch_cache_control, expected Cache-Control parts
             (None, {'private': True}, {'private'}),
             ('', {'private': True}, {'private'}),
-
+            # no-cache.
+            ('', {'no_cache': 'Set-Cookie'}, {'no-cache=Set-Cookie'}),
+            ('', {'no-cache': 'Set-Cookie'}, {'no-cache=Set-Cookie'}),
+            ('no-cache=Set-Cookie', {'no_cache': True}, {'no-cache'}),
+            ('no-cache=Set-Cookie,no-cache=Link', {'no_cache': True}, {'no-cache'}),
+            ('no-cache=Set-Cookie', {'no_cache': 'Link'}, {'no-cache=Set-Cookie', 'no-cache=Link'}),
+            (
+                'no-cache=Set-Cookie,no-cache=Link',
+                {'no_cache': 'Custom'},
+                {'no-cache=Set-Cookie', 'no-cache=Link', 'no-cache=Custom'},
+            ),
             # Test whether private/public attributes are mutually exclusive
             ('private', {'private': True}, {'private'}),
             ('private', {'public': True}, {'public'}),
@@ -2291,15 +2316,27 @@ class TestMakeTemplateFragmentKey(SimpleTestCase):
 
     def test_with_one_vary_on(self):
         key = make_template_fragment_key('foo', ['abc'])
-        self.assertEqual(key, 'template.cache.foo.900150983cd24fb0d6963f7d28e17f72')
+        self.assertEqual(key, 'template.cache.foo.493e283d571a73056196f1a68efd0f66')
 
     def test_with_many_vary_on(self):
         key = make_template_fragment_key('bar', ['abc', 'def'])
-        self.assertEqual(key, 'template.cache.bar.4b35f12ab03cec09beec4c21b2d2fa88')
+        self.assertEqual(key, 'template.cache.bar.17c1a507a0cb58384f4c639067a93520')
 
     def test_proper_escaping(self):
         key = make_template_fragment_key('spam', ['abc:def%'])
-        self.assertEqual(key, 'template.cache.spam.f27688177baec990cdf3fbd9d9c3f469')
+        self.assertEqual(key, 'template.cache.spam.06c8ae8e8c430b69fb0a6443504153dc')
+
+    def test_with_ints_vary_on(self):
+        key = make_template_fragment_key('foo', [1, 2, 3, 4, 5])
+        self.assertEqual(key, 'template.cache.foo.7ae8fd2e0d25d651c683bdeebdb29461')
+
+    def test_with_unicode_vary_on(self):
+        key = make_template_fragment_key('foo', ['42º', '😀'])
+        self.assertEqual(key, 'template.cache.foo.7ced1c94e543668590ba39b3c08b0237')
+
+    def test_long_vary_on(self):
+        key = make_template_fragment_key('foo', ['x' * 10000])
+        self.assertEqual(key, 'template.cache.foo.3670b349b5124aa56bdb50678b02b23a')
 
 
 class CacheHandlerTest(SimpleTestCase):
