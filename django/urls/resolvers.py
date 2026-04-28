@@ -18,6 +18,7 @@ from django.conf import settings
 from django.core.checks import Error, Warning
 from django.core.checks.urls import check_resolver
 from django.core.exceptions import ImproperlyConfigured, ViewDoesNotExist
+from django.http import Http404
 from django.utils.datastructures import MultiValueDict
 from django.utils.functional import cached_property
 from django.utils.http import RFC3986_SUBDELIMS, escape_leading_slashes
@@ -264,6 +265,9 @@ class RoutePattern(CheckURLMixin):
                     kwargs[key] = converter.to_python(value)
                 except ValueError:
                     return None
+                except Http404:
+                    # Re-raise Http404 to allow proper 404 handling with debug info
+                    raise
             return path[match.end():], (), kwargs
         return None
 
