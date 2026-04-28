@@ -1,12 +1,11 @@
 from unittest import mock
 
 from django.apps.registry import apps as global_apps
-from django.db import connection
+from django.db import DatabaseError, connection
 from django.db.migrations.exceptions import InvalidMigrationPlan
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.recorder import MigrationRecorder
-from django.db.utils import DatabaseError
 from django.test import (
     SimpleTestCase, modify_settings, override_settings, skipUnlessDBFeature,
 )
@@ -517,13 +516,13 @@ class ExecutorTests(MigrationTestBase):
         state = executor.migrate([
             ('mutate_state_a', '0001_initial'),
         ])
-        self.assertIn('added', dict(state.models['mutate_state_b', 'b'].fields))
+        self.assertIn('added', state.models['mutate_state_b', 'b'].fields)
         executor.loader.build_graph()
         # Migrate backward.
         state = executor.migrate([
             ('mutate_state_a', None),
         ])
-        self.assertIn('added', dict(state.models['mutate_state_b', 'b'].fields))
+        self.assertIn('added', state.models['mutate_state_b', 'b'].fields)
         executor.migrate([
             ('mutate_state_b', None),
         ])
@@ -711,7 +710,11 @@ class ExecutorUnitTests(SimpleTestCase):
         graph.add_dependency(None, a2, a1)
 
         executor = MigrationExecutor(None)
-        executor.loader = FakeLoader(graph, {a1, b1, a2})
+        executor.loader = FakeLoader(graph, {
+            a1: a1_impl,
+            b1: b1_impl,
+            a2: a2_impl,
+        })
 
         plan = executor.migration_plan({a1})
 
@@ -754,7 +757,14 @@ class ExecutorUnitTests(SimpleTestCase):
         graph.add_dependency(None, b2, a2)
 
         executor = MigrationExecutor(None)
-        executor.loader = FakeLoader(graph, {a1, b1, a2, b2, a3, a4})
+        executor.loader = FakeLoader(graph, {
+            a1: a1_impl,
+            b1: b1_impl,
+            a2: a2_impl,
+            b2: b2_impl,
+            a3: a3_impl,
+            a4: a4_impl,
+        })
 
         plan = executor.migration_plan({a1})
 
@@ -791,7 +801,10 @@ class ExecutorUnitTests(SimpleTestCase):
         graph.add_dependency(None, c1, a1)
 
         executor = MigrationExecutor(None)
-        executor.loader = FakeLoader(graph, {a1, b1})
+        executor.loader = FakeLoader(graph, {
+            a1: a1_impl,
+            b1: b1_impl,
+        })
 
         plan = executor.migration_plan({a1})
 

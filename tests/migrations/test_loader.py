@@ -73,15 +73,12 @@ class LoaderTests(TestCase):
 
         author_state = project_state.models["migrations", "author"]
         self.assertEqual(
-            [x for x, y in author_state.fields],
+            list(author_state.fields),
             ["id", "name", "slug", "age", "rating"]
         )
 
         book_state = project_state.models["migrations", "book"]
-        self.assertEqual(
-            [x for x, y in book_state.fields],
-            ["id", "author"]
-        )
+        self.assertEqual(list(book_state.fields), ['id', 'author'])
 
         # Ensure we've included unmigrated apps in there too
         self.assertIn("basic", project_state.real_apps)
@@ -122,10 +119,7 @@ class LoaderTests(TestCase):
         self.assertEqual(len([m for a, m in project_state.models if a == "migrations"]), 1)
 
         book_state = project_state.models["migrations", "book"]
-        self.assertEqual(
-            [x for x, y in book_state.fields],
-            ["id", "user"]
-        )
+        self.assertEqual(list(book_state.fields), ['id', 'user'])
 
     @override_settings(MIGRATION_MODULES={"migrations": "migrations.test_migrations_run_before"})
     def test_run_before(self):
@@ -265,7 +259,7 @@ class LoaderTests(TestCase):
 
         def num_nodes():
             plan = set(loader.graph.forwards_plan(('migrations', '7_auto')))
-            return len(plan - loader.applied_migrations)
+            return len(plan - loader.applied_migrations.keys())
 
         # Empty database: use squashed migration
         loader.build_graph()
@@ -339,7 +333,7 @@ class LoaderTests(TestCase):
         loader.build_graph()
 
         plan = set(loader.graph.forwards_plan(('app1', '4_auto')))
-        plan = plan - loader.applied_migrations
+        plan = plan - loader.applied_migrations.keys()
         expected_plan = {
             ('app2', '1_squashed_2'),
             ('app1', '3_auto'),
@@ -358,7 +352,7 @@ class LoaderTests(TestCase):
 
         def num_nodes():
             plan = set(loader.graph.forwards_plan(('migrations', '7_auto')))
-            return len(plan - loader.applied_migrations)
+            return len(plan - loader.applied_migrations.keys())
 
         # Empty database: use squashed migration
         loader.build_graph()
@@ -466,7 +460,7 @@ class LoaderTests(TestCase):
         # Load with nothing applied: both migrations squashed.
         loader.build_graph()
         plan = set(loader.graph.forwards_plan(('app1', '4_auto')))
-        plan = plan - loader.applied_migrations
+        plan = plan - loader.applied_migrations.keys()
         expected_plan = {
             ('app1', '1_auto'),
             ('app2', '1_squashed_2'),
@@ -480,7 +474,7 @@ class LoaderTests(TestCase):
         recorder.record_applied('app1', '2_auto')
         loader.build_graph()
         plan = set(loader.graph.forwards_plan(('app1', '4_auto')))
-        plan = plan - loader.applied_migrations
+        plan = plan - loader.applied_migrations.keys()
         expected_plan = {
             ('app2', '1_squashed_2'),
             ('app1', '3_auto'),
@@ -492,7 +486,7 @@ class LoaderTests(TestCase):
         recorder.record_applied('app2', '1_auto')
         loader.build_graph()
         plan = set(loader.graph.forwards_plan(('app1', '4_auto')))
-        plan = plan - loader.applied_migrations
+        plan = plan - loader.applied_migrations.keys()
         expected_plan = {
             ('app2', '2_auto'),
             ('app1', '3_auto'),
@@ -507,6 +501,16 @@ class LoaderTests(TestCase):
         loader.load_disk()
         migrations = [name for app, name in loader.disk_migrations if app == 'migrations']
         self.assertEqual(migrations, ['0001_initial'])
+
+    @override_settings(
+        MIGRATION_MODULES={'migrations': 'migrations.test_migrations_namespace_package'},
+    )
+    def test_loading_namespace_package(self):
+        """Migration directories without an __init__.py file are ignored."""
+        loader = MigrationLoader(connection)
+        loader.load_disk()
+        migrations = [name for app, name in loader.disk_migrations if app == 'migrations']
+        self.assertEqual(migrations, [])
 
 
 class PycLoaderTests(MigrationTestBase):
