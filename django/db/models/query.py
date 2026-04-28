@@ -920,6 +920,10 @@ class QuerySet:
         """Return an empty QuerySet."""
         clone = self._chain()
         clone.query.set_empty()
+        # Clear any combinators to ensure none() works on combined querysets
+        clone.query.combinator = None
+        clone.query.combinator_all = False
+        clone.query.combined_queries = ()
         return clone
 
     ##################################################################
