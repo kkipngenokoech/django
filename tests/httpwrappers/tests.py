@@ -286,7 +286,7 @@ class QueryDictTests(SimpleTestCase):
             QueryDict.fromkeys(0)
 
 
-class HttpResponseTests(unittest.TestCase):
+class HttpResponseTests(SimpleTestCase):
 
     def test_headers_type(self):
         r = HttpResponse()
@@ -469,6 +469,31 @@ class HttpResponseTests(unittest.TestCase):
         self.assertNotIn('X-Foo', r.headers)
         # del doesn't raise a KeyError on nonexistent headers.
         del r.headers['X-Foo']
+
+    def test_instantiate_with_headers(self):
+        r = HttpResponse('hello', headers={'X-Foo': 'foo'})
+        self.assertEqual(r.headers['X-Foo'], 'foo')
+        self.assertEqual(r.headers['x-foo'], 'foo')
+
+    def test_content_type(self):
+        r = HttpResponse('hello', content_type='application/json')
+        self.assertEqual(r.headers['Content-Type'], 'application/json')
+
+    def test_content_type_headers(self):
+        r = HttpResponse('hello', headers={'Content-Type': 'application/json'})
+        self.assertEqual(r.headers['Content-Type'], 'application/json')
+
+    def test_content_type_mutually_exclusive(self):
+        msg = (
+            "'headers' must not contain 'Content-Type' when the "
+            "'content_type' parameter is provided."
+        )
+        with self.assertRaisesMessage(ValueError, msg):
+            HttpResponse(
+                'hello',
+                content_type='application/json',
+                headers={'Content-Type': 'text/csv'},
+            )
 
 
 class HttpResponseSubclassesTests(SimpleTestCase):
@@ -809,6 +834,10 @@ class HttpResponseHeadersTestCase(SimpleTestCase):
         self.assertNotIn('X-Foo', response.headers)
         # del doesn't raise a KeyError on nonexistent headers.
         del response['X-Foo']
+
+    def test_headers_as_iterable_of_tuple_pairs(self):
+        response = HttpResponse(headers=(('X-Foo', 'bar'),))
+        self.assertEqual(response['X-Foo'], 'bar')
 
     def test_headers_bytestring(self):
         response = HttpResponse()

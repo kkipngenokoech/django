@@ -63,6 +63,12 @@ class DatabaseFeatures(BaseDatabaseFeatures):
         'swedish_ci': 'sv-x-icu',
     }
 
+    django_test_skips = {
+        'opclasses are PostgreSQL only.': {
+            'indexes.tests.SchemaIndexesNotPostgreSQLTests.test_create_index_ignores_opclasses',
+        },
+    }
+
     @cached_property
     def introspected_field_types(self):
         return {
@@ -71,10 +77,6 @@ class DatabaseFeatures(BaseDatabaseFeatures):
             'PositiveIntegerField': 'IntegerField',
             'PositiveSmallIntegerField': 'SmallIntegerField',
         }
-
-    @cached_property
-    def is_postgresql_10(self):
-        return self.connection.pg_version >= 100000
 
     @cached_property
     def is_postgresql_11(self):
@@ -88,9 +90,7 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     def is_postgresql_13(self):
         return self.connection.pg_version >= 130000
 
-    has_brin_autosummarize = property(operator.attrgetter('is_postgresql_10'))
     has_websearch_to_tsquery = property(operator.attrgetter('is_postgresql_11'))
-    supports_table_partitions = property(operator.attrgetter('is_postgresql_10'))
     supports_covering_indexes = property(operator.attrgetter('is_postgresql_11'))
     supports_covering_gist_indexes = property(operator.attrgetter('is_postgresql_12'))
     supports_non_deterministic_collations = property(operator.attrgetter('is_postgresql_12'))
