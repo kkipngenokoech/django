@@ -79,10 +79,10 @@ Variables
 Variables look like this: ``{{ variable }}``. When the template engine
 encounters a variable, it evaluates that variable and replaces it with the
 result. Variable names consist of any combination of alphanumeric characters
-and the underscore (``"_"``) but may not start with an underscore. The dot
-(``"."``) also appears in variable sections, although that has a special
-meaning, as indicated below. Importantly, *you cannot have spaces or
-punctuation characters in variable names.*
+and the underscore (``"_"``) but may not start with an underscore, and may not
+be a number. The dot (``"."``) also appears in variable sections, although that
+has a special meaning, as indicated below. Importantly, *you cannot have spaces
+or punctuation characters in variable names.*
 
 Use a dot (``.``) to access attributes of a variable.
 
@@ -407,6 +407,13 @@ Here are some tips for working with inheritance:
   not be automatically escaped (see the `next section`_), since it was
   already escaped, if necessary, in the parent template.
 
+* By using the same template name as you are inheriting from,
+  :ttag:`{% extends %}<extends>` can be used to inherit a template at the same
+  time as overriding it. Combined with ``{{ block.super }}``, this can be a
+  powerful way to make small customizations. See
+  :ref:`extending_an_overridden_template` in the *Overriding templates* How-to
+  for a full example.
+
 * Variables created outside of a :ttag:`{% block %}<block>` using the template
   tag ``as`` syntax can't be used inside the block. For example, this template
   doesn't render anything::
@@ -464,10 +471,10 @@ That would result in a rendered template like this::
 
     Hello, <b>username
 
-...which, in turn, would result in the remainder of the Web page being bolded!
+...which, in turn, would result in the remainder of the web page being in bold!
 
 Clearly, user-submitted data shouldn't be trusted blindly and inserted directly
-into your Web pages, because a malicious user could use this kind of hole to
+into your web pages, because a malicious user could use this kind of hole to
 do potentially bad things. This type of security exploit is called a
 `Cross Site Scripting`_ (XSS) attack.
 
@@ -557,7 +564,7 @@ current one as well as templates included via the :ttag:`include` tag,
 just like all block tags. For example:
 
 .. code-block:: html+django
-    :caption: base.html
+    :caption: ``base.html``
 
     {% autoescape off %}
     <h1>{% block title %}{% endblock %}</h1>
@@ -566,7 +573,7 @@ just like all block tags. For example:
     {% endautoescape %}
 
 .. code-block:: html+django
-    :caption: child.html
+    :caption: ``child.html``
 
     {% extends "base.html" %}
     {% block title %}This &amp; that{% endblock %}
@@ -646,14 +653,14 @@ of all comments related to the current task with::
 You can also access methods you've explicitly defined on your own models:
 
 .. code-block:: python
-    :caption: models.py
+    :caption: ``models.py``
 
     class Task(models.Model):
         def foo(self):
             return "bar"
 
 .. code-block:: html+django
-    :caption: template.html
+    :caption: ``template.html``
 
     {{ task.foo }}
 
@@ -706,5 +713,5 @@ This is a feature for the sake of maintainability and sanity.
 .. seealso::
 
     :doc:`The Templates Reference </ref/templates/index>`
-        Covers built-in tags, built-in filters, using an alternative template,
+        Covers built-in tags, built-in filters, using an alternative template
         language, and more.

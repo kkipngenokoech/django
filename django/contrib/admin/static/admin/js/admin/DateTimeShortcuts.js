@@ -28,8 +28,7 @@
         timezoneWarningClass: 'timezonewarning', // class of the warning for timezone mismatch
         timezoneOffset: 0,
         init: function() {
-            const body = document.getElementsByTagName('body')[0];
-            const serverOffset = body.dataset.adminUtcOffset;
+            const serverOffset = document.body.dataset.adminUtcOffset;
             if (serverOffset) {
                 const localOffset = new Date().getTimezoneOffset() * -60;
                 DateTimeShortcuts.timezoneOffset = localOffset - serverOffset;
@@ -48,8 +47,7 @@
         },
         // Return the current time while accounting for the server timezone.
         now: function() {
-            const body = document.getElementsByTagName('body')[0];
-            const serverOffset = body.dataset.adminUtcOffset;
+            const serverOffset = document.body.dataset.adminUtcOffset;
             if (serverOffset) {
                 const localNow = new Date();
                 const localOffset = localNow.getTimezoneOffset() * -60;
@@ -92,10 +90,9 @@
             }
             message = interpolate(message, [timezoneOffset]);
 
-            const warning = document.createElement('span');
-            warning.className = warningClass;
+            const warning = document.createElement('div');
+            warning.classList.add('help', warningClass);
             warning.textContent = message;
-            inp.parentNode.appendChild(document.createElement('br'));
             inp.parentNode.appendChild(warning);
         },
         // Add clock widget to a given field
