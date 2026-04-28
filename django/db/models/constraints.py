@@ -10,6 +10,9 @@ class BaseConstraint:
     def __init__(self, name):
         self.name = name
 
+    def check(self, **kwargs):
+        return []
+
     def constraint_sql(self, model, schema_editor):
         raise NotImplementedError('This method must be implemented by a subclass.')
 
@@ -142,6 +145,36 @@ class UniqueConstraint(BaseConstraint):
                 self.deferrable == other.deferrable
             )
         return super().__eq__(other)
+
+    def check(self, **kwargs):
+        errors = super().check(**kwargs)
+        errors.extend(self._check_fields(**kwargs))
+        return errors
+
+    def _check_fields(self, **kwargs):
+        from django.core import checks
+        errors = []
+        
+        # Get the model from kwargs
+        model = kwargs.get('model')
+        if model is None:
+            return errors
+            
+        # Check that all fields in the constraint exist on the model
+        for field_name in self.fields:
+            try:
+                model._meta.get_field(field_name)
+            except Exception:
+                errors.append(
+                    checks.Error(
+                        "'%s' refers to the nonexistent field '%s'." % (
+                            self.name, field_name,
+                        ),
+                        obj=model,
+                        id='models.E012',
+                    )
+                )
+        return errors
 
     def deconstruct(self):
         path, args, kwargs = super().deconstruct()

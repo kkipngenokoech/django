@@ -969,6 +969,11 @@ class AdminViewBasicTest(AdminViewBasicTestCase):
         self.assertEqual(response.context['site_url'], '/my-site-url/')
         self.assertContains(response, '<a href="/my-site-url/">View site</a>')
 
+    def test_date_hierarchy_empty_queryset(self):
+        self.assertIs(Question.objects.exists(), False)
+        response = self.client.get(reverse('admin:admin_views_answer2_changelist'))
+        self.assertEqual(response.status_code, 200)
+
     @override_settings(TIME_ZONE='America/Sao_Paulo', USE_TZ=True)
     def test_date_hierarchy_timezone_dst(self):
         # This datetime doesn't exist in this timezone due to DST.
@@ -1229,26 +1234,18 @@ class AdminJavaScriptTest(TestCase):
             response = self.client.get(reverse('admin:admin_views_section_add'))
             self.assertNotContains(response, 'vendor/jquery/jquery.js')
             self.assertContains(response, 'vendor/jquery/jquery.min.js')
-            self.assertNotContains(response, 'prepopulate.js')
-            self.assertContains(response, 'prepopulate.min.js')
-            self.assertNotContains(response, 'actions.js')
-            self.assertContains(response, 'actions.min.js')
-            self.assertNotContains(response, 'collapse.js')
-            self.assertContains(response, 'collapse.min.js')
-            self.assertNotContains(response, 'inlines.js')
-            self.assertContains(response, 'inlines.min.js')
+            self.assertContains(response, 'prepopulate.js')
+            self.assertContains(response, 'actions.js')
+            self.assertContains(response, 'collapse.js')
+            self.assertContains(response, 'inlines.js')
         with override_settings(DEBUG=True):
             response = self.client.get(reverse('admin:admin_views_section_add'))
             self.assertContains(response, 'vendor/jquery/jquery.js')
             self.assertNotContains(response, 'vendor/jquery/jquery.min.js')
             self.assertContains(response, 'prepopulate.js')
-            self.assertNotContains(response, 'prepopulate.min.js')
             self.assertContains(response, 'actions.js')
-            self.assertNotContains(response, 'actions.min.js')
             self.assertContains(response, 'collapse.js')
-            self.assertNotContains(response, 'collapse.min.js')
             self.assertContains(response, 'inlines.js')
-            self.assertNotContains(response, 'inlines.min.js')
 
 
 @override_settings(ROOT_URLCONF='admin_views.urls')
@@ -1425,6 +1422,7 @@ def get_perm(Model, codename):
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
+                'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
             ],
@@ -2424,6 +2422,7 @@ class AdminViewPermissionsTest(TestCase):
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
+                'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
             ],

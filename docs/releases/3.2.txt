@@ -154,7 +154,12 @@ Logging
 Management Commands
 ~~~~~~~~~~~~~~~~~~~
 
-* ...
+* :djadmin:`loaddata` now supports fixtures stored in XZ archives (``.xz``) and
+  LZMA archives (``.lzma``).
+
+* :djadmin:`makemigrations` can now be called without an active database
+  connection. In that case, check for a consistent migration history is
+  skipped.
 
 Migrations
 ~~~~~~~~~~
@@ -194,7 +199,10 @@ Templates
 Tests
 ~~~~~
 
-* ...
+* Objects assigned to class attributes in :meth:`.TestCase.setUpTestData` are
+  now isolated for each test method. Such objects are now required to support
+  creating deep copies with :py:func:`copy.deepcopy`. Assigning objects which
+  don't support ``deepcopy()`` is deprecated and will be removed in Django 4.1.
 
 URLs
 ~~~~
@@ -224,11 +232,33 @@ backends.
 
 * ...
 
+:mod:`django.contrib.gis`
+-------------------------
+
+* Support for PostGIS 2.2 is removed.
+
+Dropped support for PostgreSQL 9.5
+----------------------------------
+
+Upstream support for PostgreSQL 9.5 ends in February 2021. Django 3.2 supports
+PostgreSQL 9.6 and higher.
+
+Dropped support for MySQL 5.6
+-----------------------------
+
+The end of upstream support for MySQL 5.6 is April 2021. Django 3.2 supports
+MySQL 5.7 and higher.
+
 Miscellaneous
 -------------
 
 * The undocumented ``SpatiaLiteOperations.proj4_version()`` method is renamed
   to ``proj_version()``.
+
+* Minified JavaScript files are no longer included with the admin. If you
+  require these files to be minified, consider using a third party app or
+  external build tool. The minified vendored JavaScript files packaged with the
+  admin (e.g. :ref:`jquery.min.js <contrib-admin-jquery>`) are still included.
 
 .. _deprecated-features-3.2:
 
@@ -238,4 +268,6 @@ Features deprecated in 3.2
 Miscellaneous
 -------------
 
-* ...
+* Assigning objects which don't support creating deep copies with
+  :py:func:`copy.deepcopy` to class attributes in
+  :meth:`.TestCase.setUpTestData` is deprecated.
