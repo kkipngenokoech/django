@@ -189,13 +189,14 @@ class TestUtilsText(SimpleTestCase):
 
     def test_slugify(self):
         items = (
-            # given - expected - unicode?
+            # given - expected - Unicode?
             ('Hello, World!', 'hello-world', False),
             ('spam & eggs', 'spam-eggs', False),
             ('spam & ıçüş', 'spam-ıçüş', True),
             ('foo ıç bar', 'foo-ıç-bar', True),
             ('    foo ıç bar', 'foo-ıç-bar', True),
             ('你好', '你好', True),
+            ('İstanbul', 'istanbul', True),
         )
         for value, output, is_unicode in items:
             self.assertEqual(text.slugify(value, allow_unicode=is_unicode), output)

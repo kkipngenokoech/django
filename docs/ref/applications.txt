@@ -22,9 +22,9 @@ The term **project** describes a Django web application. The project Python
 package is defined primarily by a settings module, but it usually contains
 other things. For example, when you run  ``django-admin startproject mysite``
 you'll get a ``mysite`` project directory that contains a ``mysite`` Python
-package with ``settings.py``, ``urls.py``, and ``wsgi.py``. The project package
-is often extended to include things like fixtures, CSS, and templates which
-aren't tied to a particular application.
+package with ``settings.py``, ``urls.py``, ``asgi.py`` and ``wsgi.py``. The
+project package is often extended to include things like fixtures, CSS, and
+templates which aren't tied to a particular application.
 
 A **project's root directory** (the one that contains ``manage.py``) is usually
 the container for all of a project's applications which aren't installed
@@ -104,9 +104,8 @@ their :setting:`INSTALLED_APPS` setting. Besides this use case, it's best to
 avoid using ``default_app_config`` and instead specify the app config class in
 :setting:`INSTALLED_APPS` as described next.
 
-Of course, you can also tell your users to put
-``'rock_n_roll.apps.RockNRollConfig'`` in their :setting:`INSTALLED_APPS`
-setting. You can even provide several different
+You can also tell your users to put ``'rock_n_roll.apps.RockNRollConfig'`` in
+their :setting:`INSTALLED_APPS` setting. You can even provide several different
 :class:`~django.apps.AppConfig` subclasses with different behaviors and allow
 your users to choose one via their :setting:`INSTALLED_APPS` setting.
 
@@ -256,15 +255,20 @@ Methods
 
     Example::
 
+        from django.apps import AppConfig
         from django.db.models.signals import pre_save
 
-        def ready(self):
-            # importing model classes
-            from .models import MyModel  # or...
-            MyModel = self.get_model('MyModel')
 
-            # registering signals with the model's string label
-            pre_save.connect(receiver, sender='app_label.MyModel')
+        class RockNRollConfig(AppConfig):
+            # ...
+
+            def ready(self):
+                # importing model classes
+                from .models import MyModel  # or...
+                MyModel = self.get_model('MyModel')
+
+                # registering signals with the model's string label
+                pre_save.connect(receiver, sender='app_label.MyModel')
 
     .. warning::
 

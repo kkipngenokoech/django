@@ -221,7 +221,7 @@ class Field(RegisterLookupMixin):
         elif LOOKUP_SEP in self.name:
             return [
                 checks.Error(
-                    'Field names must not contain "%s".' % (LOOKUP_SEP,),
+                    'Field names must not contain "%s".' % LOOKUP_SEP,
                     obj=self,
                     id='fields.E002',
                 )
@@ -269,10 +269,10 @@ class Field(RegisterLookupMixin):
                 ):
                     break
                 if self.max_length is not None and group_choices:
-                    choice_max_length = max(
+                    choice_max_length = max([
                         choice_max_length,
                         *(len(value) for value, _ in group_choices if isinstance(value, str)),
-                    )
+                    ])
             except (TypeError, ValueError):
                 # No groups, choices in the form [value, display]
                 value, human_name = group_name, group_choices
@@ -335,12 +335,15 @@ class Field(RegisterLookupMixin):
         else:
             return []
 
-    def _check_backend_specific_checks(self, **kwargs):
+    def _check_backend_specific_checks(self, databases=None, **kwargs):
+        if databases is None:
+            return []
         app_label = self.model._meta.app_label
-        for db in connections:
-            if router.allow_migrate(db, app_label, model_name=self.model._meta.model_name):
-                return connections[db].validation.check_field(self, **kwargs)
-        return []
+        errors = []
+        for alias in databases:
+            if router.allow_migrate(alias, app_label, model_name=self.model._meta.model_name):
+                errors.extend(connections[alias].validation.check_field(self, **kwargs))
+        return errors
 
     def _check_validators(self):
         errors = []
@@ -493,6 +496,8 @@ class Field(RegisterLookupMixin):
             path = path.replace("django.db.models.fields.related", "django.db.models")
         elif path.startswith("django.db.models.fields.files"):
             path = path.replace("django.db.models.fields.files", "django.db.models")
+        elif path.startswith('django.db.models.fields.json'):
+            path = path.replace('django.db.models.fields.json', 'django.db.models')
         elif path.startswith("django.db.models.fields.proxy"):
             path = path.replace("django.db.models.fields.proxy", "django.db.models")
         elif path.startswith("django.db.models.fields"):
@@ -764,7 +769,11 @@ class Field(RegisterLookupMixin):
             if not getattr(cls, self.attname, None):
                 setattr(cls, self.attname, self.descriptor_class(self))
         if self.choices is not None:
-            if not hasattr(cls, 'get_%s_display' % self.name):
+            # Don't override a get_FOO_display() method defined explicitly on
+            # this class, but don't check methods derived from inheritance, to
+            # allow overriding inherited choices. For more complex inheritance
+            # structures users should override contribute_to_class().
+            if 'get_%s_display' % self.name not in cls.__dict__:
                 setattr(
                     cls,
                     'get_%s_display' % self.name,
@@ -1922,6 +1931,14 @@ class NullBooleanField(BooleanField):
         'invalid_nullable': _('“%(value)s” value must be either None, True or False.'),
     }
     description = _("Boolean (Either True, False or None)")
+    system_check_deprecated_details = {
+        'msg': (
+            'NullBooleanField is deprecated. Support for it (except in '
+            'historical migrations) will be removed in Django 4.0.'
+        ),
+        'hint': 'Use BooleanField(null=True) instead.',
+        'id': 'fields.W903',
+    }
 
     def __init__(self, *args, **kwargs):
         kwargs['null'] = True

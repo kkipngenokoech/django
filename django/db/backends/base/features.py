@@ -1,4 +1,4 @@
-from django.db.utils import ProgrammingError
+from django.db import ProgrammingError
 from django.utils.functional import cached_property
 
 
@@ -20,6 +20,8 @@ class BaseDatabaseFeatures:
     # Does the backend allow inserting duplicate rows when a unique_together
     # constraint exists and some fields are nullable but not all of them?
     supports_partially_nullable_unique_constraints = True
+    # Does the backend support initially deferrable unique constraints?
+    supports_deferrable_unique_constraints = False
 
     can_use_chunked_reads = True
     can_return_columns_from_insert = False
@@ -90,6 +92,9 @@ class BaseDatabaseFeatures:
 
     # Does the backend support NULLS FIRST and NULLS LAST in ORDER BY?
     supports_order_by_nulls_modifier = True
+
+    # Does the backend orders NULLS FIRST by default?
+    order_by_nulls_first = False
 
     # The database's limit on the number of query parameters.
     max_query_params = None
@@ -246,6 +251,7 @@ class BaseDatabaseFeatures:
     # Does the backend support window expressions (expression OVER (...))?
     supports_over_clause = False
     supports_frame_range_fixed_distance = False
+    only_supports_unbounded_with_preceding_and_following = False
 
     # Does the backend support CAST with precision?
     supports_cast_with_precision = True
@@ -291,8 +297,20 @@ class BaseDatabaseFeatures:
     # field(s)?
     allows_multiple_constraints_on_same_fields = True
 
-    # Does the backend support boolean expressions in the SELECT clause?
+    # Does the backend support boolean expressions in SELECT and GROUP BY
+    # clauses?
     supports_boolean_expr_in_select_clause = True
+
+    # Does the backend support JSONField?
+    supports_json_field = True
+    # Can the backend introspect a JSONField?
+    can_introspect_json_field = True
+    # Does the backend support primitives in JSONField?
+    supports_primitives_in_json_field = True
+    # Is there a true datatype for JSON?
+    has_native_json_field = False
+    # Does the backend use PostgreSQL-style JSON operators like '->'?
+    has_json_operators = False
 
     def __init__(self, connection):
         self.connection = connection

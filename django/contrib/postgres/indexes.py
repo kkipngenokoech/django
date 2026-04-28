@@ -1,5 +1,5 @@
+from django.db import NotSupportedError
 from django.db.models import Index
-from django.db.utils import NotSupportedError
 from django.utils.functional import cached_property
 
 __all__ = [
@@ -67,10 +67,6 @@ class BloomIndex(PostgresIndex):
         if self.columns:
             kwargs['columns'] = self.columns
         return path, args, kwargs
-
-    def check_supported(self, schema_editor):
-        if not schema_editor.connection.features.has_bloom_index:
-            raise NotSupportedError('Bloom indexes require PostgreSQL 9.6+.')
 
     def get_with_params(self):
         with_params = []

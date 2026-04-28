@@ -125,6 +125,22 @@ class TranslationTests(SimpleTestCase):
         self.assertEqual(g('%d year', '%d years', 1) % 1, '1 year')
         self.assertEqual(g('%d year', '%d years', 2) % 2, '2 years')
 
+    @override_settings(LOCALE_PATHS=extended_locale_paths)
+    @translation.override('fr')
+    def test_multiple_plurals_per_language(self):
+        """
+        Normally, French has 2 plurals. As other/locale/fr/LC_MESSAGES/django.po
+        has a different plural equation with 3 plurals, this tests if those
+        plural are honored.
+        """
+        self.assertEqual(ngettext("%d singular", "%d plural", 0) % 0, "0 pluriel1")
+        self.assertEqual(ngettext("%d singular", "%d plural", 1) % 1, "1 singulier")
+        self.assertEqual(ngettext("%d singular", "%d plural", 2) % 2, "2 pluriel2")
+        french = trans_real.catalog()
+        # Internal _catalog can query subcatalogs (from different po files).
+        self.assertEqual(french._catalog[('%d singular', 0)], '%d singulier')
+        self.assertEqual(french._catalog[('%d hour', 0)], '%d heure')
+
     def test_override(self):
         activate('de')
         try:
@@ -1848,6 +1864,12 @@ class WatchForTranslationChangesTests(SimpleTestCase):
             watch_for_translation_changes(mocked_sender)
         project_dir = Path(__file__).parent / 'sampleproject' / 'locale'
         mocked_sender.watch_dir.assert_any_call(project_dir, '**/*.mo')
+
+    def test_i18n_app_dirs_ignore_django_apps(self):
+        mocked_sender = mock.MagicMock()
+        with self.settings(INSTALLED_APPS=['django.contrib.admin']):
+            watch_for_translation_changes(mocked_sender)
+        mocked_sender.watch_dir.assert_called_once_with(Path('locale'), '**/*.mo')
 
     def test_i18n_local_locale(self):
         mocked_sender = mock.MagicMock()

@@ -257,9 +257,8 @@ operations to ``cache_replica``, and all write operations to
 If you don't specify routing directions for the database cache model,
 the cache backend will use the ``default`` database.
 
-Of course, if you don't use the database cache backend, you don't need
-to worry about providing routing instructions for the database cache
-model.
+And if you don't use the database cache backend, you don't need to worry about
+providing routing instructions for the database cache model.
 
 Filesystem caching
 ------------------
@@ -325,9 +324,9 @@ order to keep them separate.
 The cache uses a least-recently-used (LRU) culling strategy.
 
 Note that each process will have its own private cache instance, which means no
-cross-process caching is possible. This obviously also means the local memory
-cache isn't particularly memory-efficient, so it's probably not a good choice
-for production environments. It's nice for development.
+cross-process caching is possible. This also means the local memory cache isn't
+particularly memory-efficient, so it's probably not a good choice for
+production environments. It's nice for development.
 
 Dummy caching (for development)
 -------------------------------
@@ -570,6 +569,9 @@ minutes. (Note that we've written it as ``60 * 15`` for the purpose of
 readability. ``60 * 15`` will be evaluated to ``900`` -- that is, 15 minutes
 multiplied by 60 seconds per minute.)
 
+The cache timeout set by ``cache_page`` takes precedence over the ``max-age``
+directive from the ``Cache-Control`` header.
+
 The per-view cache, like the per-site cache, is keyed off of the URL. If
 multiple URLs point at the same view, each URL will be cached separately.
 Continuing the ``my_view`` example, if your URLconf looks like this::
@@ -604,6 +606,11 @@ setting for the middleware.  It can be used like this::
 The ``key_prefix`` and ``cache`` arguments may be specified together. The
 ``key_prefix`` argument and the :setting:`KEY_PREFIX <CACHES-KEY_PREFIX>`
 specified under :setting:`CACHES` will be concatenated.
+
+.. versionchanged:: 3.1
+
+    In older versions, the ``max-age`` directive from the ``Cache-Control``
+    header had precedence over the cache timeout set by ``cache_page``.
 
 Specifying per-view cache in the URLconf
 ----------------------------------------
@@ -682,7 +689,7 @@ templates to achieve the same result:
     {% get_current_language as LANGUAGE_CODE %}
 
     {% cache 600 welcome LANGUAGE_CODE %}
-        {% trans "Welcome to example.com" %}
+        {% translate "Welcome to example.com" %}
     {% endcache %}
 
 The cache timeout can be a template variable, as long as the template variable
