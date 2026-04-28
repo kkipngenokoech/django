@@ -11,8 +11,14 @@ class PasswordResetTokenGenerator:
     reset mechanism.
     """
     key_salt = "django.contrib.auth.tokens.PasswordResetTokenGenerator"
-    algorithm = 'sha256'
-    secret = settings.SECRET_KEY
+    algorithm = None
+    secret = None
+
+    def __init__(self):
+        self.secret = self.secret or settings.SECRET_KEY
+        # RemovedInDjango40Warning: when the deprecation ends, replace with:
+        # self.algorithm = self.algorithm or 'sha256'
+        self.algorithm = self.algorithm or settings.DEFAULT_HASHING_ALGORITHM
 
     def make_token(self, user):
         """
@@ -67,7 +73,7 @@ class PasswordResetTokenGenerator:
             # legacy argument and replace with:
             #   algorithm=self.algorithm,
             algorithm='sha1' if legacy else self.algorithm,
-        ).hexdigest()[::2]  # Limit to 20 characters to shorten the URL.
+        ).hexdigest()[::2]  # Limit to shorten the URL.
         return "%s-%s" % (ts_b36, hash_string)
 
     def _make_hash_value(self, user, timestamp):
@@ -79,6 +85,7 @@ class PasswordResetTokenGenerator:
            same password is chosen, due to password salting).
         2. The last_login field will usually be updated very shortly after
            a password reset.
+        3. The email field will change if the user changes their email address.
         Failing those things, settings.PASSWORD_RESET_TIMEOUT eventually
         invalidates the token.
 
@@ -88,7 +95,8 @@ class PasswordResetTokenGenerator:
         # Truncate microseconds so that tokens are consistent even if the
         # database doesn't support microseconds.
         login_timestamp = '' if user.last_login is None else user.last_login.replace(microsecond=0, tzinfo=None)
-        return str(user.pk) + user.password + str(login_timestamp) + str(timestamp)
+        email = getattr(user, 'email', '') or ''
+        return str(user.pk) + user.password + str(login_timestamp) + str(timestamp) + email
 
     def _num_seconds(self, dt):
         return int((dt - datetime(2001, 1, 1)).total_seconds())
