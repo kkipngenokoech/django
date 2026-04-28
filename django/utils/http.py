@@ -113,10 +113,10 @@ def urlencode(query, doseq=False):
     for key, value in query:
         if value is None:
             raise TypeError(
-                'Cannot encode None in a query string. Did you mean to pass '
-                'an empty string or omit the value?'
+                "Cannot encode None for key '%s' in a query string. Did you "
+                "mean to pass an empty string or omit the value?" % key
             )
-        elif isinstance(value, (str, bytes)):
+        elif not doseq or isinstance(value, (str, bytes)):
             query_val = value
         else:
             try:
@@ -124,14 +124,15 @@ def urlencode(query, doseq=False):
             except TypeError:
                 query_val = value
             else:
-                # Consume generators and iterators, even when doseq=True, to
+                # Consume generators and iterators, when doseq=True, to
                 # work around https://bugs.python.org/issue31706.
                 query_val = []
                 for item in itr:
                     if item is None:
                         raise TypeError(
-                            'Cannot encode None in a query string. Did you '
-                            'mean to pass an empty string or omit the value?'
+                            "Cannot encode None for key '%s' in a query "
+                            "string. Did you mean to pass an empty string or "
+                            "omit the value?" % key
                         )
                     elif not isinstance(item, bytes):
                         item = str(item)
@@ -175,10 +176,24 @@ def parse_http_date(date):
     try:
         year = int(m.group('year'))
         if year < 100:
-            if year < 70:
-                year += 2000
-            else:
-                year += 1900
+            # RFC 7231: Recipients of a timestamp value in rfc850-date format,
+            # which uses a two-digit year, MUST interpret a timestamp that appears
+            # to be more than 50 years in the future as representing the most recent
+            # year in the past that had the same last two digits.
+            current_year = datetime.datetime.now().year
+            current_century = (current_year // 100) * 100
+            candidate_year = current_century + year
+            
+            # If the candidate year is more than 50 years in the future,
+            # use the previous century
+            if candidate_year - current_year > 50:
+                candidate_year -= 100
+            # If the candidate year is more than 50 years in the past,
+            # use the next century
+            elif current_year - candidate_year > 50:
+                candidate_year += 100
+            
+            year = candidate_year
         month = MONTHS.index(m.group('mon').lower()) + 1
         day = int(m.group('day'))
         hour = int(m.group('hour'))
@@ -293,15 +308,18 @@ def is_same_domain(host, pattern):
     )
 
 
-def is_safe_url(url, allowed_hosts, require_https=False):
+def url_has_allowed_host_and_scheme(url, allowed_hosts, require_https=False):
     """
-    Return ``True`` if the url is a safe redirection (i.e. it doesn't point to
-    a different host and uses a safe scheme).
+    Return ``True`` if the url uses an allowed host and a safe scheme.
 
     Always return ``False`` on an empty url.
 
     If ``require_https`` is ``True``, only 'https' will be considered a valid
     scheme, as opposed to 'http' and 'https' with the default, ``False``.
+
+    Note: "True" doesn't entail that a URL is "safe". It may still be e.g.
+    quoted incorrectly. Ensure to also use django.utils.encoding.iri_to_uri()
+    on the path component of untrusted URLs.
     """
     if url is not None:
         url = url.strip()
@@ -313,8 +331,19 @@ def is_safe_url(url, allowed_hosts, require_https=False):
         allowed_hosts = {allowed_hosts}
     # Chrome treats \ completely as / in paths but it could be part of some
     # basic auth credentials so we need to check both URLs.
-    return (_is_safe_url(url, allowed_hosts, require_https=require_https) and
-            _is_safe_url(url.replace('\\', '/'), allowed_hosts, require_https=require_https))
+    return (
+        _url_has_allowed_host_and_scheme(url, allowed_hosts, require_https=require_https) and
+        _url_has_allowed_host_and_scheme(url.replace('\\', '/'), allowed_hosts, require_https=require_https)
+    )
+
+
+def is_safe_url(url, allowed_hosts, require_https=False):
+    warnings.warn(
+        'django.utils.http.is_safe_url() is deprecated in favor of '
+        'url_has_allowed_host_and_scheme().',
+        RemovedInDjango40Warning, stacklevel=2,
+    )
+    return url_has_allowed_host_and_scheme(url, allowed_hosts, require_https)
 
 
 # Copied from urllib.parse.urlparse() but uses fixed urlsplit() function.
@@ -366,7 +395,7 @@ def _urlsplit(url, scheme='', allow_fragments=True):
     return _coerce_result(v)
 
 
-def _is_safe_url(url, allowed_hosts, require_https=False):
+def _url_has_allowed_host_and_scheme(url, allowed_hosts, require_https=False):
     # Chrome considers any URL with more than two slashes to be absolute, but
     # urlparse is not so flexible. Treat any url with three slashes as unsafe.
     if url.startswith('///'):

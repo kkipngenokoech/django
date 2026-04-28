@@ -1,5 +1,6 @@
 import os
-from threading import local
+
+from asgiref.local import Local
 
 from django.template import Context, Template, TemplateSyntaxError
 from django.test import SimpleTestCase, override_settings
@@ -7,8 +8,8 @@ from django.utils import translation
 from django.utils.safestring import mark_safe
 from django.utils.translation import trans_real
 
-from .base import MultipleLocaleActivationTestCase, extended_locale_paths, here
 from ...utils import setup
+from .base import MultipleLocaleActivationTestCase, extended_locale_paths, here
 
 
 class I18nBlockTransTagTests(SimpleTestCase):
@@ -278,7 +279,7 @@ class TranslationBlockTransTagTests(SimpleTestCase):
     @override_settings(LOCALE_PATHS=extended_locale_paths)
     def test_template_tags_pgettext(self):
         """{% blocktrans %} takes message contexts into account (#14806)."""
-        trans_real._active = local()
+        trans_real._active = Local()
         trans_real._translations = {}
         with translation.override('de'):
             # Nonexistent context
