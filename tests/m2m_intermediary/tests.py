@@ -6,7 +6,7 @@ from .models import Article, Reporter, Writer
 
 
 class M2MIntermediaryTests(TestCase):
-    def test_intermeiary(self):
+    def test_intermediary(self):
         r1 = Reporter.objects.create(first_name="John", last_name="Smith")
         r2 = Reporter.objects.create(first_name="Jane", last_name="Doe")
 
@@ -18,11 +18,12 @@ class M2MIntermediaryTests(TestCase):
         w2 = Writer.objects.create(reporter=r2, article=a, position="Contributor")
 
         self.assertQuerysetEqual(
-            a.writer_set.select_related().order_by("-position"), [
+            a.writer_set.select_related().order_by("-position"),
+            [
                 ("John Smith", "Main writer"),
                 ("Jane Doe", "Contributor"),
             ],
-            lambda w: (str(w.reporter), w.position)
+            lambda w: (str(w.reporter), w.position),
         )
         self.assertEqual(w1.reporter, r1)
         self.assertEqual(w2.reporter, r2)
@@ -31,8 +32,7 @@ class M2MIntermediaryTests(TestCase):
         self.assertEqual(w2.article, a)
 
         self.assertQuerysetEqual(
-            r1.writer_set.all(), [
-                ("John Smith", "Main writer")
-            ],
-            lambda w: (str(w.reporter), w.position)
+            r1.writer_set.all(),
+            [("John Smith", "Main writer")],
+            lambda w: (str(w.reporter), w.position),
         )
