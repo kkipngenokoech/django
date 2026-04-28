@@ -142,6 +142,16 @@ class BasicExtractorTests(ExtractorTests):
             self.assertIn('#. Translators: One-line translator comment #1', po_contents)
             self.assertIn('msgctxt "Special trans context #1"', po_contents)
 
+    def test_no_option(self):
+        # One of either the --locale, --exclude, or --all options is required.
+        msg = "Type 'manage.py help makemessages' for usage information."
+        with mock.patch(
+            'django.core.management.commands.makemessages.sys.argv',
+            ['manage.py', 'makemessages'],
+        ):
+            with self.assertRaisesRegex(CommandError, msg):
+                management.call_command('makemessages')
+
     def test_comments_extractor(self):
         management.call_command('makemessages', locale=[LOCALE], verbosity=0)
         self.assertTrue(os.path.exists(self.PO_FILE))
@@ -705,26 +715,25 @@ class ExcludedLocaleExtractionTests(ExtractorTests):
             execute_from_command_line(['django-admin', 'help', 'makemessages'])
 
     def test_one_locale_excluded(self):
-        management.call_command('makemessages', exclude=['it'], stdout=StringIO())
+        management.call_command('makemessages', exclude=['it'], verbosity=0)
         self.assertRecentlyModified(self.PO_FILE % 'en')
         self.assertRecentlyModified(self.PO_FILE % 'fr')
         self.assertNotRecentlyModified(self.PO_FILE % 'it')
 
     def test_multiple_locales_excluded(self):
-        management.call_command('makemessages', exclude=['it', 'fr'], stdout=StringIO())
+        management.call_command('makemessages', exclude=['it', 'fr'], verbosity=0)
         self.assertRecentlyModified(self.PO_FILE % 'en')
         self.assertNotRecentlyModified(self.PO_FILE % 'fr')
         self.assertNotRecentlyModified(self.PO_FILE % 'it')
 
     def test_one_locale_excluded_with_locale(self):
-        management.call_command('makemessages', locale=['en', 'fr'], exclude=['fr'], stdout=StringIO())
+        management.call_command('makemessages', locale=['en', 'fr'], exclude=['fr'], verbosity=0)
         self.assertRecentlyModified(self.PO_FILE % 'en')
         self.assertNotRecentlyModified(self.PO_FILE % 'fr')
         self.assertNotRecentlyModified(self.PO_FILE % 'it')
 
     def test_multiple_locales_excluded_with_locale(self):
-        management.call_command('makemessages', locale=['en', 'fr', 'it'], exclude=['fr', 'it'],
-                                stdout=StringIO())
+        management.call_command('makemessages', locale=['en', 'fr', 'it'], exclude=['fr', 'it'], verbosity=0)
         self.assertRecentlyModified(self.PO_FILE % 'en')
         self.assertNotRecentlyModified(self.PO_FILE % 'fr')
         self.assertNotRecentlyModified(self.PO_FILE % 'it')

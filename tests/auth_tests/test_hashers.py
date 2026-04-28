@@ -50,9 +50,20 @@ class TestUtilsHashPass(SimpleTestCase):
         self.assertTrue(check_password('', blank_encoded))
         self.assertFalse(check_password(' ', blank_encoded))
 
+    def test_bytes(self):
+        encoded = make_password(b'bytes_password')
+        self.assertTrue(encoded.startswith('pbkdf2_sha256$'))
+        self.assertIs(is_password_usable(encoded), True)
+        self.assertIs(check_password(b'bytes_password', encoded), True)
+
+    def test_invalid_password(self):
+        msg = 'Password must be a string or bytes, got int.'
+        with self.assertRaisesMessage(TypeError, msg):
+            make_password(1)
+
     def test_pbkdf2(self):
         encoded = make_password('lètmein', 'seasalt', 'pbkdf2_sha256')
-        self.assertEqual(encoded, 'pbkdf2_sha256$216000$seasalt$youGZxOw6ZOcfrXv2i8/AhrnpZflJJ9EshS9XmUJTUg=')
+        self.assertEqual(encoded, 'pbkdf2_sha256$260000$seasalt$YlZ2Vggtqdc61YjArZuoApoBh9JNGYoDRBUGu6tcJQo=')
         self.assertTrue(is_password_usable(encoded))
         self.assertTrue(check_password('lètmein', encoded))
         self.assertFalse(check_password('lètmeinz', encoded))
@@ -285,13 +296,13 @@ class TestUtilsHashPass(SimpleTestCase):
     def test_low_level_pbkdf2(self):
         hasher = PBKDF2PasswordHasher()
         encoded = hasher.encode('lètmein', 'seasalt2')
-        self.assertEqual(encoded, 'pbkdf2_sha256$216000$seasalt2$gHyszNJ9lwTG5y3MQUjZe+OJmYVTBPl/y7bYq9dtk8M=')
+        self.assertEqual(encoded, 'pbkdf2_sha256$260000$seasalt2$UCGMhrOoaq1ghQPArIBK5RkI6IZLRxlIwHWA1dMy7y8=')
         self.assertTrue(hasher.verify('lètmein', encoded))
 
     def test_low_level_pbkdf2_sha1(self):
         hasher = PBKDF2SHA1PasswordHasher()
         encoded = hasher.encode('lètmein', 'seasalt2')
-        self.assertEqual(encoded, 'pbkdf2_sha1$216000$seasalt2$E1KH89wMKuPXrrQzifVcG4cBtiA=')
+        self.assertEqual(encoded, 'pbkdf2_sha1$260000$seasalt2$wAibXvW6jgvatCdONi6SMJ6q7mI=')
         self.assertTrue(hasher.verify('lètmein', encoded))
 
     @override_settings(
