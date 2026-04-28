@@ -103,7 +103,14 @@ class SQLCompiler:
             # Converts string references to expressions.
             for expr in self.query.group_by:
                 if not hasattr(expr, 'as_sql'):
-                    expressions.append(self.query.resolve_ref(expr))
+                    resolved_expr = self.query.resolve_ref(expr)
+                    # If this is a reference to an annotation in the select clause,
+                    # we need to use the full expression to avoid ambiguous column references
+                    if (isinstance(resolved_expr, Ref) and 
+                        resolved_expr.refs in self.query.annotation_select):
+                        expressions.append(self.query.annotation_select[resolved_expr.refs])
+                    else:
+                        expressions.append(resolved_expr)
                 else:
                     expressions.append(expr)
         # Note that even if the group_by is set, it is only the minimal
