@@ -1,6 +1,6 @@
-==========================
-Outputting CSV with Django
-==========================
+========================
+How to create CSV output
+========================
 
 This document explains how to output CSV (Comma Separated Values) dynamically
 using Django views. To do this, you can either use the Python CSV library or the
@@ -20,8 +20,10 @@ Here's an example::
 
     def some_view(request):
         # Create the HttpResponse object with the appropriate CSV header.
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="somefilename.csv"'
+        response = HttpResponse(
+            content_type='text/csv',
+            headers={'Content-Disposition': 'attachment; filename="somefilename.csv"'},
+        )
 
         writer = csv.writer(response)
         writer.writerow(['First row', 'Foo', 'Bar', 'Baz'])
@@ -86,10 +88,11 @@ the assembly and transmission of a large CSV file::
         rows = (["Row {}".format(idx), str(idx)] for idx in range(65536))
         pseudo_buffer = Echo()
         writer = csv.writer(pseudo_buffer)
-        response = StreamingHttpResponse((writer.writerow(row) for row in rows),
-                                         content_type="text/csv")
-        response['Content-Disposition'] = 'attachment; filename="somefilename.csv"'
-        return response
+        return StreamingHttpResponse(
+            (writer.writerow(row) for row in rows),
+            content_type="text/csv",
+            headers={'Content-Disposition': 'attachment; filename="somefilename.csv"'},
+        )
 
 Using the template system
 =========================
@@ -104,12 +107,14 @@ template output the commas in a :ttag:`for` loop.
 Here's an example, which generates the same CSV file as above::
 
     from django.http import HttpResponse
-    from django.template import Context, loader
+    from django.template import loader
 
     def some_view(request):
         # Create the HttpResponse object with the appropriate CSV header.
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="somefilename.csv"'
+        response = HttpResponse(
+            content_type='text/csv',
+            headers={'Content-Disposition': 'attachment; filename="somefilename.csv"'},
+        )
 
         # The data is hard-coded here, but you could load it from a database or
         # some other source.
@@ -119,9 +124,7 @@ Here's an example, which generates the same CSV file as above::
         )
 
         t = loader.get_template('my_template_name.txt')
-        c = Context({
-            'data': csv_data,
-        })
+        c = {'data': csv_data}
         response.write(t.render(c))
         return response
 

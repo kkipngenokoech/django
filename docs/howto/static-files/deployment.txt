@@ -1,6 +1,6 @@
-======================
-Deploying static files
-======================
+==========================
+How to deploy static files
+==========================
 
 .. seealso::
 
@@ -21,9 +21,9 @@ manually or the :func:`post_process
 <django.contrib.staticfiles.storage.StaticFilesStorage.post_process>` method of
 the ``Storage`` class might take care of that.
 
-Of course, as with all deployment tasks, the devil's in the details. Every
-production setup will be a bit different, so you'll need to adapt the basic
-outline to fit your needs. Below are a few common patterns that might help.
+As with all deployment tasks, the devil's in the details. Every production
+setup will be a bit different, so you'll need to adapt the basic outline to fit
+your needs. Below are a few common patterns that might help.
 
 Serving the site and your static files from the same server
 -----------------------------------------------------------
@@ -44,7 +44,7 @@ multiple web servers.
 Serving static files from a dedicated server
 --------------------------------------------
 
-Most larger Django sites use a separate Web server -- i.e., one that's not also
+Most larger Django sites use a separate web server -- i.e., one that's not also
 running Django -- for serving static files. This server often runs a different
 type of web server -- faster but less full-featured. Some common choices are:
 
@@ -75,7 +75,7 @@ Serving static files from a cloud service or CDN
 Another common tactic is to serve static files from a cloud storage provider
 like Amazon's S3 and/or a CDN (content delivery network). This lets you
 ignore the problems of serving static files and can often make for
-faster-loading Web pages (especially when using a CDN).
+faster-loading web pages (especially when using a CDN).
 
 When using these services, the basic workflow would look a bit like the above,
 except that instead of using ``rsync`` to transfer your static files to the

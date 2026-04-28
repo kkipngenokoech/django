@@ -8,27 +8,42 @@ from django.db import models
 
 try:
     from django.contrib.postgres.fields import (
-        ArrayField, BigIntegerRangeField, CICharField, CIEmailField,
-        CITextField, DateRangeField, DateTimeRangeField, DecimalRangeField,
-        HStoreField, IntegerRangeField, JSONField,
+        ArrayField,
+        BigIntegerRangeField,
+        CICharField,
+        CIEmailField,
+        CITextField,
+        DateRangeField,
+        DateTimeRangeField,
+        DecimalRangeField,
+        HStoreField,
+        IntegerRangeField,
     )
-    from django.contrib.postgres.search import SearchVectorField
+    from django.contrib.postgres.search import SearchVector, SearchVectorField
 except ImportError:
+
     class DummyArrayField(models.Field):
         def __init__(self, base_field, size=None, **kwargs):
             super().__init__(**kwargs)
 
         def deconstruct(self):
             name, path, args, kwargs = super().deconstruct()
-            kwargs.update({
-                'base_field': '',
-                'size': 1,
-            })
+            kwargs.update(
+                {
+                    "base_field": "",
+                    "size": 1,
+                }
+            )
             return name, path, args, kwargs
 
-    class DummyJSONField(models.Field):
-        def __init__(self, encoder=None, **kwargs):
+    class DummyContinuousRangeField(models.Field):
+        def __init__(self, *args, default_bounds="[)", **kwargs):
             super().__init__(**kwargs)
+
+        def deconstruct(self):
+            name, path, args, kwargs = super().deconstruct()
+            kwargs["default_bounds"] = "[)"
+            return name, path, args, kwargs
 
     ArrayField = DummyArrayField
     BigIntegerRangeField = models.Field
@@ -36,11 +51,11 @@ except ImportError:
     CIEmailField = models.Field
     CITextField = models.Field
     DateRangeField = models.Field
-    DateTimeRangeField = models.Field
-    DecimalRangeField = models.Field
+    DateTimeRangeField = DummyContinuousRangeField
+    DecimalRangeField = DummyContinuousRangeField
     HStoreField = models.Field
     IntegerRangeField = models.Field
-    JSONField = DummyJSONField
+    SearchVector = models.Expression
     SearchVectorField = models.Field
 
 
