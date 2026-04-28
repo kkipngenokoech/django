@@ -4,6 +4,10 @@ from collections import defaultdict
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models, router
+try:
+    from django.contrib.postgres.fields import JSONField
+except ImportError:
+    JSONField = None
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.deletion import Collector
 from django.forms.utils import pretty_name
@@ -388,6 +392,9 @@ def display_for_field(value, field, empty_value_display):
         return _boolean_icon(value)
     elif value is None:
         return empty_value_display
+    # JSONField needs special handling to display as valid JSON
+    elif JSONField and isinstance(field, JSONField):
+        return field.prepare_value(value)
     elif isinstance(field, models.DateTimeField):
         return formats.localize(timezone.template_localtime(value))
     elif isinstance(field, (models.DateField, models.TimeField)):
