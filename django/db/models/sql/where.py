@@ -159,6 +159,9 @@ class WhereNode(tree.Node):
         clone.relabel_aliases(change_map)
         return clone
 
+    def copy(self):
+        return self.clone()
+
     @classmethod
     def _contains_aggregate(cls, obj):
         if isinstance(obj, tree.Node):
@@ -236,6 +239,7 @@ class SubqueryConstraint:
         self.alias = alias
         self.columns = columns
         self.targets = targets
+        query_object.clear_ordering(clear_default=True)
         self.query_object = query_object
 
     def as_sql(self, compiler, connection):

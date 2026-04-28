@@ -23,7 +23,7 @@ datetime_re = _lazy_re_compile(
     r'(?P<year>\d{4})-(?P<month>\d{1,2})-(?P<day>\d{1,2})'
     r'[T ](?P<hour>\d{1,2}):(?P<minute>\d{1,2})'
     r'(?::(?P<second>\d{1,2})(?:[\.,](?P<microsecond>\d{1,6})\d{0,6})?)?'
-    r'(?P<tzinfo>Z|[+-]\d{2}(?::?\d{2})?)?$'
+    r'\s*(?P<tzinfo>Z|[+-]\d{2}(?::?\d{2})?)?$'
 )
 
 standard_duration_re = _lazy_re_compile(
@@ -144,4 +144,6 @@ def parse_duration(value):
             kw['microseconds'] = '-' + kw['microseconds']
         kw = {k: float(v.replace(',', '.')) for k, v in kw.items() if v is not None}
         days = datetime.timedelta(kw.pop('days', .0) or .0)
+        if match.re == iso8601_duration_re:
+            days *= sign
         return days + sign * datetime.timedelta(**kw)
