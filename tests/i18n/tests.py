@@ -22,7 +22,6 @@ from django.test import (
     RequestFactory, SimpleTestCase, TestCase, override_settings,
 )
 from django.utils import translation
-from django.utils.deprecation import RemovedInDjango40Warning
 from django.utils.formats import (
     date_format, get_format, get_format_modules, iter_format_modules, localize,
     localize_input, reset_format_cache, sanitize_separators, time_format,
@@ -30,12 +29,10 @@ from django.utils.formats import (
 from django.utils.numberformat import format as nformat
 from django.utils.safestring import SafeString, mark_safe
 from django.utils.translation import (
-    LANGUAGE_SESSION_KEY, activate, check_for_language, deactivate,
-    get_language, get_language_bidi, get_language_from_request,
-    get_language_info, gettext, gettext_lazy, ngettext, ngettext_lazy,
-    npgettext, npgettext_lazy, pgettext, round_away_from_one, to_language,
-    to_locale, trans_null, trans_real, ugettext, ugettext_lazy, ugettext_noop,
-    ungettext, ungettext_lazy,
+    activate, check_for_language, deactivate, get_language, get_language_bidi,
+    get_language_from_request, get_language_info, gettext, gettext_lazy,
+    ngettext, ngettext_lazy, npgettext, npgettext_lazy, pgettext,
+    round_away_from_one, to_language, to_locale, trans_null, trans_real,
 )
 from django.utils.translation.reloader import (
     translation_file_changed, watch_for_translation_changes,
@@ -69,46 +66,6 @@ def patch_formats(lang, **settings):
 
 
 class TranslationTests(SimpleTestCase):
-
-    @translation.override('de')
-    def test_legacy_aliases(self):
-        """
-        Pre-Django 2.0 aliases with u prefix are still available.
-        """
-        msg = (
-            'django.utils.translation.ugettext_noop() is deprecated in favor '
-            'of django.utils.translation.gettext_noop().'
-        )
-        with self.assertWarnsMessage(RemovedInDjango40Warning, msg):
-            self.assertEqual(ugettext_noop("Image"), "Image")
-        msg = (
-            'django.utils.translation.ugettext() is deprecated in favor of '
-            'django.utils.translation.gettext().'
-        )
-        with self.assertWarnsMessage(RemovedInDjango40Warning, msg):
-            self.assertEqual(ugettext("Image"), "Bild")
-        msg = (
-            'django.utils.translation.ugettext_lazy() is deprecated in favor '
-            'of django.utils.translation.gettext_lazy().'
-        )
-        with self.assertWarnsMessage(RemovedInDjango40Warning, msg):
-            self.assertEqual(ugettext_lazy("Image"), gettext_lazy("Image"))
-        msg = (
-            'django.utils.translation.ungettext() is deprecated in favor of '
-            'django.utils.translation.ngettext().'
-        )
-        with self.assertWarnsMessage(RemovedInDjango40Warning, msg):
-            self.assertEqual(ungettext("%d year", "%d years", 0) % 0, "0 Jahre")
-        msg = (
-            'django.utils.translation.ungettext_lazy() is deprecated in favor '
-            'of django.utils.translation.ngettext_lazy().'
-        )
-        with self.assertWarnsMessage(RemovedInDjango40Warning, msg):
-            self.assertEqual(
-                ungettext_lazy("%d year", "%d years", 0) % 0,
-                ngettext_lazy("%d year", "%d years", 0) % 0,
-            )
-
     @translation.override('fr')
     def test_plural(self):
         """
@@ -384,6 +341,51 @@ class TranslationTests(SimpleTestCase):
             self.assertIs(get_language_bidi(), True)
 
 
+class TranslationLoadingTests(SimpleTestCase):
+    def setUp(self):
+        """Clear translation state."""
+        self._old_language = get_language()
+        self._old_translations = trans_real._translations
+        deactivate()
+        trans_real._translations = {}
+
+    def tearDown(self):
+        trans_real._translations = self._old_translations
+        activate(self._old_language)
+
+    @override_settings(
+        USE_I18N=True,
+        LANGUAGE_CODE='en',
+        LANGUAGES=[
+            ('en', 'English'),
+            ('en-ca', 'English (Canada)'),
+            ('en-nz', 'English (New Zealand)'),
+            ('en-au', 'English (Australia)'),
+        ],
+        LOCALE_PATHS=[os.path.join(here, 'loading')],
+        INSTALLED_APPS=['i18n.loading_app'],
+    )
+    def test_translation_loading(self):
+        """
+        "loading_app" does not have translations for all languages provided by
+        "loading". Catalogs are merged correctly.
+        """
+        tests = [
+            ('en', 'local country person'),
+            ('en_AU', 'aussie'),
+            ('en_NZ', 'kiwi'),
+            ('en_CA', 'canuck'),
+        ]
+        # Load all relevant translations.
+        for language, _ in tests:
+            activate(language)
+        # Catalogs are merged correctly.
+        for language, nickname in tests:
+            with self.subTest(language=language):
+                activate(language)
+                self.assertEqual(gettext('local country person'), nickname)
+
+
 class TranslationThreadSafetyTests(SimpleTestCase):
 
     def setUp(self):
@@ -515,6 +517,14 @@ class FormattingTests(SimpleTestCase):
             self.assertEqual('des. 31, 2009, 8:50 p.m.', Template('{{ dt }}').render(self.ctxt))
             self.assertEqual('66666.67', Template('{{ n|floatformat:2 }}').render(self.ctxt))
             self.assertEqual('100000.0', Template('{{ f|floatformat }}').render(self.ctxt))
+            self.assertEqual(
+                '66666.67',
+                Template('{{ n|floatformat:"2g" }}').render(self.ctxt),
+            )
+            self.assertEqual(
+                '100000.0',
+                Template('{{ f|floatformat:"g" }}').render(self.ctxt),
+            )
             self.assertEqual('10:15 a.m.', Template('{{ t|time:"TIME_FORMAT" }}').render(self.ctxt))
             self.assertEqual('12/31/2009', Template('{{ d|date:"SHORT_DATE_FORMAT" }}').render(self.ctxt))
             self.assertEqual(
@@ -689,6 +699,14 @@ class FormattingTests(SimpleTestCase):
                 self.assertEqual('31 de desembre de 2009 a les 20:50', Template('{{ dt }}').render(self.ctxt))
                 self.assertEqual('66666,67', Template('{{ n|floatformat:2 }}').render(self.ctxt))
                 self.assertEqual('100000,0', Template('{{ f|floatformat }}').render(self.ctxt))
+                self.assertEqual(
+                    '66.666,67',
+                    Template('{{ n|floatformat:"2g" }}').render(self.ctxt),
+                )
+                self.assertEqual(
+                    '100.000,0',
+                    Template('{{ f|floatformat:"g" }}').render(self.ctxt),
+                )
                 self.assertEqual('10:15', Template('{{ t|time:"TIME_FORMAT" }}').render(self.ctxt))
                 self.assertEqual('31/12/2009', Template('{{ d|date:"SHORT_DATE_FORMAT" }}').render(self.ctxt))
                 self.assertEqual(
@@ -890,6 +908,14 @@ class FormattingTests(SimpleTestCase):
                 self.assertEqual('Dec. 31, 2009, 8:50 p.m.', Template('{{ dt }}').render(self.ctxt))
                 self.assertEqual('66666.67', Template('{{ n|floatformat:2 }}').render(self.ctxt))
                 self.assertEqual('100000.0', Template('{{ f|floatformat }}').render(self.ctxt))
+                self.assertEqual(
+                    '66,666.67',
+                    Template('{{ n|floatformat:"2g" }}').render(self.ctxt),
+                )
+                self.assertEqual(
+                    '100,000.0',
+                    Template('{{ f|floatformat:"g" }}').render(self.ctxt),
+                )
                 self.assertEqual('12/31/2009', Template('{{ d|date:"SHORT_DATE_FORMAT" }}').render(self.ctxt))
                 self.assertEqual(
                     '12/31/2009 8:50 p.m.',
@@ -1160,6 +1186,25 @@ class FormattingTests(SimpleTestCase):
                 self.assertEqual(template1.render(context), output1)
                 self.assertEqual(template2.render(context), output2)
                 self.assertEqual(template3.render(context), output3)
+
+    def test_localized_off_numbers(self):
+        """A string representation is returned for unlocalized numbers."""
+        template = Template(
+            '{% load l10n %}{% localize off %}'
+            '{{ int }}/{{ float }}/{{ decimal }}{% endlocalize %}'
+        )
+        context = Context(
+            {'int': 1455, 'float': 3.14, 'decimal': decimal.Decimal('24.1567')}
+        )
+        for use_l10n in [True, False]:
+            with self.subTest(use_l10n=use_l10n), self.settings(
+                USE_L10N=use_l10n,
+                DECIMAL_SEPARATOR=',',
+                USE_THOUSAND_SEPARATOR=True,
+                THOUSAND_SEPARATOR='°',
+                NUMBER_GROUPING=2,
+            ):
+                self.assertEqual(template.render(context), '1455/3.14/24.1567')
 
     def test_localized_as_text_as_hidden_input(self):
         """
@@ -1637,21 +1682,6 @@ class LocaleMiddlewareTests(TestCase):
         self.assertContains(response, "Oui/Non")
         response = self.client.get('/en/streaming/')
         self.assertContains(response, "Yes/No")
-
-    @override_settings(
-        MIDDLEWARE=[
-            'django.contrib.sessions.middleware.SessionMiddleware',
-            'django.middleware.locale.LocaleMiddleware',
-            'django.middleware.common.CommonMiddleware',
-        ],
-    )
-    def test_language_not_saved_to_session(self):
-        """
-        The Current language isno' automatically saved to the session on every
-        request (#21473).
-        """
-        self.client.get('/fr/simple/')
-        self.assertNotIn(LANGUAGE_SESSION_KEY, self.client.session)
 
 
 @override_settings(
