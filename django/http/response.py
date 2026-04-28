@@ -16,7 +16,9 @@ from django.core.exceptions import DisallowedRedirect
 from django.core.serializers.json import DjangoJSONEncoder
 from django.http.cookie import SimpleCookie
 from django.utils import timezone
-from django.utils.datastructures import CaseInsensitiveMapping
+from django.utils.datastructures import (
+    CaseInsensitiveMapping, _destruct_iterable_mapping_values,
+)
 from django.utils.encoding import iri_to_uri
 from django.utils.http import http_date
 from django.utils.regex_helper import _lazy_re_compile
@@ -31,10 +33,7 @@ class ResponseHeaders(CaseInsensitiveMapping):
         correctly encoded.
         """
         if not isinstance(data, Mapping):
-            data = {
-                k: v
-                for k, v in CaseInsensitiveMapping._destruct_iterable_mapping_values(data)
-            }
+            data = {k: v for k, v in _destruct_iterable_mapping_values(data)}
         self._store = {}
         for header, value in data.items():
             self[header] = value
@@ -97,8 +96,18 @@ class HttpResponseBase:
 
     status_code = 200
 
-    def __init__(self, content_type=None, status=None, reason=None, charset=None):
-        self.headers = ResponseHeaders({})
+    def __init__(self, content_type=None, status=None, reason=None, charset=None, headers=None):
+        self.headers = ResponseHeaders(headers or {})
+        self._charset = charset
+        if content_type and 'Content-Type' in self.headers:
+            raise ValueError(
+                "'headers' must not contain 'Content-Type' when the "
+                "'content_type' parameter is provided."
+            )
+        if 'Content-Type' not in self.headers:
+            if content_type is None:
+                content_type = 'text/html; charset=%s' % self.charset
+            self.headers['Content-Type'] = content_type
         self._resource_closers = []
         # This parameter is set by the handler. It's necessary to preserve the
         # historical behavior of request_finished.
@@ -114,10 +123,6 @@ class HttpResponseBase:
             if not 100 <= self.status_code <= 599:
                 raise ValueError('HTTP status code must be an integer from 100 to 599.')
         self._reason_phrase = reason
-        self._charset = charset
-        if content_type is None:
-            content_type = 'text/html; charset=%s' % self.charset
-        self['Content-Type'] = content_type
 
     @property
     def reason_phrase(self):
@@ -198,9 +203,9 @@ class HttpResponseBase:
         self.cookies[key] = value
         if expires is not None:
             if isinstance(expires, datetime.datetime):
-                if timezone.is_aware(expires):
-                    expires = timezone.make_naive(expires, timezone.utc)
-                delta = expires - expires.utcnow()
+                if timezone.is_naive(expires):
+                    expires = timezone.make_aware(expires, timezone.utc)
+                delta = expires - datetime.datetime.now(tz=timezone.utc)
                 # Add one second so the date matches exactly (a fraction of
                 # time gets lost between converting to a timedelta and
                 # then the date string).
@@ -315,7 +320,7 @@ class HttpResponse(HttpResponseBase):
     """
     An HTTP response class with a string as content.
 
-    This content that can be read, appended to, or replaced.
+    This content can be read, appended to, or replaced.
     """
 
     streaming = False
@@ -345,7 +350,10 @@ class HttpResponse(HttpResponseBase):
     @content.setter
     def content(self, value):
         # Consume iterators upon assignment to allow repeated iteration.
-        if hasattr(value, '__iter__') and not isinstance(value, (bytes, str)):
+        if (
+            hasattr(value, '__iter__') and
+            not isinstance(value, (bytes, memoryview, str))
+        ):
             content = b''.join(self.make_bytes(chunk) for chunk in value)
             if hasattr(value, 'close'):
                 try:
@@ -573,7 +581,7 @@ class JsonResponse(HttpResponse):
     An HTTP response class that consumes data to be serialized to JSON.
 
     :param data: Data to be dumped into json. By default only ``dict`` objects
-      are allowed to be passed due to a security flaw before EcmaScript 5. See
+      are allowed to be passed due to a security flaw before ECMAScript 5. See
       the ``safe`` parameter for more information.
     :param encoder: Should be a json encoder class. Defaults to
       ``django.core.serializers.json.DjangoJSONEncoder``.

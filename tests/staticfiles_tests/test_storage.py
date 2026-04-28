@@ -27,14 +27,9 @@ def hashed_file_path(test, path):
 class TestHashedFiles:
     hashed_file_path = hashed_file_path
 
-    def setUp(self):
-        self._max_post_process_passes = storage.staticfiles_storage.max_post_process_passes
-        super().setUp()
-
     def tearDown(self):
         # Clear hashed files to avoid side effects among tests.
         storage.staticfiles_storage.hashed_files.clear()
-        storage.staticfiles_storage.max_post_process_passes = self._max_post_process_passes
 
     def assertPostCondition(self):
         """
@@ -203,6 +198,8 @@ class TestHashedFiles:
         self.assertIn(os.path.join('cached', 'css', 'window.css'), stats['post_processed'])
         self.assertIn(os.path.join('cached', 'css', 'img', 'window.png'), stats['unmodified'])
         self.assertIn(os.path.join('test', 'nonascii.css'), stats['post_processed'])
+        # No file should be yielded twice.
+        self.assertCountEqual(stats['post_processed'], set(stats['post_processed']))
         self.assertPostCondition()
 
     def test_css_import_case_insensitive(self):
@@ -212,6 +209,30 @@ class TestHashedFiles:
             content = relfile.read()
             self.assertNotIn(b"cached/other.css", content)
             self.assertIn(b"other.d41d8cd98f00.css", content)
+        self.assertPostCondition()
+
+    def test_js_source_map(self):
+        relpath = self.hashed_file_path('cached/source_map.js')
+        self.assertEqual(relpath, 'cached/source_map.9371cbb02a26.js')
+        with storage.staticfiles_storage.open(relpath) as relfile:
+            content = relfile.read()
+            self.assertNotIn(b'//# sourceMappingURL=source_map.js.map', content)
+            self.assertIn(
+                b'//# sourceMappingURL=source_map.js.99914b932bd3.map',
+                content,
+            )
+        self.assertPostCondition()
+
+    def test_js_source_map_sensitive(self):
+        relpath = self.hashed_file_path('cached/source_map_sensitive.js')
+        self.assertEqual(relpath, 'cached/source_map_sensitive.5da96fdd3cb3.js')
+        with storage.staticfiles_storage.open(relpath) as relfile:
+            content = relfile.read()
+            self.assertIn(b'//# sOuRcEMaPpInGURL=source_map.js.map', content)
+            self.assertNotIn(
+                b'//# sourceMappingURL=source_map.js.99914b932bd3.map',
+                content,
+            )
         self.assertPostCondition()
 
     @override_settings(
