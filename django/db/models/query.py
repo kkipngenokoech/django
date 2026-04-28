@@ -204,7 +204,7 @@ class QuerySet:
     def query(self):
         if self._deferred_filter:
             negate, args, kwargs = self._deferred_filter
-            self._filter_or_exclude_inplace(negate, *args, **kwargs)
+            self._filter_or_exclude_inplace(negate, args, kwargs)
             self._deferred_filter = None
         return self._query
 
@@ -939,7 +939,7 @@ class QuerySet:
         set.
         """
         self._not_support_combined_queries('filter')
-        return self._filter_or_exclude(False, *args, **kwargs)
+        return self._filter_or_exclude(False, args, kwargs)
 
     def exclude(self, *args, **kwargs):
         """
@@ -947,9 +947,9 @@ class QuerySet:
         set.
         """
         self._not_support_combined_queries('exclude')
-        return self._filter_or_exclude(True, *args, **kwargs)
+        return self._filter_or_exclude(True, args, kwargs)
 
-    def _filter_or_exclude(self, negate, *args, **kwargs):
+    def _filter_or_exclude(self, negate, args, kwargs):
         if args or kwargs:
             assert not self.query.is_sliced, \
                 "Cannot filter a query once a slice has been taken."
@@ -959,10 +959,10 @@ class QuerySet:
             self._defer_next_filter = False
             clone._deferred_filter = negate, args, kwargs
         else:
-            clone._filter_or_exclude_inplace(negate, *args, **kwargs)
+            clone._filter_or_exclude_inplace(negate, args, kwargs)
         return clone
 
-    def _filter_or_exclude_inplace(self, negate, *args, **kwargs):
+    def _filter_or_exclude_inplace(self, negate, args, kwargs):
         if negate:
             self._query.add_q(~Q(*args, **kwargs))
         else:
@@ -983,7 +983,7 @@ class QuerySet:
             clone.query.add_q(filter_obj)
             return clone
         else:
-            return self._filter_or_exclude(False, **filter_obj)
+            return self._filter_or_exclude(False, args=(), kwargs=filter_obj)
 
     def _combinator_query(self, combinator, *other_qs, all=False):
         # Clone the query to inherit the select list and everything
@@ -1018,7 +1018,7 @@ class QuerySet:
             return self
         return self._combinator_query('difference', *other_qs)
 
-    def select_for_update(self, nowait=False, skip_locked=False, of=()):
+    def select_for_update(self, nowait=False, skip_locked=False, of=(), no_key=False):
         """
         Return a new QuerySet instance that will select objects with a
         FOR UPDATE lock.
@@ -1031,6 +1031,7 @@ class QuerySet:
         obj.query.select_for_update_nowait = nowait
         obj.query.select_for_update_skip_locked = skip_locked
         obj.query.select_for_update_of = of
+        obj.query.select_for_no_key_update = no_key
         return obj
 
     def select_related(self, *fields):
@@ -1138,6 +1139,7 @@ class QuerySet:
         """
         Return a new QuerySet instance that will select only distinct results.
         """
+        self._not_support_combined_queries('distinct')
         assert not self.query.is_sliced, \
             "Cannot create distinct fields once a slice has been taken."
         obj = self._chain()

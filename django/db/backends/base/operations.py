@@ -99,12 +99,6 @@ class BaseDatabaseOperations:
         """
         raise NotImplementedError('subclasses of BaseDatabaseOperations may require a date_extract_sql() method')
 
-    def date_interval_sql(self, timedelta):
-        """
-        Implement the date interval functionality for expressions.
-        """
-        raise NotImplementedError('subclasses of BaseDatabaseOperations may require a date_interval_sql() method')
-
     def date_trunc_sql(self, lookup_type, field_name):
         """
         Given a lookup_type of 'year', 'month', or 'day', return the SQL that
@@ -207,11 +201,12 @@ class BaseDatabaseOperations:
         """
         return []
 
-    def for_update_sql(self, nowait=False, skip_locked=False, of=()):
+    def for_update_sql(self, nowait=False, skip_locked=False, of=(), no_key=False):
         """
         Return the FOR UPDATE SQL clause to lock rows for an update operation.
         """
-        return 'FOR UPDATE%s%s%s' % (
+        return 'FOR%s UPDATE%s%s%s' % (
+            ' NO KEY' if no_key else '',
             ' OF %s' % ', '.join(of) if of else '',
             ' NOWAIT' if nowait else '',
             ' SKIP LOCKED' if skip_locked else '',
