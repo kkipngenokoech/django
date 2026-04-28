@@ -74,7 +74,9 @@ example ``settings.py`` snippet defining two non-default databases, with the
 
 If you attempt to access a database that you haven't defined in your
 :setting:`DATABASES` setting, Django will raise a
-``django.db.utils.ConnectionDoesNotExist`` exception.
+``django.utils.connection.ConnectionDoesNotExist`` exception.
+
+.. _synchronizing_multiple_databases:
 
 Synchronizing your databases
 ============================
@@ -83,7 +85,9 @@ The :djadmin:`migrate` management command operates on one database at a
 time. By default, it operates on the ``default`` database, but by
 providing the :option:`--database <migrate --database>` option, you can tell it
 to synchronize a different database. So, to synchronize all models onto
-all databases in the first example above, you would need to call::
+all databases in the first example above, you would need to call:
+
+.. code-block:: shell
 
     $ ./manage.py migrate
     $ ./manage.py migrate --database=users
@@ -95,7 +99,9 @@ constraining the availability of particular models.
 
 If, as in the second example above, you've left the ``default`` database empty,
 you must provide a database name each time you run :djadmin:`migrate`. Omitting
-the database name would raise an error. For the second example::
+the database name would raise an error. For the second example:
+
+.. code-block:: shell
 
     $ ./manage.py migrate --database=users
     $ ./manage.py migrate --database=customers
@@ -231,17 +237,18 @@ Using routers
 
 Database routers are installed using the :setting:`DATABASE_ROUTERS`
 setting. This setting defines a list of class names, each specifying a
-router that should be used by the master router
+router that should be used by the base router
 (``django.db.router``).
 
-The master router is used by Django's database operations to allocate
+The base router is used by Django's database operations to allocate
 database usage. Whenever a query needs to know which database to use,
-it calls the master router, providing a model and a hint (if
-available). Django then tries each router in turn until a database
-suggestion can be found. If no suggestion can be found, it tries the
-current ``_state.db`` of the hint instance. If a hint instance wasn't
-provided, or the instance doesn't currently have database state, the
-master router will allocate the ``default`` database.
+it calls the base router, providing a model and a hint (if
+available). The base router tries each router class in turn until one returns
+a database suggestion. If no routers return a suggestion, the base router tries
+the current :attr:`instance._state.db
+<django.db.models.Model._state>` of the hint instance. If no hint instance
+was provided, or :attr:`instance._state.db <django.db.models.Model._state>` is
+``None``, the base router will allocate the ``default`` database.
 
 An example
 ----------
@@ -275,25 +282,25 @@ databases::
     DATABASES = {
         'default': {},
         'auth_db': {
-            'NAME': 'auth_db',
+            'NAME': 'auth_db_name',
             'ENGINE': 'django.db.backends.mysql',
             'USER': 'mysql_user',
             'PASSWORD': 'swordfish',
         },
         'primary': {
-            'NAME': 'primary',
+            'NAME': 'primary_name',
             'ENGINE': 'django.db.backends.mysql',
             'USER': 'mysql_user',
             'PASSWORD': 'spam',
         },
         'replica1': {
-            'NAME': 'replica1',
+            'NAME': 'replica1_name',
             'ENGINE': 'django.db.backends.mysql',
             'USER': 'mysql_user',
             'PASSWORD': 'eggs',
         },
         'replica2': {
-            'NAME': 'replica2',
+            'NAME': 'replica2_name',
             'ENGINE': 'django.db.backends.mysql',
             'USER': 'mysql_user',
             'PASSWORD': 'bacon',
@@ -301,44 +308,51 @@ databases::
     }
 
 Now we'll need to handle routing. First we want a router that knows to
-send queries for the ``auth`` app to ``auth_db``::
+send queries for the ``auth`` and ``contenttypes`` apps to ``auth_db``
+(``auth`` models are linked to ``ContentType``, so they must be stored in the
+same database)::
 
     class AuthRouter:
         """
         A router to control all database operations on models in the
-        auth application.
+        auth and contenttypes applications.
         """
+        route_app_labels = {'auth', 'contenttypes'}
+
         def db_for_read(self, model, **hints):
             """
-            Attempts to read auth models go to auth_db.
+            Attempts to read auth and contenttypes models go to auth_db.
             """
-            if model._meta.app_label == 'auth':
+            if model._meta.app_label in self.route_app_labels:
                 return 'auth_db'
             return None
 
         def db_for_write(self, model, **hints):
             """
-            Attempts to write auth models go to auth_db.
+            Attempts to write auth and contenttypes models go to auth_db.
             """
-            if model._meta.app_label == 'auth':
+            if model._meta.app_label in self.route_app_labels:
                 return 'auth_db'
             return None
 
         def allow_relation(self, obj1, obj2, **hints):
             """
-            Allow relations if a model in the auth app is involved.
+            Allow relations if a model in the auth or contenttypes apps is
+            involved.
             """
-            if obj1._meta.app_label == 'auth' or \
-               obj2._meta.app_label == 'auth':
+            if (
+                obj1._meta.app_label in self.route_app_labels or
+                obj2._meta.app_label in self.route_app_labels
+            ):
                return True
             return None
 
         def allow_migrate(self, db, app_label, model_name=None, **hints):
             """
-            Make sure the auth app only appears in the 'auth_db'
-            database.
+            Make sure the auth and contenttypes apps only appear in the
+            'auth_db' database.
             """
-            if app_label == 'auth':
+            if app_label in self.route_app_labels:
                 return db == 'auth_db'
             return None
 
@@ -366,8 +380,8 @@ from::
             Relations between objects are allowed if both objects are
             in the primary/replica pool.
             """
-            db_list = ('primary', 'replica1', 'replica2')
-            if obj1._state.db in db_list and obj2._state.db in db_list:
+            db_set = {'primary', 'replica1', 'replica2'}
+            if obj1._state.db in db_set and obj2._state.db in db_set:
                 return True
             return None
 
@@ -394,7 +408,10 @@ setting listed the two routers in the other order,
 catch-all nature of the PrimaryReplicaRouter implementation would mean
 that all models would be available on all databases.
 
-With this setup installed, lets run some Django code::
+With this setup installed, and all databases migrated as per
+:ref:`synchronizing_multiple_databases`, lets run some Django code:
+
+.. code-block:: pycon
 
     >>> # This retrieval will be performed on the 'auth_db' database
     >>> fred = User.objects.get(username='fred')
@@ -438,20 +455,22 @@ Manually selecting a database for a ``QuerySet``
 ------------------------------------------------
 
 You can select the database for a ``QuerySet`` at any point in the
-``QuerySet`` "chain." Just call ``using()`` on the ``QuerySet`` to get
-another ``QuerySet`` that uses the specified database.
+``QuerySet`` "chain." Call ``using()`` on the ``QuerySet`` to get another
+``QuerySet`` that uses the specified database.
 
 ``using()`` takes a single argument: the alias of the database on
-which you want to run the query. For example::
+which you want to run the query. For example:
+
+.. code-block:: pycon
 
     >>> # This will run on the 'default' database.
     >>> Author.objects.all()
 
     >>> # So will this.
-    >>> Author.objects.using('default').all()
+    >>> Author.objects.using('default')
 
     >>> # This will run on the 'other' database.
-    >>> Author.objects.using('other').all()
+    >>> Author.objects.using('other')
 
 Selecting a database for ``save()``
 -----------------------------------
@@ -460,7 +479,9 @@ Use the ``using`` keyword to ``Model.save()`` to specify to which
 database the data should be saved.
 
 For example, to save an object to the ``legacy_users`` database, you'd
-use this::
+use this:
+
+.. code-block:: pycon
 
     >>> my_object.save(using='legacy_users')
 
@@ -475,7 +496,9 @@ use ``save(using=...)`` as a way to migrate the instance to a new
 database. However, if you don't take appropriate steps, this could
 have some unexpected consequences.
 
-Consider the following example::
+Consider the following example:
+
+.. code-block:: pycon
 
     >>> p = Person(name='Fred')
     >>> p.save(using='first')  # (statement 1)
@@ -499,7 +522,9 @@ will be overridden when ``p`` is saved.
 You can avoid this in two ways. First, you can clear the primary key
 of the instance. If an object has no primary key, Django will treat it
 as a new object, avoiding any loss of data on the ``second``
-database::
+database:
+
+.. code-block:: pycon
 
     >>> p = Person(name='Fred')
     >>> p.save(using='first')
@@ -507,7 +532,9 @@ database::
     >>> p.save(using='second') # Write a completely new object.
 
 The second option is to use the ``force_insert`` option to ``save()``
-to ensure that Django does an SQL ``INSERT``::
+to ensure that Django does an SQL ``INSERT``:
+
+.. code-block:: pycon
 
     >>> p = Person(name='Fred')
     >>> p.save(using='first')
@@ -523,7 +550,9 @@ Selecting a database to delete from
 
 By default, a call to delete an existing object will be executed on
 the same database that was used to retrieve the object in the first
-place::
+place:
+
+.. code-block:: pycon
 
     >>> u = User.objects.using('legacy_users').get(username='fred')
     >>> u.delete() # will delete from the `legacy_users` database
@@ -533,7 +562,9 @@ To specify the database from which a model will be deleted, pass a
 argument works just like the ``using`` keyword argument to ``save()``.
 
 For example, if you're migrating a user from the ``legacy_users``
-database to the ``new_users`` database, you might use these commands::
+database to the ``new_users`` database, you might use these commands:
+
+.. code-block:: pycon
 
     >>> user_obj.save(using='new_users')
     >>> user_obj.delete(using='legacy_users')
@@ -583,8 +614,8 @@ database other than that specified by your router chain, you'll
 need to write custom :class:`~django.contrib.admin.ModelAdmin` classes
 that will direct the admin to use a specific database for content.
 
-``ModelAdmin`` objects have five methods that require customization for
-multiple-database support::
+``ModelAdmin`` objects have the following methods that require customization
+for multiple-database support::
 
     class MultiDBModelAdmin(admin.ModelAdmin):
         # A handy constant for the name of the alternate database.
