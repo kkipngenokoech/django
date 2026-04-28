@@ -22,7 +22,7 @@ class SessionStore(SessionBase):
             # BadSignature, ValueError, or unpickling exceptions. If any of
             # these happen, reset the session.
             self.create()
-        return {}
+            return {}
 
     def create(self):
         """
