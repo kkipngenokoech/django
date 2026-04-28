@@ -404,6 +404,15 @@ class BaseDatabaseSchemaEditor:
             fields = [model._meta.get_field(field) for field in field_names]
             self.execute(self._create_index_sql(model, fields, suffix="_idx"))
 
+    def _is_unique_constraint(self, model, constraint_name, columns):
+        """
+        Check if a constraint is a unique constraint by examining its name pattern.
+        Unique constraints typically have 'uniq' in their name, while index constraints have 'idx'.
+        """
+        # Most database backends generate constraint names with patterns that distinguish
+        # between unique constraints (containing 'uniq') and index constraints (containing 'idx')
+        return 'uniq' in constraint_name.lower()
+
     def _delete_composed_index(self, model, fields, constraint_kwargs, sql):
         meta_constraint_names = {constraint.name for constraint in model._meta.constraints}
         meta_index_names = {constraint.name for constraint in model._meta.indexes}
@@ -412,6 +421,14 @@ class BaseDatabaseSchemaEditor:
             model, columns, exclude=meta_constraint_names | meta_index_names,
             **constraint_kwargs
         )
+        # Filter constraint names to only include the specific type we're looking for
+        if 'index' in constraint_kwargs and constraint_kwargs['index']:
+            # When deleting index constraints, filter out unique constraints
+            constraint_names = [name for name in constraint_names if not self._is_unique_constraint(model, name, columns)]
+        elif 'unique' in constraint_kwargs and constraint_kwargs['unique']:
+            # When deleting unique constraints, filter out index constraints  
+            constraint_names = [name for name in constraint_names if self._is_unique_constraint(model, name, columns)]
+            
         if len(constraint_names) != 1:
             raise ValueError("Found wrong number (%s) of constraints for %s(%s)" % (
                 len(constraint_names),
