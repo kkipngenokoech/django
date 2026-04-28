@@ -1,13 +1,13 @@
 from django.db import models
 from django.db.migrations.operations.base import Operation
 from django.db.migrations.state import ModelState
+from django.db.migrations.utils import field_references, resolve_relation
 from django.db.models.options import normalize_together
 from django.utils.functional import cached_property
 
 from .fields import (
     AddField, AlterField, FieldOperation, RemoveField, RenameField,
 )
-from .utils import field_references, get_references, resolve_relation
 
 
 def _check_for_duplicates(arg_name, objs):
@@ -137,11 +137,15 @@ class CreateModel(ModelOperation):
                 ),
             ]
         elif isinstance(operation, AlterModelOptions) and self.name_lower == operation.name_lower:
+            options = {**self.options, **operation.options}
+            for key in operation.ALTER_OPTION_KEYS:
+                if key not in operation.options:
+                    options.pop(key, None)
             return [
                 CreateModel(
                     self.name,
                     fields=self.fields,
-                    options={**self.options, **operation.options},
+                    options=options,
                     bases=self.bases,
                     managers=self.managers,
                 ),
@@ -310,36 +314,16 @@ class RenameModel(ModelOperation):
         )
 
     def state_forwards(self, app_label, state):
-        # Add a new model.
-        renamed_model = state.models[app_label, self.old_name_lower].clone()
-        renamed_model.name = self.new_name
-        state.models[app_label, self.new_name_lower] = renamed_model
-        # Repoint all fields pointing to the old model to the new one.
-        old_model_tuple = (app_label, self.old_name_lower)
-        new_remote_model = '%s.%s' % (app_label, self.new_name)
-        to_reload = set()
-        for model_state, name, field, reference in get_references(state, old_model_tuple):
-            changed_field = None
-            if reference.to:
-                changed_field = field.clone()
-                changed_field.remote_field.model = new_remote_model
-            if reference.through:
-                if changed_field is None:
-                    changed_field = field.clone()
-                changed_field.remote_field.through = new_remote_model
-            if changed_field:
-                model_state.fields[name] = changed_field
-                to_reload.add((model_state.app_label, model_state.name_lower))
-        # Reload models related to old model before removing the old model.
-        state.reload_models(to_reload, delay=True)
-        # Remove the old model.
-        state.remove_model(app_label, self.old_name_lower)
-        state.reload_model(app_label, self.new_name_lower, delay=True)
+        state.rename_model(app_label, self.old_name, self.new_name)
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         new_model = to_state.apps.get_model(app_label, self.new_name)
         if self.allow_migrate_model(schema_editor.connection.alias, new_model):
             old_model = from_state.apps.get_model(app_label, self.old_name)
+            # If the model has a custom db_table, renaming the model should be a no-op
+            # since the table name doesn't change
+            if old_model._meta.db_table == new_model._meta.db_table:
+                return
             # Move the main table
             schema_editor.alter_db_table(
                 new_model,
@@ -388,6 +372,12 @@ class RenameModel(ModelOperation):
                 )
 
     def database_backwards(self, app_label, schema_editor, from_state, to_state):
+        # Check if models have custom db_table - if so, it's a no-op
+        old_model = from_state.apps.get_model(app_label, self.old_name)
+        new_model = to_state.apps.get_model(app_label, self.new_name)
+        if old_model._meta.db_table == new_model._meta.db_table:
+            return
+            
         self.new_name_lower, self.old_name_lower = self.old_name_lower, self.new_name_lower
         self.new_name, self.old_name = self.old_name, self.new_name
 
@@ -452,8 +442,7 @@ class AlterModelTable(ModelOptionOperation):
         )
 
     def state_forwards(self, app_label, state):
-        state.models[app_label, self.name_lower].options["db_table"] = self.table
-        state.reload_model(app_label, self.name_lower, delay=True)
+        state.alter_model_options(app_label, self.name_lower, {'db_table': self.table})
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         new_model = to_state.apps.get_model(app_label, self.name)
@@ -512,9 +501,11 @@ class AlterTogetherOptionOperation(ModelOptionOperation):
         )
 
     def state_forwards(self, app_label, state):
-        model_state = state.models[app_label, self.name_lower]
-        model_state.options[self.option_name] = self.option_value
-        state.reload_model(app_label, self.name_lower, delay=True)
+        state.alter_model_options(
+            app_label,
+            self.name_lower,
+            {self.option_name: self.option_value},
+        )
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         new_model = to_state.apps.get_model(app_label, self.name)
@@ -590,9 +581,11 @@ class AlterOrderWithRespectTo(ModelOptionOperation):
         )
 
     def state_forwards(self, app_label, state):
-        model_state = state.models[app_label, self.name_lower]
-        model_state.options['order_with_respect_to'] = self.order_with_respect_to
-        state.reload_model(app_label, self.name_lower, delay=True)
+        state.alter_model_options(
+            app_label,
+            self.name_lower,
+            {self.option_name: self.order_with_respect_to},
+        )
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         to_model = to_state.apps.get_model(app_label, self.name)
@@ -670,12 +663,12 @@ class AlterModelOptions(ModelOptionOperation):
         )
 
     def state_forwards(self, app_label, state):
-        model_state = state.models[app_label, self.name_lower]
-        model_state.options = {**model_state.options, **self.options}
-        for key in self.ALTER_OPTION_KEYS:
-            if key not in self.options:
-                model_state.options.pop(key, False)
-        state.reload_model(app_label, self.name_lower, delay=True)
+        state.alter_model_options(
+            app_label,
+            self.name_lower,
+            self.options,
+            self.ALTER_OPTION_KEYS,
+        )
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         pass
@@ -708,9 +701,7 @@ class AlterModelManagers(ModelOptionOperation):
         )
 
     def state_forwards(self, app_label, state):
-        model_state = state.models[app_label, self.name_lower]
-        model_state.managers = list(self.managers)
-        state.reload_model(app_label, self.name_lower, delay=True)
+        state.alter_model_managers(app_label, self.name_lower, self.managers)
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         pass
@@ -747,9 +738,7 @@ class AddIndex(IndexOperation):
         self.index = index
 
     def state_forwards(self, app_label, state):
-        model_state = state.models[app_label, self.model_name_lower]
-        model_state.options[self.option_name] = [*model_state.options[self.option_name], self.index.clone()]
-        state.reload_model(app_label, self.model_name_lower, delay=True)
+        state.add_index(app_label, self.model_name_lower, self.index)
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         model = to_state.apps.get_model(app_label, self.model_name)
@@ -773,6 +762,12 @@ class AddIndex(IndexOperation):
         )
 
     def describe(self):
+        if self.index.expressions:
+            return 'Create index %s on %s on model %s' % (
+                self.index.name,
+                ', '.join([str(expression) for expression in self.index.expressions]),
+                self.model_name,
+            )
         return 'Create index %s on field(s) %s of model %s' % (
             self.index.name,
             ', '.join(self.index.fields),
@@ -792,10 +787,7 @@ class RemoveIndex(IndexOperation):
         self.name = name
 
     def state_forwards(self, app_label, state):
-        model_state = state.models[app_label, self.model_name_lower]
-        indexes = model_state.options[self.option_name]
-        model_state.options[self.option_name] = [idx for idx in indexes if idx.name != self.name]
-        state.reload_model(app_label, self.model_name_lower, delay=True)
+        state.remove_index(app_label, self.model_name_lower, self.name)
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         model = from_state.apps.get_model(app_label, self.model_name)
@@ -838,9 +830,7 @@ class AddConstraint(IndexOperation):
         self.constraint = constraint
 
     def state_forwards(self, app_label, state):
-        model_state = state.models[app_label, self.model_name_lower]
-        model_state.options[self.option_name] = [*model_state.options[self.option_name], self.constraint]
-        state.reload_model(app_label, self.model_name_lower, delay=True)
+        state.add_constraint(app_label, self.model_name_lower, self.constraint)
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         model = to_state.apps.get_model(app_label, self.model_name)
@@ -874,10 +864,7 @@ class RemoveConstraint(IndexOperation):
         self.name = name
 
     def state_forwards(self, app_label, state):
-        model_state = state.models[app_label, self.model_name_lower]
-        constraints = model_state.options[self.option_name]
-        model_state.options[self.option_name] = [c for c in constraints if c.name != self.name]
-        state.reload_model(app_label, self.model_name_lower, delay=True)
+        state.remove_constraint(app_label, self.model_name_lower, self.name)
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         model = to_state.apps.get_model(app_label, self.model_name)

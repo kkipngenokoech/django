@@ -76,7 +76,7 @@ class PrefetchRelatedTests(TestDataMixin, TestCase):
             [list(b.first_time_authors.all())
              for b in Book.objects.prefetch_related('first_time_authors')]
 
-        self.assertQuerysetEqual(self.book2.authors.all(), ["<Author: Charlotte>"])
+        self.assertSequenceEqual(self.book2.authors.all(), [self.author1])
 
     def test_onetoone_reverse_no_match(self):
         # Regression for #17439
@@ -294,17 +294,27 @@ class PrefetchRelatedTests(TestDataMixin, TestCase):
 
     def test_filter_deferred(self):
         """
-        Related filtering of prefetched querysets is deferred until necessary.
+        Related filtering of prefetched querysets is deferred on m2m and
+        reverse m2o relations until necessary.
         """
         add_q = Query.add_q
-        with mock.patch.object(
-            Query,
-            'add_q',
-            autospec=True,
-            side_effect=lambda self, q: add_q(self, q),
-        ) as add_q_mock:
-            list(Book.objects.prefetch_related('authors'))
-            self.assertEqual(add_q_mock.call_count, 1)
+        for relation in ['authors', 'first_time_authors']:
+            with self.subTest(relation=relation):
+                with mock.patch.object(
+                    Query,
+                    'add_q',
+                    autospec=True,
+                    side_effect=lambda self, q: add_q(self, q),
+                ) as add_q_mock:
+                    list(Book.objects.prefetch_related(relation))
+                    self.assertEqual(add_q_mock.call_count, 1)
+
+    def test_named_values_list(self):
+        qs = Author.objects.prefetch_related('books')
+        self.assertCountEqual(
+            [value.name for value in qs.values_list('name', named=True)],
+            ['Anne', 'Charlotte', 'Emily', 'Jane'],
+        )
 
 
 class RawQuerySetTests(TestDataMixin, TestCase):
@@ -1023,6 +1033,24 @@ class GenericRelationTests(TestCase):
         # instance returned by the manager.
         self.assertEqual(list(bookmark.tags.all()), list(bookmark.tags.all().all()))
 
+    def test_deleted_GFK(self):
+        TaggedItem.objects.create(tag='awesome', content_object=self.book1)
+        TaggedItem.objects.create(tag='awesome', content_object=self.book2)
+        ct = ContentType.objects.get_for_model(Book)
+
+        book1_pk = self.book1.pk
+        self.book1.delete()
+
+        with self.assertNumQueries(2):
+            qs = TaggedItem.objects.filter(tag='awesome').prefetch_related('content_object')
+            result = [
+                (tag.object_id, tag.content_type_id, tag.content_object) for tag in qs
+            ]
+            self.assertEqual(result, [
+                (book1_pk, ct.pk, None),
+                (self.book2.pk, ct.pk, self.book2),
+            ])
+
 
 class MultiTableInheritanceTest(TestCase):
 
@@ -1577,4 +1605,4 @@ class ReadPrefetchedObjectsCacheTests(TestCase):
         )
         with self.assertNumQueries(4):
             # AuthorWithAge -> Author -> FavoriteAuthors, Book
-            self.assertQuerysetEqual(authors, ['<AuthorWithAge: Rousseau>', '<AuthorWithAge: Voltaire>'])
+            self.assertSequenceEqual(authors, [self.author1, self.author2])

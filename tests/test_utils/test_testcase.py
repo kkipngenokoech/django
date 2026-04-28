@@ -1,9 +1,8 @@
 from functools import wraps
 
 from django.db import IntegrityError, connections, transaction
-from django.test import TestCase, ignore_warnings, skipUnlessDBFeature
+from django.test import TestCase, skipUnlessDBFeature
 from django.test.testcases import TestData
-from django.utils.deprecation import RemovedInDjango41Warning
 
 from .models import Car, Person, PossessedCar
 
@@ -43,10 +42,15 @@ class TestTestCase(TestCase):
         with self.assertRaisesMessage(AssertionError, message):
             Car.objects.using('other').get()
 
-
-class NonDeepCopyAble:
-    def __deepcopy__(self, memo):
-        raise TypeError
+    def test_reset_sequences(self):
+        old_reset_sequences = self.reset_sequences
+        self.reset_sequences = True
+        msg = 'reset_sequences cannot be used on TestCase instances'
+        try:
+            with self.assertRaisesMessage(TypeError, msg):
+                self._fixture_setup()
+        finally:
+            self.reset_sequences = old_reset_sequences
 
 
 def assert_no_queries(test):
@@ -69,7 +73,6 @@ class TestDataTests(TestCase):
             car=cls.car,
             belongs_to=cls.jim_douglas,
         )
-        cls.non_deepcopy_able = NonDeepCopyAble()
 
     @assert_no_queries
     def test_class_attribute_equality(self):
@@ -93,21 +96,6 @@ class TestDataTests(TestCase):
         """Known related objects identity is preserved."""
         self.assertIs(self.herbie.car, self.car)
         self.assertIs(self.herbie.belongs_to, self.jim_douglas)
-
-    @ignore_warnings(category=RemovedInDjango41Warning)
-    def test_undeepcopyable(self):
-        self.assertIs(self.non_deepcopy_able, self.__class__.non_deepcopy_able)
-
-    def test_undeepcopyable_warning(self):
-        msg = (
-            "Assigning objects which don't support copy.deepcopy() during "
-            "setUpTestData() is deprecated. Either assign the "
-            "non_deepcopy_able attribute during setUpClass() or setUp(), or "
-            "add support for deepcopy() to "
-            "test_utils.test_testcase.TestDataTests.non_deepcopy_able."
-        )
-        with self.assertRaisesMessage(RemovedInDjango41Warning, msg):
-            self.non_deepcopy_able
 
     def test_repr(self):
         self.assertEqual(
