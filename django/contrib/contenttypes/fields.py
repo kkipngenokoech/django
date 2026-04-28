@@ -14,6 +14,8 @@ from django.db.models.fields.related import (
     ReverseManyToOneDescriptor, lazy_related_operation,
 )
 from django.db.models.query_utils import PathInfo
+from django.db.models.sql import AND
+from django.db.models.sql.where import WhereNode
 from django.utils.functional import cached_property
 
 
@@ -70,8 +72,7 @@ class GenericForeignKey(FieldCacheMixin):
 
     def __str__(self):
         model = self.model
-        app = model._meta.app_label
-        return '%s.%s.%s' % (app, model._meta.object_name, self.name)
+        return '%s.%s' % (model._meta.label, self.name)
 
     def check(self, **kwargs):
         return [
@@ -277,6 +278,7 @@ class GenericRelation(ForeignObject):
 
     # Field flags
     auto_created = False
+    empty_strings_allowed = False
 
     many_to_many = False
     many_to_one = False
@@ -295,6 +297,9 @@ class GenericRelation(ForeignObject):
             limit_choices_to=limit_choices_to,
         )
 
+        # Reverse relations are always nullable (Django can't enforce that a
+        # foreign key on the related model points to this model).
+        kwargs['null'] = True
         kwargs['blank'] = True
         kwargs['on_delete'] = models.CASCADE
         kwargs['editable'] = False
@@ -339,9 +344,8 @@ class GenericRelation(ForeignObject):
                 return [
                     checks.Error(
                         "The GenericRelation defines a relation with the model "
-                        "'%s.%s', but that model does not have a GenericForeignKey." % (
-                            target._meta.app_label, target._meta.object_name
-                        ),
+                        "'%s', but that model does not have a GenericForeignKey."
+                        % target._meta.label,
                         obj=self,
                         id='contenttypes.E004',
                     )
@@ -463,13 +467,11 @@ class GenericRelation(ForeignObject):
         return ContentType.objects.get_for_model(self.model,
                                                  for_concrete_model=self.for_concrete_model)
 
-    def get_extra_restriction(self, where_class, alias, remote_alias):
+    def get_extra_restriction(self, alias, remote_alias):
         field = self.remote_field.model._meta.get_field(self.content_type_field_name)
         contenttype_pk = self.get_content_type().pk
-        cond = where_class()
         lookup = field.get_lookup('exact')(field.get_col(remote_alias), contenttype_pk)
-        cond.add(lookup, 'AND')
-        return cond
+        return WhereNode([lookup], connector=AND)
 
     def bulk_related_objects(self, objs, using=DEFAULT_DB_ALIAS):
         """
