@@ -17,9 +17,9 @@ implements the OpenGIS `Simple Features for SQL`__ spatial predicate functions
 and spatial operators. GEOS, now an OSGeo project, was initially developed and
 maintained by `Refractions Research`__ of Victoria, Canada.
 
-__ https://trac.osgeo.org/geos/
+__ https://libgeos.org/
 __ https://sourceforge.net/projects/jts-topo-suite/
-__ https://www.opengeospatial.org/standards/sfs
+__ https://www.ogc.org/standards/sfs
 __ http://www.refractions.net/
 
 Features
@@ -32,7 +32,7 @@ features include:
   in Python using ``ctypes``.
 * Loosely-coupled to GeoDjango.  For example, :class:`GEOSGeometry` objects
   may be used outside of a Django project/application.  In other words,
-  no need to have ``DJANGO_SETTINGS_MODULE`` set or use a database, etc.
+  no need to have :envvar:`DJANGO_SETTINGS_MODULE` set or use a database, etc.
 * Mutability: :class:`GEOSGeometry` objects may be modified.
 * Cross-platform and tested; compatible with Windows, Linux, Solaris, and
   macOS platforms.
@@ -55,7 +55,7 @@ are examples of creating the same geometry from WKT, HEX, WKB, and GeoJSON::
     >>> from django.contrib.gis.geos import GEOSGeometry
     >>> pnt = GEOSGeometry('POINT(5 23)') # WKT
     >>> pnt = GEOSGeometry('010100000000000000000014400000000000003740') # HEX
-    >>> pnt = GEOSGeometry(buffer('\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x14@\x00\x00\x00\x00\x00\x007@'))
+    >>> pnt = GEOSGeometry(memoryview(b'\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x14@\x00\x00\x00\x00\x00\x007@')) # WKB
     >>> pnt = GEOSGeometry('{ "type": "Point", "coordinates": [ 5.000000, 23.000000 ] }') # GeoJSON
 
 Another option is to use the constructor for the specific geometry type
@@ -87,7 +87,7 @@ Finally, there is the :func:`fromfile` factory method which returns a
 .. admonition:: My logs are filled with GEOS-related errors
 
     You find many ``TypeError`` or ``AttributeError`` exceptions filling your
-    Web server's log files. This generally means that you are creating GEOS
+    web server's log files. This generally means that you are creating GEOS
     objects at the top level of some of your Python modules. Then, due to a race
     condition in the garbage collector, your module is garbage collected before
     the GEOS object. To prevent this, create :class:`GEOSGeometry` objects
@@ -181,7 +181,7 @@ Geometry Objects
 
 .. class:: GEOSGeometry(geo_input, srid=None)
 
-    :param geo_input: Geometry input value (string or buffer)
+    :param geo_input: Geometry input value (string or :class:`memoryview`)
     :param srid: spatial reference identifier
     :type srid: int
 
@@ -206,19 +206,17 @@ The ``srid`` parameter, if given, is set as the SRID of the created geometry if
 The following input formats, along with their corresponding Python types,
 are accepted:
 
-=======================  ==========
+=======================  ==============
 Format                   Input Type
-=======================  ==========
+=======================  ==============
 WKT / EWKT               ``str``
 HEX / HEXEWKB            ``str``
-WKB / EWKB               ``buffer``
-GeoJSON_                 ``str``
-=======================  ==========
+WKB / EWKB               ``memoryview``
+:rfc:`GeoJSON <7946>`    ``str``
+=======================  ==============
 
 For the GeoJSON format, the SRID is set based on the ``crs`` member. If ``crs``
 isn't provided, the SRID defaults to 4326.
-
-.. _GeoJSON: https://tools.ietf.org/html/rfc7946
 
 .. classmethod:: GEOSGeometry.from_gml(gml_string)
 
@@ -412,7 +410,7 @@ return a boolean.
     The ``covers`` predicate has the following equivalent definitions:
 
     * Every point of the other geometry is a point of this geometry.
-    * The DE-9IM Intersection Matrix for the two geometries is
+    * The `DE-9IM`_ Intersection Matrix for the two geometries is
       ``T*****FF*``, ``*T****FF*``, ``***T**FF*``, or ``****T*FF*``.
 
     If either geometry is empty, returns ``False``.
@@ -424,6 +422,8 @@ return a boolean.
     ``covers()`` should be preferred to :meth:`~GEOSGeometry.contains`. As an
     added benefit, ``covers()`` is more amenable to optimization and hence
     should outperform :meth:`~GEOSGeometry.contains`.
+
+    .. _DE-9IM: https://en.wikipedia.org/wiki/DE-9IM
 
 .. method:: GEOSGeometry.crosses(other)
 
@@ -644,12 +644,11 @@ Other Properties & Methods
 
     Transforms the geometry according to the given coordinate transformation
     parameter (``ct``), which may be an integer SRID, spatial reference WKT
-    string, a PROJ.4 string, a
-    :class:`~django.contrib.gis.gdal.SpatialReference` object, or a
-    :class:`~django.contrib.gis.gdal.CoordTransform` object. By default, the
-    geometry is transformed in-place and nothing is returned. However if the
-    ``clone`` keyword is set, then the geometry is not modified and a
-    transformed clone of the geometry is returned instead.
+    string, a PROJ string, a :class:`~django.contrib.gis.gdal.SpatialReference`
+    object, or a :class:`~django.contrib.gis.gdal.CoordTransform` object. By
+    default, the geometry is transformed in-place and nothing is returned.
+    However if the ``clone`` keyword is set, then the geometry is not modified
+    and a transformed clone of the geometry is returned instead.
 
     .. note::
 
@@ -658,9 +657,21 @@ Other Properties & Methods
         doesn't impose any constraints on the geometry's SRID if called with a
         :class:`~django.contrib.gis.gdal.CoordTransform` object.
 
-.. method:: GEOSGeometry.normalize()
+.. method:: GEOSGeometry.make_valid()
 
-    Converts this geometry to canonical form::
+    .. versionadded:: 4.1
+
+    Returns a valid :class:`GEOSGeometry` equivalent, trying not to lose any of
+    the input vertices. If the geometry is already valid, it is returned
+    untouched. This is similar to the
+    :class:`~django.contrib.gis.db.models.functions.MakeValid` database
+    function. Requires GEOS 3.8.
+
+.. method:: GEOSGeometry.normalize(clone=False)
+
+    Converts this geometry to canonical form. If the ``clone`` keyword is set,
+    then the geometry is not modified and a normalized clone of the geometry is
+    returned instead::
 
         >>> g = MultiPoint(Point(0, 0), Point(2, 2), Point(1, 1))
         >>> print(g)
@@ -668,6 +679,10 @@ Other Properties & Methods
         >>> g.normalize()
         >>> print(g)
         MULTIPOINT (2 2, 1 1, 0 0)
+
+    .. versionchanged:: 4.1
+
+        The ``clone`` argument was added.
 
 ``Point``
 ---------
@@ -730,6 +745,10 @@ Other Properties & Methods
     Notice that ``(0, 0)`` is the first and last coordinate -- if they were not
     equal, an error would be raised.
 
+    .. attribute:: is_counterclockwise
+
+        Returns whether this ``LinearRing`` is counterclockwise.
+
 ``Polygon``
 -----------
 
@@ -764,6 +783,8 @@ Other Properties & Methods
 
         >>> if poly_1.area > poly_2.area:
         >>>     pass
+
+.. _geos-geometry-collections:
 
 Geometry Collections
 ====================
@@ -800,7 +821,7 @@ Geometry Collections
 
     .. attribute:: closed
 
-        Returns ``True`` if and only if all elements are closed. Requires GEOS 3.5.
+        Returns ``True`` if and only if all elements are closed.
 
 ``MultiPolygon``
 ----------------
@@ -833,7 +854,7 @@ Geometry Collections
 Prepared Geometries
 ===================
 
-In order to obtain a prepared geometry, just access the
+In order to obtain a prepared geometry, access the
 :attr:`GEOSGeometry.prepared` property.  Once you have a
 ``PreparedGeometry`` instance its spatial predicate methods, listed below,
 may be used with other ``GEOSGeometry`` objects.  An operation with a prepared
@@ -911,8 +932,8 @@ I/O Objects
 Reader Objects
 --------------
 
-The reader I/O classes simply return a :class:`GEOSGeometry` instance from the
-WKB and/or WKT input given to their ``read(geom)`` method.
+The reader I/O classes return a :class:`GEOSGeometry` instance from the WKB
+and/or WKT input given to their ``read(geom)`` method.
 
 .. class:: WKBReader
 
