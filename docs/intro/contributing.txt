@@ -45,7 +45,7 @@ so that it can be of use to the widest audience.
     chat with other Django users who might be able to help.
 
 __ https://diveinto.org/python3/table-of-contents.html
-__ irc://irc.freenode.net/django-dev
+__ https://webchat.freenode.net/#django-dev
 
 What does this tutorial cover?
 ------------------------------
@@ -163,13 +163,6 @@ more convenient.
 
         ...\> %HOMEPATH%\.virtualenvs\djangodev\Scripts\activate.bat
 
-    or you can install :ref:`a Windows version of virtualenvwrapper
-    <virtualenvwrapper-win>` and then use:
-
-    .. code-block:: doscon
-
-        ...\> workon djangodev
-
 __ https://virtualenvwrapper.readthedocs.io/en/latest/
 
 The name of the currently activated virtual environment is displayed on the
@@ -177,15 +170,27 @@ command line to help you keep track of which one you are using. Anything you
 install through ``pip`` while this name is displayed will be installed in that
 virtual environment, isolated from other environments and system-wide packages.
 
+.. _intro-contributing-install-local-copy:
+
 Go ahead and install the previously cloned copy of Django:
 
 .. console::
 
     $ python -m pip install -e /path/to/your/local/clone/django/
 
-The installed version of Django is now pointing at your local copy. You will
-immediately see any changes you make to it, which is of great help when writing
-your first patch.
+The installed version of Django is now pointing at your local copy by installing
+in editable mode. You will immediately see any changes you make to it, which is
+of great help when writing your first patch.
+
+Creating projects with a local copy of Django
+---------------------------------------------
+
+It may be helpful to test your local changes with a Django project. First you
+have to create a new virtual environment, :ref:`install the previously cloned
+local copy of Django in editable mode <intro-contributing-install-local-copy>`,
+and create a new Django project outside of your local copy of Django. You will
+immediately see any changes you make to Django in your new project, which is
+of great help when writing your first patch.
 
 Running Django's test suite for the first time
 ==============================================
@@ -218,7 +223,8 @@ some other flavor of Unix, run:
     $ ./runtests.py
 
 Now sit back and relax. Django's entire test suite has thousands of tests, and
-it takes at least a few minutes run, depending on the speed of your computer.
+it takes at least a few minutes to run, depending on the speed of your
+computer.
 
 While Django's test suite is running, you'll see a stream of characters
 representing the status of each test as it completes. ``E`` indicates that an

@@ -2,10 +2,7 @@ import datetime
 from unittest import skipIf, skipUnless
 
 from django.db import connection
-from django.db.models import Index
-from django.db.models.deletion import CASCADE
-from django.db.models.fields.related import ForeignKey
-from django.db.models.query_utils import Q
+from django.db.models import CASCADE, ForeignKey, Index, Q
 from django.test import (
     TestCase, TransactionTestCase, skipIfDBFeature, skipUnlessDBFeature,
 )
@@ -74,6 +71,22 @@ class SchemaIndexesTests(TestCase):
         # Test for using index_together with a single list (#22172)
         index_sql = connection.schema_editor()._model_indexes_sql(IndexTogetherSingleList)
         self.assertEqual(len(index_sql), 1)
+
+    def test_columns_list_sql(self):
+        index = Index(fields=['headline'], name='whitespace_idx')
+        editor = connection.schema_editor()
+        self.assertIn(
+            '(%s)' % editor.quote_name('headline'),
+            str(index.create_sql(Article, editor)),
+        )
+
+    def test_descending_columns_list_sql(self):
+        index = Index(fields=['-headline'], name='whitespace_idx')
+        editor = connection.schema_editor()
+        self.assertIn(
+            '(%s DESC)' % editor.quote_name('headline'),
+            str(index.create_sql(Article, editor)),
+        )
 
 
 @skipIf(connection.vendor == 'postgresql', 'opclasses are PostgreSQL only')
@@ -196,6 +209,57 @@ class SchemaIndexesPostgreSQLTests(TransactionTestCase):
             cursor.execute(self.get_opclass_query % indexname)
             self.assertCountEqual(cursor.fetchall(), [('text_pattern_ops', indexname)])
 
+    def test_ops_class_descending(self):
+        indexname = 'test_ops_class_ordered'
+        index = Index(
+            name=indexname,
+            fields=['-body'],
+            opclasses=['text_pattern_ops'],
+        )
+        with connection.schema_editor() as editor:
+            editor.add_index(IndexedArticle2, index)
+        with editor.connection.cursor() as cursor:
+            cursor.execute(self.get_opclass_query % indexname)
+            self.assertCountEqual(cursor.fetchall(), [('text_pattern_ops', indexname)])
+
+    def test_ops_class_descending_partial(self):
+        indexname = 'test_ops_class_ordered_partial'
+        index = Index(
+            name=indexname,
+            fields=['-body'],
+            opclasses=['text_pattern_ops'],
+            condition=Q(headline__contains='China'),
+        )
+        with connection.schema_editor() as editor:
+            editor.add_index(IndexedArticle2, index)
+        with editor.connection.cursor() as cursor:
+            cursor.execute(self.get_opclass_query % indexname)
+            self.assertCountEqual(cursor.fetchall(), [('text_pattern_ops', indexname)])
+
+    def test_ops_class_columns_lists_sql(self):
+        index = Index(
+            fields=['headline'],
+            name='whitespace_idx',
+            opclasses=['text_pattern_ops'],
+        )
+        with connection.schema_editor() as editor:
+            self.assertIn(
+                '(%s text_pattern_ops)' % editor.quote_name('headline'),
+                str(index.create_sql(Article, editor)),
+            )
+
+    def test_ops_class_descending_columns_list_sql(self):
+        index = Index(
+            fields=['-headline'],
+            name='whitespace_idx',
+            opclasses=['text_pattern_ops'],
+        )
+        with connection.schema_editor() as editor:
+            self.assertIn(
+                '(%s text_pattern_ops DESC)' % editor.quote_name('headline'),
+                str(index.create_sql(Article, editor)),
+            )
+
 
 @skipUnless(connection.vendor == 'mysql', 'MySQL tests')
 class SchemaIndexesMySQLTests(TransactionTestCase):
@@ -206,9 +270,10 @@ class SchemaIndexesMySQLTests(TransactionTestCase):
         MySQL on InnoDB already creates indexes automatically for foreign keys.
         (#14180). An index should be created if db_constraint=False (#26171).
         """
-        storage = connection.introspection.get_storage_engine(
-            connection.cursor(), ArticleTranslation._meta.db_table
-        )
+        with connection.cursor() as cursor:
+            storage = connection.introspection.get_storage_engine(
+                cursor, ArticleTranslation._meta.db_table,
+            )
         if storage != "InnoDB":
             self.skip("This test only applies to the InnoDB storage engine")
         index_sql = [str(statement) for statement in connection.schema_editor()._model_indexes_sql(ArticleTranslation)]
@@ -262,9 +327,10 @@ class PartialIndexTests(TransactionTestCase):
                 str(index.create_sql(Article, schema_editor=editor))
             )
             editor.add_index(index=index, model=Article)
-            self.assertIn(index.name, connection.introspection.get_constraints(
-                cursor=connection.cursor(), table_name=Article._meta.db_table,
-            ))
+            with connection.cursor() as cursor:
+                self.assertIn(index.name, connection.introspection.get_constraints(
+                    cursor=cursor, table_name=Article._meta.db_table,
+                ))
             editor.remove_index(index=index, model=Article)
 
     def test_integer_restriction_partial(self):
@@ -279,9 +345,10 @@ class PartialIndexTests(TransactionTestCase):
                 str(index.create_sql(Article, schema_editor=editor))
             )
             editor.add_index(index=index, model=Article)
-            self.assertIn(index.name, connection.introspection.get_constraints(
-                cursor=connection.cursor(), table_name=Article._meta.db_table,
-            ))
+            with connection.cursor() as cursor:
+                self.assertIn(index.name, connection.introspection.get_constraints(
+                    cursor=cursor, table_name=Article._meta.db_table,
+                ))
             editor.remove_index(index=index, model=Article)
 
     def test_boolean_restriction_partial(self):
@@ -296,9 +363,10 @@ class PartialIndexTests(TransactionTestCase):
                 str(index.create_sql(Article, schema_editor=editor))
             )
             editor.add_index(index=index, model=Article)
-            self.assertIn(index.name, connection.introspection.get_constraints(
-                cursor=connection.cursor(), table_name=Article._meta.db_table,
-            ))
+            with connection.cursor() as cursor:
+                self.assertIn(index.name, connection.introspection.get_constraints(
+                    cursor=cursor, table_name=Article._meta.db_table,
+                ))
             editor.remove_index(index=index, model=Article)
 
     @skipUnlessDBFeature('supports_functions_in_partial_indexes')
@@ -326,9 +394,10 @@ class PartialIndexTests(TransactionTestCase):
             # check ONLY the occurrence of headline in the SQL.
             self.assertGreater(sql.rfind('headline'), where)
             editor.add_index(index=index, model=Article)
-            self.assertIn(index.name, connection.introspection.get_constraints(
-                cursor=connection.cursor(), table_name=Article._meta.db_table,
-            ))
+            with connection.cursor() as cursor:
+                self.assertIn(index.name, connection.introspection.get_constraints(
+                    cursor=cursor, table_name=Article._meta.db_table,
+                ))
             editor.remove_index(index=index, model=Article)
 
     def test_is_null_condition(self):
@@ -343,7 +412,8 @@ class PartialIndexTests(TransactionTestCase):
                 str(index.create_sql(Article, schema_editor=editor))
             )
             editor.add_index(index=index, model=Article)
-            self.assertIn(index.name, connection.introspection.get_constraints(
-                cursor=connection.cursor(), table_name=Article._meta.db_table,
-            ))
+            with connection.cursor() as cursor:
+                self.assertIn(index.name, connection.introspection.get_constraints(
+                    cursor=cursor, table_name=Article._meta.db_table,
+                ))
             editor.remove_index(index=index, model=Article)

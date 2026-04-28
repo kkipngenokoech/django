@@ -24,7 +24,9 @@ else:
     from django.test.runner import default_test_processes
     from django.test.selenium import SeleniumTestCaseBase
     from django.test.utils import get_runner
-    from django.utils.deprecation import RemovedInDjango40Warning
+    from django.utils.deprecation import (
+        RemovedInDjango40Warning, RemovedInDjango41Warning,
+    )
     from django.utils.log import DEFAULT_LOGGING
     from django.utils.version import PY37
 
@@ -38,7 +40,10 @@ else:
 
 # Make deprecation warnings errors to ensure no usage of deprecated features.
 warnings.simplefilter("error", RemovedInDjango40Warning)
-# Make runtime warning errors to ensure no usage of error prone patterns.
+warnings.simplefilter('error', RemovedInDjango41Warning)
+# Make resource and runtime warning errors to ensure no usage of error prone
+# patterns.
+warnings.simplefilter("error", ResourceWarning)
 warnings.simplefilter("error", RuntimeWarning)
 # Ignore known warnings in test dependencies.
 warnings.filterwarnings("ignore", "'U' mode is deprecated", DeprecationWarning, module='docutils.io')
@@ -179,6 +184,7 @@ def setup(verbosity, test_labels, parallel, start_at, start_after):
     settings.LOGGING = log_config
     settings.SILENCED_SYSTEM_CHECKS = [
         'fields.W342',  # ForeignKey(unique=True) -> OneToOneField
+        'fields.W903',  # NullBooleanField deprecated.
     ]
 
     # Load all the ALWAYS_INSTALLED_APPS.
@@ -281,7 +287,7 @@ class ActionSelenium(argparse.Action):
 
 def django_tests(verbosity, interactive, failfast, keepdb, reverse,
                  test_labels, debug_sql, parallel, tags, exclude_tags,
-                 test_name_patterns, start_at, start_after, pdb):
+                 test_name_patterns, start_at, start_after, pdb, buffer):
     state = setup(verbosity, test_labels, parallel, start_at, start_after)
     extra_tests = []
 
@@ -302,6 +308,7 @@ def django_tests(verbosity, interactive, failfast, keepdb, reverse,
         exclude_tags=exclude_tags,
         test_name_patterns=test_name_patterns,
         pdb=pdb,
+        buffer=buffer,
     )
     failures = test_runner.run_tests(
         test_labels or get_installed(),
@@ -497,6 +504,10 @@ if __name__ == "__main__":
         '--pdb', action='store_true',
         help='Runs the PDB debugger on error or failure.'
     )
+    parser.add_argument(
+        '-b', '--buffer', action='store_true',
+        help='Discard output of passing tests.',
+    )
     if PY37:
         parser.add_argument(
             '-k', dest='test_name_patterns', action='append',
@@ -563,7 +574,7 @@ if __name__ == "__main__":
             options.debug_sql, options.parallel, options.tags,
             options.exclude_tags,
             getattr(options, 'test_name_patterns', None),
-            options.start_at, options.start_after, options.pdb,
+            options.start_at, options.start_after, options.pdb, options.buffer,
         )
         if failures:
             sys.exit(1)

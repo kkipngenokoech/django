@@ -1,7 +1,7 @@
 from unittest import mock
 
 from django.db import transaction
-from django.test import TestCase, skipUnlessDBFeature
+from django.test import TestCase, skipIfDBFeature, skipUnlessDBFeature
 
 from .models import (
     Article, InheritedArticleA, InheritedArticleB, Publication, User,
@@ -10,24 +10,25 @@ from .models import (
 
 class ManyToManyTests(TestCase):
 
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         # Create a couple of Publications.
-        self.p1 = Publication.objects.create(title='The Python Journal')
-        self.p2 = Publication.objects.create(title='Science News')
-        self.p3 = Publication.objects.create(title='Science Weekly')
-        self.p4 = Publication.objects.create(title='Highlights for Children')
+        cls.p1 = Publication.objects.create(title='The Python Journal')
+        cls.p2 = Publication.objects.create(title='Science News')
+        cls.p3 = Publication.objects.create(title='Science Weekly')
+        cls.p4 = Publication.objects.create(title='Highlights for Children')
 
-        self.a1 = Article.objects.create(headline='Django lets you build Web apps easily')
-        self.a1.publications.add(self.p1)
+        cls.a1 = Article.objects.create(headline='Django lets you build Web apps easily')
+        cls.a1.publications.add(cls.p1)
 
-        self.a2 = Article.objects.create(headline='NASA uses Python')
-        self.a2.publications.add(self.p1, self.p2, self.p3, self.p4)
+        cls.a2 = Article.objects.create(headline='NASA uses Python')
+        cls.a2.publications.add(cls.p1, cls.p2, cls.p3, cls.p4)
 
-        self.a3 = Article.objects.create(headline='NASA finds intelligent life on Earth')
-        self.a3.publications.add(self.p2)
+        cls.a3 = Article.objects.create(headline='NASA finds intelligent life on Earth')
+        cls.a3.publications.add(cls.p2)
 
-        self.a4 = Article.objects.create(headline='Oxygen-free diet works wonders')
-        self.a4.publications.add(self.p2)
+        cls.a4 = Article.objects.create(headline='Oxygen-free diet works wonders')
+        cls.a4.publications.add(cls.p2)
 
     def test_add(self):
         # Create an Article.
@@ -104,6 +105,12 @@ class ManyToManyTests(TestCase):
         a5.authors.remove(user_2.username)
         self.assertQuerysetEqual(a5.authors.all(), [])
 
+    def test_add_remove_invalid_type(self):
+        msg = "Field 'id' expected a number but got 'invalid'."
+        for method in ['add', 'remove']:
+            with self.subTest(method), self.assertRaisesMessage(ValueError, msg):
+                getattr(self.a1.publications, method)('invalid')
+
     def test_reverse_add(self):
         # Adding via the 'other' end of an m2m
         a5 = Article(headline='NASA finds intelligent life on Mars')
@@ -151,6 +158,14 @@ class ManyToManyTests(TestCase):
         """
         with self.assertNumQueries(1):
             self.a1.publications.add(self.p1, self.p2)
+
+    @skipIfDBFeature('supports_ignore_conflicts')
+    def test_add_existing_different_type(self):
+        # A single SELECT query is necessary to compare existing values to the
+        # provided one; no INSERT should be attempted.
+        with self.assertNumQueries(1):
+            self.a1.publications.add(str(self.p1.pk))
+        self.assertEqual(self.a1.publications.get(), self.p1)
 
     @skipUnlessDBFeature('supports_ignore_conflicts')
     def test_slow_add_ignore_conflicts(self):
@@ -454,6 +469,19 @@ class ManyToManyTests(TestCase):
         self.assertQuerysetEqual(self.p2.article_set.all(), [])
         self.a4.publications.set([], clear=True)
         self.assertQuerysetEqual(self.a4.publications.all(), [])
+
+    def test_set_existing_different_type(self):
+        # Existing many-to-many relations remain the same for values provided
+        # with a different type.
+        ids = set(Publication.article_set.through.objects.filter(
+            article__in=[self.a4, self.a3],
+            publication=self.p2,
+        ).values_list('id', flat=True))
+        self.p2.article_set.set([str(self.a4.pk), str(self.a3.pk)])
+        new_ids = set(Publication.article_set.through.objects.filter(
+            publication=self.p2,
+        ).values_list('id', flat=True))
+        self.assertEqual(ids, new_ids)
 
     def test_assign_forward(self):
         msg = (

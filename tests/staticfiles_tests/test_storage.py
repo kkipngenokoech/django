@@ -386,6 +386,15 @@ class TestCollectionManifestStorage(TestHashedFiles, CollectionTestCase):
         )
 
 
+@override_settings(STATICFILES_STORAGE='staticfiles_tests.storage.NoneHashStorage')
+class TestCollectionNoneHashStorage(CollectionTestCase):
+    hashed_file_path = hashed_file_path
+
+    def test_hashed_name(self):
+        relpath = self.hashed_file_path('cached/styles.css')
+        self.assertEqual(relpath, 'cached/styles.css')
+
+
 @override_settings(STATICFILES_STORAGE='staticfiles_tests.storage.SimpleStorage')
 class TestCollectionSimpleStorage(CollectionTestCase):
     hashed_file_path = hashed_file_path
@@ -420,7 +429,7 @@ class CustomStaticFilesStorage(storage.StaticFilesStorage):
         super().__init__(*args, **kwargs)
 
 
-@unittest.skipIf(sys.platform.startswith('win'), "Windows only partially supports chmod.")
+@unittest.skipIf(sys.platform == 'win32', "Windows only partially supports chmod.")
 class TestStaticFilePermissions(CollectionTestCase):
 
     command_params = {

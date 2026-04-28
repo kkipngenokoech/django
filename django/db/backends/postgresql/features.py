@@ -1,7 +1,7 @@
 import operator
 
+from django.db import InterfaceError
 from django.db.backends.base.features import BaseDatabaseFeatures
-from django.db.utils import InterfaceError
 from django.utils.functional import cached_property
 
 
@@ -12,11 +12,13 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     has_real_datatype = True
     has_native_uuid_field = True
     has_native_duration_field = True
+    has_native_json_field = True
     can_defer_constraint_checks = True
     has_select_for_update = True
     has_select_for_update_nowait = True
     has_select_for_update_of = True
     has_select_for_update_skip_locked = True
+    has_select_for_no_key_update = True
     can_release_savepoints = True
     supports_tablespaces = True
     supports_transactions = True
@@ -52,18 +54,25 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     $$ LANGUAGE plpgsql;"""
     requires_casted_case_in_updates = True
     supports_over_clause = True
+    only_supports_unbounded_with_preceding_and_following = True
     supports_aggregate_filter_clause = True
     supported_explain_formats = {'JSON', 'TEXT', 'XML', 'YAML'}
     validates_explain_options = False  # A query will error on invalid options.
-
-    @cached_property
-    def is_postgresql_9_6(self):
-        return self.connection.pg_version >= 90600
+    supports_deferrable_unique_constraints = True
+    has_json_operators = True
 
     @cached_property
     def is_postgresql_10(self):
         return self.connection.pg_version >= 100000
 
+    @cached_property
+    def is_postgresql_11(self):
+        return self.connection.pg_version >= 110000
+
+    @cached_property
+    def is_postgresql_12(self):
+        return self.connection.pg_version >= 120000
+
     has_brin_autosummarize = property(operator.attrgetter('is_postgresql_10'))
-    has_phraseto_tsquery = property(operator.attrgetter('is_postgresql_9_6'))
+    has_websearch_to_tsquery = property(operator.attrgetter('is_postgresql_11'))
     supports_table_partitions = property(operator.attrgetter('is_postgresql_10'))

@@ -24,7 +24,7 @@ class MigrationTestBase(TransactionTestCase):
 
     def tearDown(self):
         # Reset applied-migrations state.
-        for db in connections:
+        for db in self.databases:
             recorder = MigrationRecorder(connections[db])
             recorder.migration_qs.filter(app='migrations').delete()
 
@@ -50,10 +50,10 @@ class MigrationTestBase(TransactionTestCase):
         return [c.null_ok for c in self.get_table_description(table, using=using) if c.name == column][0]
 
     def assertColumnNull(self, table, column, using='default'):
-        self.assertEqual(self._get_column_allows_null(table, column, using), True)
+        self.assertTrue(self._get_column_allows_null(table, column, using))
 
     def assertColumnNotNull(self, table, column, using='default'):
-        self.assertEqual(self._get_column_allows_null(table, column, using), False)
+        self.assertFalse(self._get_column_allows_null(table, column, using))
 
     def assertIndexExists(self, table, columns, value=True, using='default', index_type=None):
         with connections[using].cursor() as cursor:
@@ -62,7 +62,11 @@ class MigrationTestBase(TransactionTestCase):
                 any(
                     c["index"]
                     for c in connections[using].introspection.get_constraints(cursor, table).values()
-                    if c['columns'] == list(columns) and (index_type is None or c['type'] == index_type)
+                    if (
+                        c['columns'] == list(columns) and
+                        (index_type is None or c['type'] == index_type) and
+                        not c['unique']
+                    )
                 ),
             )
 
@@ -79,6 +83,14 @@ class MigrationTestBase(TransactionTestCase):
 
     def assertConstraintNotExists(self, table, name):
         return self.assertConstraintExists(table, name, False)
+
+    def assertUniqueConstraintExists(self, table, columns, value=True, using='default'):
+        with connections[using].cursor() as cursor:
+            constraints = connections[using].introspection.get_constraints(cursor, table).values()
+            self.assertEqual(
+                value,
+                any(c['unique'] for c in constraints if c['columns'] == list(columns)),
+            )
 
     def assertFKExists(self, table, columns, to, value=True, using='default'):
         with connections[using].cursor() as cursor:
