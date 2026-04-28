@@ -583,7 +583,7 @@ DEFAULT_EXCEPTION_REPORTER_FILTER = 'django.views.debug.SafeExceptionReporterFil
 TEST_RUNNER = 'django.test.runner.DiscoverRunner'
 
 # Apps that don't need to be serialized at test database creation time
-# (only apps with migrations are to start with)
+# (only apps with migrations are to begin with)
 TEST_NON_SERIALIZED_APPS = []
 
 ############
