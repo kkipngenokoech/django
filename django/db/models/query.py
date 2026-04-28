@@ -1135,6 +1135,10 @@ class QuerySet:
         self._not_support_combined_queries('distinct')
         assert not self.query.is_sliced, \
             "Cannot create distinct fields once a slice has been taken."
+        if self.query.combinator:
+            raise NotSupportedError(
+                'Calling distinct() after union() is not supported.'
+            )
         obj = self._chain()
         obj.query.add_distinct_fields(*field_names)
         return obj
