@@ -811,16 +811,6 @@ class Star(Expression):
         return '*', []
 
 
-class Random(Expression):
-    output_field = fields.FloatField()
-
-    def __repr__(self):
-        return "Random()"
-
-    def as_sql(self, compiler, connection):
-        return connection.ops.random_function_sql(), []
-
-
 class Col(Expression):
 
     contains_column_references = True
@@ -930,7 +920,7 @@ class ExpressionWrapper(Expression):
         return expression.get_group_by_cols(alias=alias)
 
     def as_sql(self, compiler, connection):
-        return self.expression.as_sql(compiler, connection)
+        return compiler.compile(self.expression)
 
     def __repr__(self):
         return "{}({})".format(self.__class__.__name__, self.expression)
@@ -1077,6 +1067,11 @@ class Case(Expression):
         if self._output_field_or_none is not None:
             sql = connection.ops.unification_cast_sql(self.output_field) % sql
         return sql, sql_params
+
+    def get_group_by_cols(self, alias=None):
+        if not self.cases:
+            return self.default.get_group_by_cols(alias)
+        return super().get_group_by_cols(alias)
 
 
 class Subquery(Expression):

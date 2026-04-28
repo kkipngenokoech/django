@@ -48,12 +48,12 @@ from .models import (
     Parent, ParentWithDependentChildren, ParentWithUUIDPK, Person, Persona,
     Picture, Pizza, Plot, PlotDetails, PluggableSearchPerson, Podcast, Post,
     PrePopulatedPost, Promo, Question, ReadablePizza, ReadOnlyPizza,
-    Recommendation, Recommender, RelatedPrepopulated, RelatedWithUUIDPKModel,
-    Report, Restaurant, RowLevelChangePermissionModel, SecretHideout, Section,
-    ShortMessage, Simple, Song, State, Story, SuperSecretHideout, SuperVillain,
-    Telegram, TitleTranslation, Topping, UnchangeableObject, UndeletableObject,
-    UnorderedObject, UserProxy, Villain, Vodcast, Whatsit, Widget, Worker,
-    WorkHour,
+    ReadOnlyRelatedField, Recommendation, Recommender, RelatedPrepopulated,
+    RelatedWithUUIDPKModel, Report, Restaurant, RowLevelChangePermissionModel,
+    SecretHideout, Section, ShortMessage, Simple, Song, State, Story,
+    SuperSecretHideout, SuperVillain, Telegram, TitleTranslation, Topping,
+    UnchangeableObject, UndeletableObject, UnorderedObject, UserProxy, Villain,
+    Vodcast, Whatsit, Widget, Worker, WorkHour,
 )
 
 ERROR_MESSAGE = "Please enter the correct username and password \
@@ -448,24 +448,26 @@ class AdminViewBasicTest(AdminViewBasicTestCase):
         method in reverse order (i.e. admin_order_field uses the '-' prefix)
         (column 6 is 'model_year_reverse' in ArticleAdmin)
         """
+        td = '<td class="field-model_property_year">%s</td>'
+        td_2000, td_2008, td_2009 = td % 2000, td % 2008, td % 2009
         response = self.client.get(reverse('admin:admin_views_article_changelist'), {'o': '6'})
         self.assertContentBefore(
-            response, '2009', '2008',
+            response, td_2009, td_2008,
             "Results of sorting on ModelAdmin method are out of order."
         )
         self.assertContentBefore(
-            response, '2008', '2000',
+            response, td_2008, td_2000,
             "Results of sorting on ModelAdmin method are out of order."
         )
         # Let's make sure the ordering is right and that we don't get a
         # FieldError when we change to descending order
         response = self.client.get(reverse('admin:admin_views_article_changelist'), {'o': '-6'})
         self.assertContentBefore(
-            response, '2000', '2008',
+            response, td_2000, td_2008,
             "Results of sorting on ModelAdmin method are out of order."
         )
         self.assertContentBefore(
-            response, '2008', '2009',
+            response, td_2008, td_2009,
             "Results of sorting on ModelAdmin method are out of order."
         )
 
@@ -4931,6 +4933,17 @@ class SeleniumTests(AdminSeleniumTestCase):
             ['Roboto', 'Lucida Grande', 'Verdana', 'Arial', 'sans-serif'],
         )
 
+    def test_search_input_filtered_page(self):
+        Person.objects.create(name='Guido van Rossum', gender=1, alive=True)
+        Person.objects.create(name='Grace Hopper', gender=1, alive=False)
+        self.admin_login(username='super', password='secret', login_url=reverse('admin:index'))
+        person_url = reverse('admin:admin_views_person_changelist') + '?q=Gui'
+        self.selenium.get(self.live_server_url + person_url)
+        self.assertGreater(
+            self.selenium.find_element_by_id('searchbar').rect['width'],
+            50,
+        )
+
 
 @override_settings(ROOT_URLCONF='admin_views.urls')
 class ReadonlyTest(AdminFieldExtractionMixin, TestCase):
@@ -5042,6 +5055,45 @@ class ReadonlyTest(AdminFieldExtractionMixin, TestCase):
         response = self.client.get(reverse('admin:admin_views_choice_change', args=(choice.pk,)))
         self.assertContains(response, '<div class="readonly">No opinion</div>', html=True)
 
+    def test_readonly_foreignkey_links(self):
+        """
+        ForeignKey readonly fields render as links if the target model is
+        registered in admin.
+        """
+        chapter = Chapter.objects.create(
+            title='Chapter 1',
+            content='content',
+            book=Book.objects.create(name='Book 1'),
+        )
+        language = Language.objects.create(iso='_40', name='Test')
+        obj = ReadOnlyRelatedField.objects.create(
+            chapter=chapter,
+            language=language,
+            user=self.superuser,
+        )
+        response = self.client.get(
+            reverse('admin:admin_views_readonlyrelatedfield_change', args=(obj.pk,)),
+        )
+        # Related ForeignKey object registered in admin.
+        user_url = reverse('admin:auth_user_change', args=(self.superuser.pk,))
+        self.assertContains(
+            response,
+            '<div class="readonly"><a href="%s">super</a></div>' % user_url,
+            html=True,
+        )
+        # Related ForeignKey with the string primary key registered in admin.
+        language_url = reverse(
+            'admin:admin_views_language_change',
+            args=(quote(language.pk),),
+        )
+        self.assertContains(
+            response,
+            '<div class="readonly"><a href="%s">_40</a></div>' % language_url,
+            html=True,
+        )
+        # Related ForeignKey object not registered in admin.
+        self.assertContains(response, '<div class="readonly">Chapter 1</div>', html=True)
+
     def test_readonly_manytomany_backwards_ref(self):
         """
         Regression test for #16433 - backwards references for related objects
@@ -5071,7 +5123,8 @@ class ReadonlyTest(AdminFieldExtractionMixin, TestCase):
 
         response = self.client.get(reverse('admin:admin_views_plotproxy_change', args=(pl.pk,)))
         field = self.get_admin_readonly_field(response, 'plotdetails')
-        self.assertEqual(field.contents(), 'Brand New Plot')
+        pd_url = reverse('admin:admin_views_plotdetails_change', args=(pd.pk,))
+        self.assertEqual(field.contents(), '<a href="%s">Brand New Plot</a>' % pd_url)
 
         # The reverse relation also works if the OneToOneField is null.
         pd.plot = None

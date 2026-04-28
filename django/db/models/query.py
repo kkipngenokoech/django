@@ -17,7 +17,7 @@ from django.db import (
 from django.db.models import AutoField, DateField, DateTimeField, sql
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.deletion import Collector
-from django.db.models.expressions import Case, Expression, F, Value, When
+from django.db.models.expressions import Case, Expression, F, Ref, Value, When
 from django.db.models.functions import Cast, Trunc
 from django.db.models.query_utils import FilteredRelation, Q
 from django.db.models.sql.constants import CURSOR, GET_ITERATOR_CHUNK_SIZE
@@ -386,8 +386,16 @@ class QuerySet:
         query = self.query.chain()
         for (alias, aggregate_expr) in kwargs.items():
             query.add_annotation(aggregate_expr, alias, is_summary=True)
-            if not query.annotations[alias].contains_aggregate:
+            annotation = query.annotations[alias]
+            if not annotation.contains_aggregate:
                 raise TypeError("%s is not an aggregate expression" % alias)
+            for expr in annotation.get_source_expressions():
+                if expr.contains_aggregate and isinstance(expr, Ref) and expr.refs in kwargs:
+                    name = expr.refs
+                    raise exceptions.FieldError(
+                        "Cannot compute %s('%s'): '%s' is an aggregate"
+                        % (annotation.name, name, name)
+                    )
         return query.get_aggregation(self.db, kwargs)
 
     def count(self):
@@ -408,6 +416,11 @@ class QuerySet:
         Perform the query and return a single object matching the given
         keyword arguments.
         """
+        if self.query.combinator and (args or kwargs):
+            raise NotSupportedError(
+                'Calling QuerySet.get(...) with filters after %s() is not '
+                'supported.' % self.query.combinator
+            )
         clone = self._chain() if self.query.combinator else self.filter(*args, **kwargs)
         if self.query.can_filter() and not self.query.distinct_fields:
             clone = clone.order_by()
@@ -982,7 +995,11 @@ class QuerySet:
         # If the query is an EmptyQuerySet, combine all nonempty querysets.
         if isinstance(self, EmptyQuerySet):
             qs = [q for q in other_qs if not isinstance(q, EmptyQuerySet)]
-            return qs[0]._combinator_query('union', *qs[1:], all=all) if qs else self
+            if not qs:
+                return self
+            if len(qs) == 1:
+                return qs[0]
+            return qs[0]._combinator_query('union', *qs[1:], all=all)
         return self._combinator_query('union', *other_qs, all=all)
 
     def intersection(self, *other_qs):
