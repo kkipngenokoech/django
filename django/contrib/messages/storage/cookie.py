@@ -14,6 +14,10 @@ class MessageEncoder(json.JSONEncoder):
     """
     message_key = '__json_message'
 
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('separators', (',', ':'))
+        super().__init__(*args, **kwargs)
+
     def default(self, obj):
         if isinstance(obj, Message):
             # Using 0/1 here instead of False/True to produce more compact json
@@ -92,7 +96,11 @@ class CookieStorage(BaseStorage):
                 samesite=settings.SESSION_COOKIE_SAMESITE,
             )
         else:
-            response.delete_cookie(self.cookie_name, domain=settings.SESSION_COOKIE_DOMAIN)
+            response.delete_cookie(
+                self.cookie_name,
+                domain=settings.SESSION_COOKIE_DOMAIN,
+                samesite=settings.SESSION_COOKIE_SAMESITE,
+            )
 
     def _store(self, messages, response, remove_oldest=True, *args, **kwargs):
         """
@@ -144,7 +152,7 @@ class CookieStorage(BaseStorage):
         also contains a hash to ensure that the data was not tampered with.
         """
         if messages or encode_empty:
-            encoder = MessageEncoder(separators=(',', ':'))
+            encoder = MessageEncoder()
             value = encoder.encode(messages)
             return self.signer.sign(value)
 

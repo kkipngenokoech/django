@@ -6,6 +6,7 @@ from admin_scripts.tests import AdminScriptTestCase
 
 from django.apps import apps
 from django.core import management
+from django.core.checks import Tags
 from django.core.management import BaseCommand, CommandError, find_commands
 from django.core.management.utils import (
     find_command, get_random_secret_key, is_ignored_path,
@@ -13,8 +14,9 @@ from django.core.management.utils import (
 )
 from django.db import connection
 from django.test import SimpleTestCase, override_settings
-from django.test.utils import captured_stderr, extend_sys_path
+from django.test.utils import captured_stderr, extend_sys_path, ignore_warnings
 from django.utils import translation
+from django.utils.deprecation import RemovedInDjango41Warning
 from django.utils.version import PY37
 
 from .management.commands import dance
@@ -59,13 +61,13 @@ class CommandTests(SimpleTestCase):
         with self.assertRaises(CommandError) as cm:
             management.call_command('dance', example="raise")
         self.assertEqual(cm.exception.returncode, 3)
-        dance.Command.requires_system_checks = False
+        dance.Command.requires_system_checks = []
         try:
             with captured_stderr() as stderr, self.assertRaises(SystemExit) as cm:
                 management.ManagementUtility(['manage.py', 'dance', '--example=raise']).execute()
             self.assertEqual(cm.exception.code, 3)
         finally:
-            dance.Command.requires_system_checks = True
+            dance.Command.requires_system_checks = '__all__'
         self.assertIn("CommandError", stderr.getvalue())
 
     def test_no_translations_deactivate_translations(self):
@@ -155,6 +157,7 @@ class CommandTests(SimpleTestCase):
 
         def patched_check(self_, **kwargs):
             self.counter += 1
+            self.kwargs = kwargs
 
         saved_check = BaseCommand.check
         BaseCommand.check = patched_check
@@ -163,8 +166,27 @@ class CommandTests(SimpleTestCase):
             self.assertEqual(self.counter, 0)
             management.call_command("dance", verbosity=0, skip_checks=False)
             self.assertEqual(self.counter, 1)
+            self.assertEqual(self.kwargs, {})
         finally:
             BaseCommand.check = saved_check
+
+    def test_requires_system_checks_empty(self):
+        with mock.patch('django.core.management.base.BaseCommand.check') as mocked_check:
+            management.call_command('no_system_checks')
+        self.assertIs(mocked_check.called, False)
+
+    def test_requires_system_checks_specific(self):
+        with mock.patch('django.core.management.base.BaseCommand.check') as mocked_check:
+            management.call_command('specific_system_checks')
+        mocked_check.called_once_with(tags=[Tags.staticfiles, Tags.models])
+
+    def test_requires_system_checks_invalid(self):
+        class Command(BaseCommand):
+            requires_system_checks = 'x'
+
+        msg = 'requires_system_checks must be a list or tuple.'
+        with self.assertRaisesMessage(TypeError, msg):
+            Command()
 
     def test_check_migrations(self):
         requires_migrations_checks = dance.Command.requires_migrations_checks
@@ -221,9 +243,80 @@ class CommandTests(SimpleTestCase):
         self.assertIn('foo_id', out.getvalue())
         management.call_command('mutually_exclusive_required', foo_name='foo', stdout=out)
         self.assertIn('foo_name', out.getvalue())
-        msg = 'Error: one of the arguments --foo-id --foo-name is required'
+        msg = (
+            'Error: one of the arguments --foo-id --foo-name --foo-list '
+            '--append_const --const --count --flag_false --flag_true is '
+            'required'
+        )
         with self.assertRaisesMessage(CommandError, msg):
             management.call_command('mutually_exclusive_required', stdout=out)
+
+    def test_mutually_exclusive_group_required_const_options(self):
+        tests = [
+            ('append_const', [42]),
+            ('const', 31),
+            ('count', 1),
+            ('flag_false', False),
+            ('flag_true', True),
+        ]
+        for arg, value in tests:
+            out = StringIO()
+            expected_output = '%s=%s' % (arg, value)
+            with self.subTest(arg=arg):
+                management.call_command(
+                    'mutually_exclusive_required',
+                    '--%s' % arg,
+                    stdout=out,
+                )
+                self.assertIn(expected_output, out.getvalue())
+                out.truncate(0)
+                management.call_command(
+                    'mutually_exclusive_required',
+                    **{arg: value, 'stdout': out},
+                )
+                self.assertIn(expected_output, out.getvalue())
+
+    def test_required_list_option(self):
+        tests = [
+            (('--foo-list', [1, 2]), {}),
+            ((), {'foo_list': [1, 2]}),
+        ]
+        for command in ['mutually_exclusive_required', 'required_list_option']:
+            for args, kwargs in tests:
+                with self.subTest(command=command, args=args, kwargs=kwargs):
+                    out = StringIO()
+                    management.call_command(
+                        command,
+                        *args,
+                        **{**kwargs, 'stdout': out},
+                    )
+                    self.assertIn('foo_list=[1, 2]', out.getvalue())
+
+    def test_required_const_options(self):
+        args = {
+            'append_const': [42],
+            'const': 31,
+            'count': 1,
+            'flag_false': False,
+            'flag_true': True,
+        }
+        expected_output = '\n'.join(
+            '%s=%s' % (arg, value) for arg, value in args.items()
+        )
+        out = StringIO()
+        management.call_command(
+            'required_constant_option',
+            '--append_const',
+            '--const',
+            '--count',
+            '--flag_false',
+            '--flag_true',
+            stdout=out,
+        )
+        self.assertIn(expected_output, out.getvalue())
+        out.truncate(0)
+        management.call_command('required_constant_option', **{**args, 'stdout': out})
+        self.assertIn(expected_output, out.getvalue())
 
     def test_subparser(self):
         out = StringIO()
@@ -264,6 +357,13 @@ class CommandTests(SimpleTestCase):
         epilog = 'some epilog text'
         parser = BaseCommand().create_parser('prog_name', 'subcommand', epilog=epilog)
         self.assertEqual(parser.epilog, epilog)
+
+    def test_outputwrapper_flush(self):
+        out = StringIO()
+        with mock.patch.object(out, 'flush') as mocked_flush:
+            management.call_command('outputwrapper', stdout=out)
+        self.assertIn('Working...', out.getvalue())
+        self.assertIs(mocked_flush.called, True)
 
 
 class CommandRunTests(AdminScriptTestCase):
@@ -334,3 +434,45 @@ class UtilsTests(SimpleTestCase):
     def test_normalize_path_patterns_truncates_wildcard_base(self):
         expected = [os.path.normcase(p) for p in ['foo/bar', 'bar/*/']]
         self.assertEqual(normalize_path_patterns(['foo/bar/*', 'bar/*/']), expected)
+
+
+class DeprecationTests(SimpleTestCase):
+    def test_requires_system_checks_warning(self):
+        class Command(BaseCommand):
+            pass
+
+        msg = (
+            "Using a boolean value for requires_system_checks is deprecated. "
+            "Use '__all__' instead of True, and [] (an empty list) instead of "
+            "False."
+        )
+        for value in [False, True]:
+            Command.requires_system_checks = value
+            with self.assertRaisesMessage(RemovedInDjango41Warning, msg):
+                Command()
+
+    @ignore_warnings(category=RemovedInDjango41Warning)
+    def test_requires_system_checks_true(self):
+        class Command(BaseCommand):
+            requires_system_checks = True
+
+            def handle(self, *args, **options):
+                pass
+
+        command = Command()
+        with mock.patch('django.core.management.base.BaseCommand.check') as mocked_check:
+            management.call_command(command, skip_checks=False)
+        mocked_check.assert_called_once_with()
+
+    @ignore_warnings(category=RemovedInDjango41Warning)
+    def test_requires_system_checks_false(self):
+        class Command(BaseCommand):
+            requires_system_checks = False
+
+            def handle(self, *args, **options):
+                pass
+
+        command = Command()
+        with mock.patch('django.core.management.base.BaseCommand.check') as mocked_check:
+            management.call_command(command)
+        self.assertIs(mocked_check.called, False)

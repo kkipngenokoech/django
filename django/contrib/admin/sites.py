@@ -52,7 +52,7 @@ class AdminSite:
 
     enable_nav_sidebar = True
 
-    _empty_value_display = '-'
+    empty_value_display = '-'
 
     login_form = None
     index_template = None
@@ -180,14 +180,6 @@ class AdminSite:
         """
         return self._actions.items()
 
-    @property
-    def empty_value_display(self):
-        return self._empty_value_display
-
-    @empty_value_display.setter
-    def empty_value_display(self, empty_value_display):
-        self._empty_value_display = empty_value_display
-
     def has_permission(self, request):
         """
         Return True if the given HttpRequest has permission to view
@@ -240,11 +232,11 @@ class AdminSite:
         return update_wrapper(inner, view)
 
     def get_urls(self):
-        from django.urls import include, path, re_path
         # Since this module gets imported in the application's root package,
         # it cannot import models from other applications at the module level,
         # and django.contrib.contenttypes.views imports ContentType.
         from django.contrib.contenttypes import views as contenttype_views
+        from django.urls import include, path, re_path
 
         def wrap(view, cacheable=False):
             def wrapper(*args, **kwargs):
@@ -385,11 +377,11 @@ class AdminSite:
             index_path = reverse('admin:index', current_app=self.name)
             return HttpResponseRedirect(index_path)
 
-        from django.contrib.auth.views import LoginView
         # Since this module gets imported in the application's root package,
         # it cannot import models from other applications at the module level,
         # and django.contrib.admin.forms eventually imports User.
         from django.contrib.admin.forms import AdminAuthenticationForm
+        from django.contrib.auth.views import LoginView
         context = {
             **self.each_context(request),
             'title': _('Log in'),
@@ -518,10 +510,9 @@ class AdminSite:
             raise Http404('The requested admin page does not exist.')
         # Sort the models alphabetically within each app.
         app_dict['models'].sort(key=lambda x: x['name'])
-        app_name = apps.get_app_config(app_label).verbose_name
         context = {
             **self.each_context(request),
-            'title': _('%(app)s administration') % {'app': app_name},
+            'title': _('%(app)s administration') % {'app': app_dict['name']},
             'app_list': [app_dict],
             'app_label': app_label,
             **(extra_context or {}),
