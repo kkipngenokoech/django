@@ -59,7 +59,7 @@ will result in a database error.
 Usage examples::
 
     >>> # Get a screen name from least to most public
-    >>> from django.db.models import Sum, Value as V
+    >>> from django.db.models import Sum
     >>> from django.db.models.functions import Coalesce
     >>> Author.objects.create(name='Margaret Smith', goes_by='Maggie')
     >>> author = Author.objects.annotate(
@@ -68,13 +68,18 @@ Usage examples::
     Maggie
 
     >>> # Prevent an aggregate Sum() from returning None
+    >>> # The aggregate default argument uses Coalesce() under the hood.
     >>> aggregated = Author.objects.aggregate(
-    ...    combined_age=Coalesce(Sum('age'), V(0)),
-    ...    combined_age_default=Sum('age'))
+    ...    combined_age=Sum('age'),
+    ...    combined_age_default=Sum('age', default=0),
+    ...    combined_age_coalesce=Coalesce(Sum('age'), 0),
+    ... )
     >>> print(aggregated['combined_age'])
-    0
-    >>> print(aggregated['combined_age_default'])
     None
+    >>> print(aggregated['combined_age_default'])
+    0
+    >>> print(aggregated['combined_age_coalesce'])
+    0
 
 .. warning::
 
@@ -86,6 +91,25 @@ Usage examples::
     >>> from django.utils import timezone
     >>> now = timezone.now()
     >>> Coalesce('updated', Cast(now, DateTimeField()))
+
+``Collate``
+-----------
+
+.. class:: Collate(expression, collation)
+
+.. versionadded:: 3.2
+
+Takes an expression and a collation name to query against.
+
+For example, to filter case-insensitively in SQLite::
+
+    >>> Author.objects.filter(name=Collate(Value('john'), 'nocase'))
+    <QuerySet [<Author: John>, <Author: john>]>
+
+It can also be used when ordering, for example with PostgreSQL::
+
+    >>> Author.objects.order_by(Collate('name', 'et-x-icu'))
+    <QuerySet [<Author: Ursula>, <Author: Veronika>, <Author: Ülle>]>
 
 ``Greatest``
 ------------
@@ -128,6 +152,29 @@ and ``comment.modified``.
 
     The PostgreSQL behavior can be emulated using ``Coalesce`` if you know
     a sensible minimum value to provide as a default.
+
+``JSONObject``
+--------------
+
+.. class:: JSONObject(**fields)
+
+.. versionadded:: 3.2
+
+Takes a list of key-value pairs and returns a JSON object containing those
+pairs.
+
+Usage example::
+
+    >>> from django.db.models import F
+    >>> from django.db.models.functions import JSONObject, Lower
+    >>> Author.objects.create(name='Margaret Smith', alias='msmith', age=25)
+    >>> author = Author.objects.annotate(json_object=JSONObject(
+    ...     name=Lower('name'),
+    ...     alias='alias',
+    ...     age=F('age') * 2,
+    ... )).get()
+    >>> author.json_object
+    {'name': 'margaret smith', 'alias': 'msmith', 'age': 50}
 
 ``Least``
 ---------
@@ -293,8 +340,6 @@ Usage example::
     .. attribute:: lookup_name = 'week_day'
 
 .. class:: ExtractIsoWeekDay(expression, tzinfo=None, **extra)
-
-    .. versionadded:: 3.1
 
     Returns the ISO-8601 week day with day 1 being Monday and day 7 being
     Sunday.
@@ -604,19 +649,27 @@ that deal with date-parts can be used with ``DateField``::
 ``DateTimeField`` truncation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. class:: TruncDate(expression, **extra)
+.. class:: TruncDate(expression, tzinfo=None, **extra)
 
     .. attribute:: lookup_name = 'date'
     .. attribute:: output_field = DateField()
+
+    .. versionchanged:: 3.2
+
+        The ``tzinfo`` parameter was added.
 
 ``TruncDate`` casts ``expression`` to a date rather than using the built-in SQL
 truncate function. It's also registered as a transform on  ``DateTimeField`` as
 ``__date``.
 
-.. class:: TruncTime(expression, **extra)
+.. class:: TruncTime(expression, tzinfo=None, **extra)
 
     .. attribute:: lookup_name = 'time'
     .. attribute:: output_field = TimeField()
+
+    .. versionchanged:: 3.2
+
+        The ``tzinfo`` parameter was added.
 
 ``TruncTime`` casts ``expression`` to a time rather than using the built-in SQL
 truncate function. It's also registered as a transform on ``DateTimeField`` as
@@ -1087,21 +1140,31 @@ It can also be registered as a transform. For example::
     >>> # Get vectors whose radians are less than 1
     >>> vectors = Vector.objects.filter(x__radians__lt=1, y__radians__lt=1)
 
+``Random``
+----------
+
+.. class:: Random(**extra)
+
+.. versionadded:: 3.2
+
+Returns a random value in the range ``0.0 ≤ x < 1.0``.
+
 ``Round``
 ---------
 
-.. class:: Round(expression, **extra)
+.. class:: Round(expression, precision=0, **extra)
 
-Rounds a numeric field or expression to the nearest integer. Whether half
+Rounds a numeric field or expression to ``precision`` (must be an integer)
+decimal places. By default, it rounds to the nearest integer. Whether half
 values are rounded up or down depends on the database.
 
 Usage example::
 
     >>> from django.db.models.functions import Round
-    >>> Vector.objects.create(x=5.4, y=-2.3)
-    >>> vector = Vector.objects.annotate(x_r=Round('x'), y_r=Round('y')).get()
+    >>> Vector.objects.create(x=5.4, y=-2.37)
+    >>> vector = Vector.objects.annotate(x_r=Round('x'), y_r=Round('y', precision=1)).get()
     >>> vector.x_r, vector.y_r
-    (5.0, -2.0)
+    (5.0, -2.4)
 
 It can also be registered as a transform. For example::
 
@@ -1110,6 +1173,10 @@ It can also be registered as a transform. For example::
     >>> FloatField.register_lookup(Round)
     >>> # Get vectors whose round() is less than 20
     >>> vectors = Vector.objects.filter(x__round__lt=20, y__round__lt=20)
+
+.. versionchanged:: 4.0
+
+    The ``precision`` argument was added.
 
 ``Sign``
 --------

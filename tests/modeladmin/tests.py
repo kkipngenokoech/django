@@ -25,7 +25,7 @@ class MockRequest:
 
 
 class MockSuperUser:
-    def has_perm(self, perm):
+    def has_perm(self, perm, obj=None):
         return True
 
 
@@ -722,6 +722,13 @@ class ModelAdminTests(TestCase):
         self.assertEqual(perms_needed, {'band'})
         self.assertEqual(protected, [])
 
+    def test_modeladmin_repr(self):
+        ma = ModelAdmin(Band, self.site)
+        self.assertEqual(
+            repr(ma),
+            "<ModelAdmin: model=Band site=AdminSite(name='admin')>",
+        )
+
 
 class ModelAdminPermissionTests(SimpleTestCase):
 
@@ -730,19 +737,19 @@ class ModelAdminPermissionTests(SimpleTestCase):
             return app_label == 'modeladmin'
 
     class MockViewUser(MockUser):
-        def has_perm(self, perm):
+        def has_perm(self, perm, obj=None):
             return perm == 'modeladmin.view_band'
 
     class MockAddUser(MockUser):
-        def has_perm(self, perm):
+        def has_perm(self, perm, obj=None):
             return perm == 'modeladmin.add_band'
 
     class MockChangeUser(MockUser):
-        def has_perm(self, perm):
+        def has_perm(self, perm, obj=None):
             return perm == 'modeladmin.change_band'
 
     class MockDeleteUser(MockUser):
-        def has_perm(self, perm):
+        def has_perm(self, perm, obj=None):
             return perm == 'modeladmin.delete_band'
 
     def test_has_view_permission(self):

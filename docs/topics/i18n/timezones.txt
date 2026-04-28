@@ -15,8 +15,8 @@ This is handy if your users live in more than one time zone and you want to
 display datetime information according to each user's wall clock.
 
 Even if your website is available in only one time zone, it's still good
-practice to store data in UTC in your database. The main reason is Daylight
-Saving Time (DST). Many countries have a system of DST, where clocks are moved
+practice to store data in UTC in your database. The main reason is daylight
+saving time (DST). Many countries have a system of DST, where clocks are moved
 forward in spring and backward in autumn. If you're working in local time,
 you're likely to encounter errors twice a year, when the transitions happen.
 (The pytz_ documentation discusses `these issues`_ in greater detail.) This
@@ -26,8 +26,20 @@ to this problem is to use UTC in the code and use local time only when
 interacting with end users.
 
 Time zone support is disabled by default. To enable it, set :setting:`USE_TZ =
-True <USE_TZ>` in your settings file. Time zone support uses pytz_, which is
-installed when you install Django.
+True <USE_TZ>` in your settings file.
+
+.. note::
+
+    In Django 5.0, time zone support will be enabled by default.
+
+By default, time zone support uses pytz_, which is installed when you install
+Django; Django also supports the use of other time zone implementations like
+:mod:`zoneinfo` by passing :class:`~datetime.tzinfo` objects directly to
+functions in :mod:`django.utils.timezone`.
+
+.. versionchanged:: 3.2
+
+    Support for non-``pytz`` timezone implementations was added.
 
 .. note::
 
@@ -469,7 +481,7 @@ Setup
 
    Yes. When time zone support is enabled, Django uses a more accurate model
    of local time. This shields you from subtle and unreproducible bugs around
-   Daylight Saving Time (DST) transitions.
+   daylight saving time (DST) transitions.
 
    When you enable time zone support, you'll encounter some errors because
    you're using naive datetimes where Django expects aware datetimes. Such
@@ -491,7 +503,7 @@ Setup
    datetimes, and vice-versa.
 
    If your application connects to other systems -- for instance, if it queries
-   a Web service -- make sure datetimes are properly specified. To transmit
+   a web service -- make sure datetimes are properly specified. To transmit
    datetimes safely, their representation should include the UTC offset, or
    their values should be in UTC (or both!).
 
@@ -528,10 +540,9 @@ Troubleshooting
 
    Let's reproduce this error by comparing a naive and an aware datetime::
 
-       >>> import datetime
        >>> from django.utils import timezone
-       >>> naive = datetime.datetime.utcnow()
        >>> aware = timezone.now()
+       >>> naive = timezone.make_naive(aware)
        >>> naive == aware
        Traceback (most recent call last):
        ...
@@ -680,7 +691,8 @@ Usage
 
    pytz_ provides helpers_, including a list of current time zones and a list
    of all available time zones -- some of which are only of historical
-   interest.
+   interest. :mod:`zoneinfo` also provides similar functionality via
+   :func:`zoneinfo.available_timezones`.
 
 .. _pytz: http://pytz.sourceforge.net/
 .. _more examples: http://pytz.sourceforge.net/#example-usage
