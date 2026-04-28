@@ -11,7 +11,7 @@ from django.contrib.gis.geos import prototypes as capi
 from django.contrib.gis.geos.base import GEOSBase
 from django.contrib.gis.geos.coordseq import GEOSCoordSeq
 from django.contrib.gis.geos.error import GEOSException
-from django.contrib.gis.geos.libgeos import GEOM_PTR
+from django.contrib.gis.geos.libgeos import GEOM_PTR, geos_version_tuple
 from django.contrib.gis.geos.mutable_list import ListMixin
 from django.contrib.gis.geos.prepared import PreparedGeometry
 from django.contrib.gis.geos.prototypes.io import (
@@ -37,12 +37,13 @@ class GEOSGeometryBase(GEOSBase):
             if cls is None:
                 if GEOSGeometryBase._GEOS_CLASSES is None:
                     # Inner imports avoid import conflicts with GEOSGeometry.
-                    from .linestring import LineString, LinearRing
+                    from .collections import (
+                        GeometryCollection, MultiLineString, MultiPoint,
+                        MultiPolygon,
+                    )
+                    from .linestring import LinearRing, LineString
                     from .point import Point
                     from .polygon import Polygon
-                    from .collections import (
-                        GeometryCollection, MultiPoint, MultiLineString, MultiPolygon,
-                    )
                     GEOSGeometryBase._GEOS_CLASSES = {
                         0: Point,
                         1: LineString,
@@ -122,7 +123,7 @@ class GEOSGeometryBase(GEOSBase):
             match = re.match(br'SRID=(?P<srid>\-?\d+)', srid_part)
             if not match:
                 raise ValueError('EWKT has invalid SRID part.')
-            srid = int(match.group('srid'))
+            srid = int(match['srid'])
         else:
             wkt = ewkt
         if not wkt:
@@ -217,6 +218,15 @@ class GEOSGeometryBase(GEOSBase):
     def normalize(self):
         "Convert this Geometry to normal form (or canonical form)."
         capi.geos_normalize(self.ptr)
+
+    def make_valid(self):
+        """
+        Attempt to create a valid representation of a given invalid geometry
+        without losing any of the input vertices.
+        """
+        if geos_version_tuple() < (3, 8):
+            raise GEOSException('GEOSGeometry.make_valid() requires GEOS >= 3.8.0.')
+        return GEOSGeometry(capi.geos_makevalid(self.ptr), srid=self.srid)
 
     # #### Unary predicates ####
     @property
@@ -434,7 +444,7 @@ class GEOSGeometryBase(GEOSBase):
         if self.srid:
             try:
                 return gdal.SpatialReference(self.srid)
-            except gdal.SRSException:
+            except (gdal.GDALException, gdal.SRSException):
                 pass
         return None
 
@@ -447,7 +457,7 @@ class GEOSGeometryBase(GEOSBase):
         """
         Requires GDAL. Transform the geometry according to the given
         transformation object, which may be an integer SRID, and WKT or
-        PROJ.4 string. By default, transform the geometry in-place and return
+        PROJ string. By default, transform the geometry in-place and return
         nothing. However if the `clone` keyword is set, don't modify the
         geometry and return a transformed clone instead.
         """
@@ -700,9 +710,9 @@ class GEOSGeometry(GEOSGeometryBase, ListMixin):
             wkt_m = wkt_regex.match(geo_input)
             if wkt_m:
                 # Handle WKT input.
-                if wkt_m.group('srid'):
-                    input_srid = int(wkt_m.group('srid'))
-                g = self._from_wkt(force_bytes(wkt_m.group('wkt')))
+                if wkt_m['srid']:
+                    input_srid = int(wkt_m['srid'])
+                g = self._from_wkt(force_bytes(wkt_m['wkt']))
             elif hex_regex.match(geo_input):
                 # Handle HEXEWKB input.
                 g = wkb_r().read(force_bytes(geo_input))

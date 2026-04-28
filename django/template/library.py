@@ -1,6 +1,6 @@
 import functools
 from importlib import import_module
-from inspect import getfullargspec
+from inspect import getfullargspec, unwrap
 
 from django.utils.html import conditional_escape
 from django.utils.itercompat import is_iterable
@@ -48,7 +48,7 @@ class Library:
             )
 
     def tag_function(self, func):
-        self.tags[getattr(func, "_decorated_function", func).__name__] = func
+        self.tags[func.__name__] = func
         return func
 
     def filter(self, name=None, filter_func=None, **flags):
@@ -83,8 +83,7 @@ class Library:
                     setattr(filter_func, attr, value)
                     # set the flag on the innermost decorated function
                     # for decorators that need it, e.g. stringfilter
-                    if hasattr(filter_func, "_decorated_function"):
-                        setattr(filter_func._decorated_function, attr, value)
+                    setattr(unwrap(filter_func), attr, value)
             filter_func._filter_name = name
             return filter_func
         else:
@@ -94,8 +93,7 @@ class Library:
             )
 
     def filter_function(self, func, **flags):
-        name = getattr(func, "_decorated_function", func).__name__
-        return self.filter(name, func, **flags)
+        return self.filter(func.__name__, func, **flags)
 
     def simple_tag(self, func=None, takes_context=None, name=None):
         """
@@ -106,8 +104,8 @@ class Library:
             return 'world'
         """
         def dec(func):
-            params, varargs, varkw, defaults, kwonly, kwonly_defaults, _ = getfullargspec(func)
-            function_name = (name or getattr(func, '_decorated_function', func).__name__)
+            params, varargs, varkw, defaults, kwonly, kwonly_defaults, _ = getfullargspec(unwrap(func))
+            function_name = (name or func.__name__)
 
             @functools.wraps(func)
             def compile_func(parser, token):
@@ -143,8 +141,8 @@ class Library:
             return {'choices': choices}
         """
         def dec(func):
-            params, varargs, varkw, defaults, kwonly, kwonly_defaults, _ = getfullargspec(func)
-            function_name = (name or getattr(func, '_decorated_function', func).__name__)
+            params, varargs, varkw, defaults, kwonly, kwonly_defaults, _ = getfullargspec(unwrap(func))
+            function_name = name or func.__name__
 
             @functools.wraps(func)
             def compile_func(parser, token):
@@ -182,6 +180,7 @@ class TagHelperNode(Node):
 
 
 class SimpleNode(TagHelperNode):
+    child_nodelists = ()
 
     def __init__(self, func, takes_context, args, kwargs, target_var):
         super().__init__(func, takes_context, args, kwargs)
@@ -242,7 +241,7 @@ def parse_bits(parser, bits, params, varargs, varkw, defaults,
     keyword arguments.
     """
     if takes_context:
-        if params[0] == 'context':
+        if params and params[0] == 'context':
             params = params[1:]
         else:
             raise TemplateSyntaxError(
@@ -261,7 +260,7 @@ def parse_bits(parser, bits, params, varargs, varkw, defaults,
         if kwarg:
             # The kwarg was successfully extracted
             param, value = kwarg.popitem()
-            if param not in params and param not in unhandled_kwargs and varkw is None:
+            if param not in params and param not in kwonly and varkw is None:
                 # An unexpected keyword argument was supplied
                 raise TemplateSyntaxError(
                     "'%s' received unexpected keyword argument '%s'" %
