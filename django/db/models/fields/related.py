@@ -581,14 +581,10 @@ class ForeignObject(RelatedField):
 
         if self.remote_field.parent_link:
             kwargs['parent_link'] = self.remote_field.parent_link
-        # Work out string form of "to"
         if isinstance(self.remote_field.model, str):
-            kwargs['to'] = self.remote_field.model
+            kwargs['to'] = self.remote_field.model.lower()
         else:
-            kwargs['to'] = "%s.%s" % (
-                self.remote_field.model._meta.app_label,
-                self.remote_field.model._meta.object_name,
-            )
+            kwargs['to'] = self.remote_field.model._meta.label_lower
         # If swappable is True, then see if we're actually pointing to the target
         # of a swap.
         swappable_setting = self.swappable_setting
@@ -1309,7 +1305,7 @@ class ManyToManyField(RelatedField):
                              "through_fields keyword argument.") % (self, from_model_name),
                             hint=(
                                 'If you want to create a recursive relationship, '
-                                'use ForeignKey("%s", symmetrical=False, through="%s").'
+                                'use ManyToManyField("%s", through="%s").'
                             ) % (
                                 RECURSIVE_RELATIONSHIP_CONSTANT,
                                 relationship_model_name,
@@ -1329,7 +1325,7 @@ class ManyToManyField(RelatedField):
                             "through_fields keyword argument." % (self, to_model_name),
                             hint=(
                                 'If you want to create a recursive relationship, '
-                                'use ForeignKey("%s", symmetrical=False, through="%s").'
+                                'use ManyToManyField("%s", through="%s").'
                             ) % (
                                 RECURSIVE_RELATIONSHIP_CONSTANT,
                                 relationship_model_name,

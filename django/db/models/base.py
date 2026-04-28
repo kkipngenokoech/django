@@ -19,7 +19,7 @@ from django.db.models import (
     NOT_PROVIDED, ExpressionWrapper, IntegerField, Max, Value,
 )
 from django.db.models.constants import LOOKUP_SEP
-from django.db.models.constraints import CheckConstraint
+from django.db.models.constraints import CheckConstraint, UniqueConstraint
 from django.db.models.deletion import CASCADE, Collector
 from django.db.models.fields.related import (
     ForeignObjectRel, OneToOneField, lazy_related_operation, resolve_relation,
@@ -855,8 +855,8 @@ class Model(metaclass=ModelBase):
             not raw and
             not force_insert and
             self._state.adding and
-            self._meta.pk.default and
-            self._meta.pk.default is not NOT_PROVIDED
+            meta.pk.default and
+            meta.pk.default is not NOT_PROVIDED
         ):
             force_insert = True
         # If possible, try an UPDATE. If that doesn't update anything, do an INSERT.
@@ -889,8 +889,9 @@ class Model(metaclass=ModelBase):
 
             returning_fields = meta.db_returning_fields
             results = self._do_insert(cls._base_manager, using, fields, returning_fields, raw)
-            for result, field in zip(results, returning_fields):
-                setattr(self, field.attname, result)
+            if results:
+                for value, field in zip(results[0], returning_fields):
+                    setattr(self, field.attname, value)
         return updated
 
     def _do_update(self, base_qs, using, pk_val, values, update_fields, forced_update):
@@ -1258,7 +1259,7 @@ class Model(metaclass=ModelBase):
             errors += [
                 *cls._check_fields(**kwargs),
                 *cls._check_m2m_through_same_relationship(),
-                *cls._check_long_column_names(),
+                *cls._check_long_column_names(databases),
             ]
             clash_errors = (
                 *cls._check_id_field(),
@@ -1275,7 +1276,7 @@ class Model(metaclass=ModelBase):
             errors += [
                 *cls._check_index_together(),
                 *cls._check_unique_together(),
-                *cls._check_indexes(),
+                *cls._check_indexes(databases),
                 *cls._check_ordering(),
                 *cls._check_constraints(databases),
             ]
@@ -1584,8 +1585,8 @@ class Model(metaclass=ModelBase):
             return errors
 
     @classmethod
-    def _check_indexes(cls):
-        """Check the fields and names of indexes."""
+    def _check_indexes(cls, databases):
+        """Check fields, names, and conditions of indexes."""
         errors = []
         for index in cls._meta.indexes:
             # Index name can't start with an underscore or a number, restricted
@@ -1607,6 +1608,28 @@ class Model(metaclass=ModelBase):
                         obj=cls,
                         id='models.E034',
                     ),
+                )
+        for db in databases:
+            if not router.allow_migrate_model(db, cls):
+                continue
+            connection = connections[db]
+            if (
+                connection.features.supports_partial_indexes or
+                'supports_partial_indexes' in cls._meta.required_db_features
+            ):
+                continue
+            if any(index.condition is not None for index in cls._meta.indexes):
+                errors.append(
+                    checks.Warning(
+                        '%s does not support indexes with conditions.'
+                        % connection.display_name,
+                        hint=(
+                            "Conditions will be ignored. Silence this warning "
+                            "if you don't care about it."
+                        ),
+                        obj=cls,
+                        id='models.W037',
+                    )
                 )
         fields = [field for index in cls._meta.indexes for field, _ in index.fields_orders]
         errors.extend(cls._check_local_fields(fields, 'indexes'))
@@ -1763,17 +1786,19 @@ class Model(metaclass=ModelBase):
         return errors
 
     @classmethod
-    def _check_long_column_names(cls):
+    def _check_long_column_names(cls, databases):
         """
         Check that any auto-generated column names are shorter than the limits
         for each database in which the model will be created.
         """
+        if not databases:
+            return []
         errors = []
         allowed_len = None
         db_alias = None
 
         # Find the minimum max allowed length among all specified db_aliases.
-        for db in settings.DATABASES:
+        for db in databases:
             # skip databases where the model won't be created
             if not router.allow_migrate_model(db, cls):
                 continue
@@ -1842,12 +1867,13 @@ class Model(metaclass=ModelBase):
             if not router.allow_migrate_model(db, cls):
                 continue
             connection = connections[db]
-            if (
+            if not (
                 connection.features.supports_table_check_constraints or
                 'supports_table_check_constraints' in cls._meta.required_db_features
+            ) and any(
+                isinstance(constraint, CheckConstraint)
+                for constraint in cls._meta.constraints
             ):
-                continue
-            if any(isinstance(constraint, CheckConstraint) for constraint in cls._meta.constraints):
                 errors.append(
                     checks.Warning(
                         '%s does not support check constraints.' % connection.display_name,
@@ -1857,6 +1883,25 @@ class Model(metaclass=ModelBase):
                         ),
                         obj=cls,
                         id='models.W027',
+                    )
+                )
+            if not (
+                connection.features.supports_partial_indexes or
+                'supports_partial_indexes' in cls._meta.required_db_features
+            ) and any(
+                isinstance(constraint, UniqueConstraint) and constraint.condition is not None
+                for constraint in cls._meta.constraints
+            ):
+                errors.append(
+                    checks.Warning(
+                        '%s does not support unique constraints with '
+                        'conditions.' % connection.display_name,
+                        hint=(
+                            "A constraint won't be created. Silence this "
+                            "warning if you don't care about it."
+                        ),
+                        obj=cls,
+                        id='models.W036',
                     )
                 )
         return errors
