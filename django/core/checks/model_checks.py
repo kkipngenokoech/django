@@ -4,7 +4,8 @@ from collections import defaultdict
 from itertools import chain
 
 from django.apps import apps
-from django.core.checks import Error, Tags, register
+from django.conf import settings
+from django.core.checks import Error, Warning, Tags, register
 
 
 @register(Tags.models)
@@ -37,8 +38,11 @@ def check_all_models(app_configs=None, **kwargs):
             constraints[model_constraint.name].append(model._meta.label)
     for db_table, model_labels in db_table_models.items():
         if len(model_labels) != 1:
+            # Use Warning instead of Error when DATABASE_ROUTERS is configured
+            # since models may legitimately use the same table name if routed to different databases
+            check_class = Warning if getattr(settings, 'DATABASE_ROUTERS', None) else Error
             errors.append(
-                Error(
+                check_class(
                     "db_table '%s' is used by multiple models: %s."
                     % (db_table, ', '.join(db_table_models[db_table])),
                     obj=db_table,
