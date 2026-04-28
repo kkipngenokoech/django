@@ -517,8 +517,8 @@ should typically be used instead of the more verbose equivalent,
 e.g. use ``TruncYear(...)`` rather than ``Trunc(..., kind='year')``.
 
 The subclasses are all defined as transforms, but they aren't registered with
-any fields, because the obvious lookup names are already reserved by the
-``Extract`` subclasses.
+any fields, because the lookup names are already reserved by the ``Extract``
+subclasses.
 
 Usage example::
 
@@ -677,14 +677,17 @@ Usage example::
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. class:: TruncHour(expression, output_field=None, tzinfo=None, is_dst=None, **extra)
+    :noindex:
 
     .. attribute:: kind = 'hour'
 
 .. class:: TruncMinute(expression, output_field=None, tzinfo=None, is_dst=None, **extra)
+    :noindex:
 
     .. attribute:: kind = 'minute'
 
 .. class:: TruncSecond(expression, output_field=None, tzinfo=None, is_dst=None, **extra)
+    :noindex:
 
     .. attribute:: kind = 'second'
 

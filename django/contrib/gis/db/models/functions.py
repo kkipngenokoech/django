@@ -111,12 +111,14 @@ class OracleToleranceMixin:
     tolerance = 0.05
 
     def as_oracle(self, compiler, connection, **extra_context):
-        tol = self.extra.get('tolerance', self.tolerance)
-        return self.as_sql(
-            compiler, connection,
-            template="%%(function)s(%%(expressions)s, %s)" % tol,
-            **extra_context
-        )
+        tolerance = Value(self._handle_param(
+            self.extra.get('tolerance', self.tolerance),
+            'tolerance',
+            NUMERIC_TYPES,
+        ))
+        clone = self.copy()
+        clone.set_source_expressions([*self.get_source_expressions(), tolerance])
+        return clone.as_sql(compiler, connection, **extra_context)
 
 
 class Area(OracleToleranceMixin, GeoFunc):
@@ -188,12 +190,14 @@ class AsGML(GeoFunc):
         return super(AsGML, clone).as_sql(compiler, connection, **extra_context)
 
 
-class AsKML(AsGML):
-    def as_sqlite(self, compiler, connection, **extra_context):
-        # No version parameter
-        clone = self.copy()
-        clone.set_source_expressions(self.get_source_expressions()[1:])
-        return clone.as_sql(compiler, connection, **extra_context)
+class AsKML(GeoFunc):
+    output_field = TextField()
+
+    def __init__(self, expression, precision=8, **extra):
+        expressions = [expression]
+        if precision is not None:
+            expressions.append(self._handle_param(precision, 'precision', int))
+        super().__init__(*expressions, **extra)
 
 
 class AsSVG(GeoFunc):

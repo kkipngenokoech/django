@@ -12,10 +12,13 @@ topic guide </topics/auth/index>`.
 ``User`` model
 ==============
 
+.. class:: models.User
+
 Fields
 ------
 
 .. class:: models.User
+    :noindex:
 
     :class:`~django.contrib.auth.models.User` objects have the following
     fields:
@@ -32,18 +35,14 @@ Fields
         ``max_length=191`` because MySQL can only create unique indexes with
         191 characters in that case by default.
 
-        .. admonition:: Usernames and Unicode
-
-            Django originally accepted only ASCII letters and numbers in
-            usernames. Although it wasn't a deliberate choice, Unicode
-            characters have always been accepted when using Python 3. Django
-            1.10 officially added Unicode support in usernames, keeping the
-            ASCII-only behavior on Python 2.
-
     .. attribute:: first_name
 
-        Optional (:attr:`blank=True <django.db.models.Field.blank>`). 30
+        Optional (:attr:`blank=True <django.db.models.Field.blank>`). 150
         characters or fewer.
+
+        .. versionchanged:: 3.1
+
+            The ``max_length`` increased from 30 to 150 characters.
 
     .. attribute:: last_name
 
@@ -115,6 +114,7 @@ Attributes
 ----------
 
 .. class:: models.User
+    :noindex:
 
     .. attribute:: is_authenticated
 
@@ -140,6 +140,7 @@ Methods
 -------
 
 .. class:: models.User
+    :noindex:
 
     .. method:: get_username()
 
@@ -359,6 +360,7 @@ Fields
 fields:
 
 .. class:: models.Permission
+    :noindex:
 
     .. attribute:: name
 
@@ -390,6 +392,7 @@ Fields
 :class:`~django.contrib.auth.models.Group` objects have the following fields:
 
 .. class:: models.Group
+    :noindex:
 
     .. attribute:: name
 

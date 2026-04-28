@@ -798,7 +798,8 @@ Methods
     ``content_type`` is the MIME type optionally completed by a character set
     encoding and is used to fill the HTTP ``Content-Type`` header. If not
     specified, it is formed by ``'text/html'`` and the
-    :setting:`DEFAULT_CHARSET` settings, by default: "`text/html; charset=utf-8`".
+    :setting:`DEFAULT_CHARSET` settings, by default:
+    ``"text/html; charset=utf-8"``.
 
     ``status`` is the :rfc:`HTTP status code <7231#section-6>` for the response.
     You can use Python's :py:class:`http.HTTPStatus` for meaningful aliases,
@@ -872,7 +873,7 @@ Methods
       sent with all same-site and cross-site requests.
 
     .. _HttpOnly: https://www.owasp.org/index.php/HttpOnly
-    .. _SameSite: https://www.owasp.org/index.php/SameSite
+    .. _SameSite: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie/SameSite
 
     .. versionchanged:: 3.1
 

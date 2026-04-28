@@ -981,6 +981,18 @@ class AdminViewBasicTest(AdminViewBasicTestCase):
         self.assertContains(response, 'question__expires__month=10')
         self.assertContains(response, 'question__expires__year=2016')
 
+    @override_settings(TIME_ZONE='America/Los_Angeles', USE_TZ=True)
+    def test_date_hierarchy_local_date_differ_from_utc(self):
+        # This datetime is 2017-01-01 in UTC.
+        date = pytz.timezone('America/Los_Angeles').localize(datetime.datetime(2016, 12, 31, 16))
+        q = Question.objects.create(question='Why?', expires=date)
+        Answer2.objects.create(question=q, answer='Because.')
+        response = self.client.get(reverse('admin:admin_views_answer2_changelist'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'question__expires__day=31')
+        self.assertContains(response, 'question__expires__month=12')
+        self.assertContains(response, 'question__expires__year=2016')
+
     def test_sortable_by_columns_subset(self):
         expected_sortable_fields = ('date', 'callable_year')
         expected_not_sortable_fields = (
@@ -3043,14 +3055,14 @@ class AdminViewListEditable(TestCase):
             "form-MAX_NUM_FORMS": "0",
 
             "form-0-gender": "1",
-            "form-0-id": "%s" % self.per1.pk,
+            "form-0-id": str(self.per1.pk),
 
             "form-1-gender": "2",
-            "form-1-id": "%s" % self.per2.pk,
+            "form-1-id": str(self.per2.pk),
 
             "form-2-alive": "checked",
             "form-2-gender": "1",
-            "form-2-id": "%s" % self.per3.pk,
+            "form-2-id": str(self.per3.pk),
 
             "_save": "Save",
         }
@@ -3065,14 +3077,14 @@ class AdminViewListEditable(TestCase):
             "form-MAX_NUM_FORMS": "0",
 
             "form-0-gender": "1",
-            "form-0-id": "%s" % self.per1.pk,
+            "form-0-id": str(self.per1.pk),
 
             "form-1-gender": "2",
-            "form-1-id": "%s" % self.per2.pk,
+            "form-1-id": str(self.per2.pk),
 
             "form-2-alive": "checked",
             "form-2-gender": "1",
-            "form-2-id": "%s" % self.per3.pk,
+            "form-2-id": str(self.per3.pk),
 
             "_save": "Save",
         }
@@ -3087,11 +3099,11 @@ class AdminViewListEditable(TestCase):
             "form-INITIAL_FORMS": "2",
             "form-MAX_NUM_FORMS": "0",
 
-            "form-0-id": "%s" % self.per1.pk,
+            "form-0-id": str(self.per1.pk),
             "form-0-gender": "1",
             "form-0-alive": "checked",
 
-            "form-1-id": "%s" % self.per3.pk,
+            "form-1-id": str(self.per3.pk),
             "form-1-gender": "1",
             "form-1-alive": "checked",
 
@@ -3107,7 +3119,7 @@ class AdminViewListEditable(TestCase):
             "form-INITIAL_FORMS": "1",
             "form-MAX_NUM_FORMS": "0",
 
-            "form-0-id": "%s" % self.per1.pk,
+            "form-0-id": str(self.per1.pk),
             "form-0-gender": "1",
 
             "_save": "Save",
@@ -3197,7 +3209,7 @@ class AdminViewListEditable(TestCase):
             "form-INITIAL_FORMS": "1",
             "form-MAX_NUM_FORMS": "0",
 
-            "form-0-id": "%s" % self.per2.pk,
+            "form-0-id": str(self.per2.pk),
             "form-0-alive": "1",
             "form-0-gender": "2",
 
@@ -3215,7 +3227,7 @@ class AdminViewListEditable(TestCase):
             "form-INITIAL_FORMS": "1",
             "form-MAX_NUM_FORMS": "0",
 
-            "form-0-id": "%s" % self.per2.pk,
+            "form-0-id": str(self.per2.pk),
             "form-0-alive": "1",
             "form-0-gender": "2",
 
@@ -3322,14 +3334,14 @@ class AdminViewListEditable(TestCase):
             "form-MAX_NUM_FORMS": "0",
 
             "form-0-gender": "1",
-            "form-0-id": "%s" % self.per1.pk,
+            "form-0-id": str(self.per1.pk),
 
             "form-1-gender": "2",
-            "form-1-id": "%s" % self.per2.pk,
+            "form-1-id": str(self.per2.pk),
 
             "form-2-alive": "checked",
             "form-2-gender": "1",
-            "form-2-id": "%s" % self.per3.pk,
+            "form-2-id": str(self.per3.pk),
 
             "_save": "Save",
             "_selected_action": ['1'],
@@ -4499,7 +4511,10 @@ class SeleniumTests(AdminSeleniumTestCase):
         self.assertEqual(slug2, 'option-two-and-now-tabular-inline')
 
         # Add an inline
-        self.selenium.find_elements_by_link_text('Add another Related prepopulated')[1].click()
+        # Button may be outside the browser frame.
+        element = self.selenium.find_elements_by_link_text('Add another Related prepopulated')[1]
+        self.selenium.execute_script('window.scrollTo(0, %s);' % element.location['y'])
+        element.click()
         self.assertEqual(
             len(self.selenium.find_elements_by_class_name('select2-selection')),
             num_initial_select2_inputs + 4
@@ -4827,17 +4842,17 @@ class ReadonlyTest(AdminFieldExtractionMixin, TestCase):
         self.assertContains(response, '<div class="help">', 3)
         self.assertContains(
             response,
-            '<div class="help">Some help text for the title (with unicode ŠĐĆŽćžšđ)</div>',
+            '<div class="help">Some help text for the title (with Unicode ŠĐĆŽćžšđ)</div>',
             html=True
         )
         self.assertContains(
             response,
-            '<div class="help">Some help text for the content (with unicode ŠĐĆŽćžšđ)</div>',
+            '<div class="help">Some help text for the content (with Unicode ŠĐĆŽćžšđ)</div>',
             html=True
         )
         self.assertContains(
             response,
-            '<div class="help">Some help text for the date (with unicode ŠĐĆŽćžšđ)</div>',
+            '<div class="help">Some help text for the date (with Unicode ŠĐĆŽćžšđ)</div>',
             html=True
         )
 
@@ -4947,7 +4962,7 @@ class ReadonlyTest(AdminFieldExtractionMixin, TestCase):
         response = self.client.get(reverse('admin:admin_views_fieldoverridepost_change', args=(p.pk,)))
         self.assertContains(response, '<div class="help">Overridden help text for the date</div>')
         self.assertContains(response, '<label for="id_public">Overridden public label:</label>', html=True)
-        self.assertNotContains(response, "Some help text for the date (with unicode ŠĐĆŽćžšđ)")
+        self.assertNotContains(response, 'Some help text for the date (with Unicode ŠĐĆŽćžšđ)')
 
     def test_correct_autoescaping(self):
         """
@@ -5487,7 +5502,7 @@ class DateHierarchyTests(TestCase):
         self.assertNotContains(response, formats.number_format(year))
 
     def assert_contains_year_link(self, response, date):
-        self.assertContains(response, '?release_date__year=%d"' % (date.year,))
+        self.assertContains(response, '?release_date__year=%d"' % date.year)
 
     def assert_contains_month_link(self, response, date):
         self.assertContains(
@@ -5604,7 +5619,7 @@ class DateHierarchyTests(TestCase):
 
         response = self.client.get(reverse('admin:admin_views_answer_changelist'))
         for date, answer_count in questions_data:
-            link = '?question__posted__year=%d"' % (date.year,)
+            link = '?question__posted__year=%d"' % date.year
             if answer_count > 0:
                 self.assertContains(response, link)
             else:
@@ -5868,21 +5883,19 @@ class AdminKeepChangeListFiltersTests(TestCase):
             self.get_changelist_filters_querystring(),
         )
 
-    def get_add_url(self):
-        return '%s?%s' % (
-            reverse('admin:auth_user_add',
-                    current_app=self.admin_site.name),
-            self.get_preserved_filters_querystring(),
-        )
+    def get_add_url(self, add_preserved_filters=True):
+        url = reverse('admin:auth_user_add', current_app=self.admin_site.name)
+        if add_preserved_filters:
+            url = '%s?%s' % (url, self.get_preserved_filters_querystring())
+        return url
 
-    def get_change_url(self, user_id=None):
+    def get_change_url(self, user_id=None, add_preserved_filters=True):
         if user_id is None:
             user_id = self.get_sample_user_id()
-        return "%s?%s" % (
-            reverse('admin:auth_user_change', args=(user_id,),
-                    current_app=self.admin_site.name),
-            self.get_preserved_filters_querystring(),
-        )
+        url = reverse('admin:auth_user_change', args=(user_id,), current_app=self.admin_site.name)
+        if add_preserved_filters:
+            url = '%s?%s' % (url, self.get_preserved_filters_querystring())
+        return url
 
     def get_history_url(self, user_id=None):
         if user_id is None:
@@ -5920,7 +5933,7 @@ class AdminKeepChangeListFiltersTests(TestCase):
 
         # Check the form action.
         form_action = re.search(
-            '<form action="(.*?)" method="post" id="user_form".*?>',
+            '<form action="(.*?)" method="post" id="user_form" novalidate>',
             response.content.decode()
         )
         self.assertURLEqual(form_action.group(1), '?%s' % self.get_preserved_filters_querystring())
@@ -5965,6 +5978,11 @@ class AdminKeepChangeListFiltersTests(TestCase):
         self.assertRedirects(response, self.get_add_url())
         post_data.pop('_addanother')
 
+    def test_change_view_without_preserved_filters(self):
+        response = self.client.get(self.get_change_url(add_preserved_filters=False))
+        # The action attribute is omitted.
+        self.assertContains(response, '<form method="post" id="user_form" novalidate>')
+
     def test_add_view(self):
         # Get the `add_view`.
         response = self.client.get(self.get_add_url())
@@ -5972,7 +5990,7 @@ class AdminKeepChangeListFiltersTests(TestCase):
 
         # Check the form action.
         form_action = re.search(
-            '<form action="(.*?)" method="post" id="user_form".*?>',
+            '<form action="(.*?)" method="post" id="user_form" novalidate>',
             response.content.decode()
         )
         self.assertURLEqual(form_action.group(1), '?%s' % self.get_preserved_filters_querystring())
@@ -6002,6 +6020,11 @@ class AdminKeepChangeListFiltersTests(TestCase):
         response = self.client.post(self.get_add_url(), data=post_data)
         self.assertRedirects(response, self.get_add_url())
         post_data.pop('_addanother')
+
+    def test_add_view_without_preserved_filters(self):
+        response = self.client.get(self.get_add_url(add_preserved_filters=False))
+        # The action attribute is omitted.
+        self.assertContains(response, '<form method="post" id="user_form" novalidate>')
 
     def test_delete_view(self):
         # Test redirect on "Delete".
