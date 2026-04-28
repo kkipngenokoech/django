@@ -250,12 +250,14 @@ class DebugViewTests(SimpleTestCase):
             self.assertContains(response, 'Page not found', status_code=404)
 
     def test_exception_reporter_from_request(self):
-        response = self.client.get('/custom_reporter_class_view/')
+        with self.assertLogs('django.request', 'ERROR'):
+            response = self.client.get('/custom_reporter_class_view/')
         self.assertContains(response, 'custom traceback text', status_code=500)
 
     @override_settings(DEFAULT_EXCEPTION_REPORTER='view_tests.views.CustomExceptionReporter')
     def test_exception_reporter_from_settings(self):
-        response = self.client.get('/raises500/')
+        with self.assertLogs('django.request', 'ERROR'):
+            response = self.client.get('/raises500/')
         self.assertContains(response, 'custom traceback text', status_code=500)
 
 
@@ -436,7 +438,14 @@ class ExceptionReporterTests(SimpleTestCase):
         self.assertEqual(last_frame['function'], 'funcName')
         self.assertEqual(last_frame['lineno'], 2)
         html = reporter.get_traceback_html()
-        self.assertIn('generated in funcName, line 2', html)
+        self.assertIn(
+            '<span class="fname">generated</span>, line 2, in funcName',
+            html,
+        )
+        self.assertIn(
+            '<code class="fname">generated</code>, line 2, in funcName',
+            html,
+        )
         self.assertIn(
             '"generated", line 2, in funcName\n'
             '    &lt;source code not available&gt;',
@@ -470,7 +479,14 @@ class ExceptionReporterTests(SimpleTestCase):
             self.assertEqual(last_frame['function'], 'funcName')
             self.assertEqual(last_frame['lineno'], 2)
             html = reporter.get_traceback_html()
-            self.assertIn('generated in funcName, line 2', html)
+            self.assertIn(
+                '<span class="fname">generated</span>, line 2, in funcName',
+                html,
+            )
+            self.assertIn(
+                '<code class="fname">generated</code>, line 2, in funcName',
+                html,
+            )
             self.assertIn(
                 '"generated", line 2, in funcName\n'
                 '    &lt;source code not available&gt;',
