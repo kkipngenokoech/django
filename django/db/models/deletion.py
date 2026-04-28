@@ -442,4 +442,4 @@ class Collector:
         for model, instances in self.data.items():
             for instance in instances:
                 setattr(instance, model._meta.pk.attname, None)
-        return sum(deleted_counter.values()), dict(deleted_counter)
+        return sum(deleted_counter.values()), {k: v for k, v in deleted_counter.items() if v > 0}
