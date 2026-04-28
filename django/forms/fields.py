@@ -343,9 +343,8 @@ class DecimalField(IntegerField):
             return None
         if self.localize:
             value = formats.sanitize_separators(value)
-        value = str(value).strip()
         try:
-            value = Decimal(value)
+            value = Decimal(str(value))
         except DecimalException:
             raise ValidationError(self.error_messages['invalid'], code='invalid')
         return value
@@ -355,7 +354,11 @@ class DecimalField(IntegerField):
         if value in self.empty_values:
             return
         if not value.is_finite():
-            raise ValidationError(self.error_messages['invalid'], code='invalid')
+            raise ValidationError(
+                self.error_messages['invalid'],
+                code='invalid',
+                params={'value': value},
+            )
 
     def widget_attrs(self, widget):
         attrs = super().widget_attrs(widget)
@@ -674,6 +677,16 @@ class URLField(CharField):
 
     def __init__(self, **kwargs):
         super().__init__(strip=True, **kwargs)
+
+    def clean(self, value):
+        """
+        Validate the given value and return its "cleaned" value as an
+        appropriate Python object. Raise ValidationError for any errors.
+        """
+        try:
+            return super().clean(value)
+        except ValueError as e:
+            raise ValidationError(self.error_messages['invalid'], code='invalid') from e
 
     def to_python(self, value):
 
@@ -1119,13 +1132,15 @@ class FilePathField(ChoiceField):
                             self.choices.append((f, f.replace(path, "", 1)))
         else:
             choices = []
-            for f in os.scandir(self.path):
-                if f.name == '__pycache__':
-                    continue
-                if (((self.allow_files and f.is_file()) or
-                        (self.allow_folders and f.is_dir())) and
-                        (self.match is None or self.match_re.search(f.name))):
-                    choices.append((f.path, f.name))
+            with os.scandir(self.path) as entries:
+                for f in entries:
+                    if f.name == '__pycache__':
+                        continue
+                    if ((
+                        (self.allow_files and f.is_file()) or
+                        (self.allow_folders and f.is_dir())
+                    ) and (self.match is None or self.match_re.search(f.name))):
+                        choices.append((f.path, f.name))
             choices.sort(key=operator.itemgetter(1))
             self.choices.extend(choices)
 
@@ -1257,6 +1272,8 @@ class JSONField(CharField):
     def bound_data(self, data, initial):
         if self.disabled:
             return initial
+        if data is None:
+            return None
         try:
             return json.loads(data, cls=self.decoder)
         except json.JSONDecodeError:
@@ -1265,7 +1282,7 @@ class JSONField(CharField):
     def prepare_value(self, value):
         if isinstance(value, InvalidJSONInput):
             return value
-        return json.dumps(value, cls=self.encoder)
+        return json.dumps(value, ensure_ascii=False, cls=self.encoder)
 
     def has_changed(self, initial, data):
         if super().has_changed(initial, data):

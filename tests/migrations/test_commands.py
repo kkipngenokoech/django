@@ -8,13 +8,17 @@ from unittest import mock
 from django.apps import apps
 from django.core.management import CommandError, call_command
 from django.db import (
-    ConnectionHandler, DatabaseError, connection, connections, models,
+    ConnectionHandler, DatabaseError, OperationalError, connection,
+    connections, models,
 )
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.backends.utils import truncate_name
 from django.db.migrations.exceptions import InconsistentMigrationHistory
 from django.db.migrations.recorder import MigrationRecorder
 from django.test import TestCase, override_settings, skipUnlessDBFeature
+from django.test.utils import captured_stdout
+from django.utils import timezone
+from django.utils.version import get_docs_version
 
 from .models import UnicodeModel, UnserializableModel
 from .routers import TestRouter
@@ -38,10 +42,12 @@ class MigrateTests(MigrationTestBase):
         self.assertTableNotExists("migrations_book")
         # Run the migrations to 0001 only
         stdout = io.StringIO()
-        call_command('migrate', 'migrations', '0001', verbosity=1, stdout=stdout, no_color=True)
+        call_command('migrate', 'migrations', '0001', verbosity=2, stdout=stdout, no_color=True)
         stdout = stdout.getvalue()
         self.assertIn('Target specific migration: 0001_initial, from migrations', stdout)
         self.assertIn('Applying migrations.0001_initial... OK', stdout)
+        self.assertIn('Running pre-migrate handlers for application migrations', stdout)
+        self.assertIn('Running post-migrate handlers for application migrations', stdout)
         # The correct tables exist
         self.assertTableExists("migrations_author")
         self.assertTableExists("migrations_tribble")
@@ -54,10 +60,12 @@ class MigrateTests(MigrationTestBase):
         self.assertTableExists("migrations_book")
         # Unmigrate everything
         stdout = io.StringIO()
-        call_command('migrate', 'migrations', 'zero', verbosity=1, stdout=stdout, no_color=True)
+        call_command('migrate', 'migrations', 'zero', verbosity=2, stdout=stdout, no_color=True)
         stdout = stdout.getvalue()
         self.assertIn('Unapply all migrations: migrations', stdout)
         self.assertIn('Unapplying migrations.0002_second... OK', stdout)
+        self.assertIn('Running pre-migrate handlers for application migrations', stdout)
+        self.assertIn('Running post-migrate handlers for application migrations', stdout)
         # Tables are gone
         self.assertTableNotExists("migrations_author")
         self.assertTableNotExists("migrations_tribble")
@@ -160,37 +168,37 @@ class MigrateTests(MigrationTestBase):
             "migrations.0001_initial... faked",
             out.getvalue().lower()
         )
-        # Run migrations all the way
-        call_command("migrate", verbosity=0)
-        call_command("migrate", verbosity=0, database="other")
-        # Make sure the right tables exist
-        self.assertTableExists("migrations_author")
-        self.assertTableNotExists("migrations_tribble")
-        self.assertTableExists("migrations_book")
-        self.assertTableNotExists("migrations_author", using="other")
-        self.assertTableNotExists("migrations_tribble", using="other")
-        self.assertTableNotExists("migrations_book", using="other")
-        # Fake a roll-back
-        call_command("migrate", "migrations", "zero", fake=True, verbosity=0)
-        call_command("migrate", "migrations", "zero", fake=True, verbosity=0, database="other")
-        # Make sure the tables still exist
-        self.assertTableExists("migrations_author")
-        self.assertTableNotExists("migrations_tribble")
-        self.assertTableExists("migrations_book")
-        # Try to run initial migration
-        with self.assertRaises(DatabaseError):
-            call_command("migrate", "migrations", verbosity=0)
-        # Run initial migration with an explicit --fake-initial
-        with self.assertRaises(DatabaseError):
-            # Fails because "migrations_tribble" does not exist but needs to in
-            # order to make --fake-initial work.
-            call_command("migrate", "migrations", fake_initial=True, verbosity=0)
-        # Fake an apply
-        call_command("migrate", "migrations", fake=True, verbosity=0)
-        call_command("migrate", "migrations", fake=True, verbosity=0, database="other")
-        # Unmigrate everything
-        call_command("migrate", "migrations", "zero", verbosity=0)
-        call_command("migrate", "migrations", "zero", verbosity=0, database="other")
+        try:
+            # Run migrations all the way.
+            call_command('migrate', verbosity=0)
+            call_command('migrate', verbosity=0, database="other")
+            self.assertTableExists('migrations_author')
+            self.assertTableNotExists('migrations_tribble')
+            self.assertTableExists('migrations_book')
+            self.assertTableNotExists('migrations_author', using='other')
+            self.assertTableNotExists('migrations_tribble', using='other')
+            self.assertTableNotExists('migrations_book', using='other')
+            # Fake a roll-back.
+            call_command('migrate', 'migrations', 'zero', fake=True, verbosity=0)
+            call_command('migrate', 'migrations', 'zero', fake=True, verbosity=0, database='other')
+            self.assertTableExists('migrations_author')
+            self.assertTableNotExists('migrations_tribble')
+            self.assertTableExists('migrations_book')
+            # Run initial migration.
+            with self.assertRaises(DatabaseError):
+                call_command('migrate', 'migrations', verbosity=0)
+            # Run initial migration with an explicit --fake-initial.
+            with self.assertRaises(DatabaseError):
+                # Fails because "migrations_tribble" does not exist but needs
+                # to in order to make --fake-initial work.
+                call_command('migrate', 'migrations', fake_initial=True, verbosity=0)
+            # Fake an apply.
+            call_command('migrate', 'migrations', fake=True, verbosity=0)
+            call_command('migrate', 'migrations', fake=True, verbosity=0, database='other')
+        finally:
+            # Unmigrate everything.
+            call_command('migrate', 'migrations', 'zero', verbosity=0)
+            call_command('migrate', 'migrations', 'zero', verbosity=0, database='other')
         # Make sure it's all gone
         for db in self.databases:
             self.assertTableNotExists("migrations_author", using=db)
@@ -228,25 +236,33 @@ class MigrateTests(MigrationTestBase):
         """
         Split initial migrations can be faked with --fake-initial.
         """
-        call_command("migrate", "migrations", "0002", verbosity=0)
-        call_command("migrate", "migrations", "zero", fake=True, verbosity=0)
-        out = io.StringIO()
-        with mock.patch('django.core.management.color.supports_color', lambda *args: False):
-            call_command("migrate", "migrations", "0002", fake_initial=True, stdout=out, verbosity=1)
-        value = out.getvalue().lower()
-        self.assertIn("migrations.0001_initial... faked", value)
-        self.assertIn("migrations.0002_second... faked", value)
-        # Fake an apply
-        call_command("migrate", "migrations", fake=True, verbosity=0)
-        # Unmigrate everything
-        call_command("migrate", "migrations", "zero", verbosity=0)
+        try:
+            call_command('migrate', 'migrations', '0002', verbosity=0)
+            call_command('migrate', 'migrations', 'zero', fake=True, verbosity=0)
+            out = io.StringIO()
+            with mock.patch('django.core.management.color.supports_color', lambda *args: False):
+                call_command('migrate', 'migrations', '0002', fake_initial=True, stdout=out, verbosity=1)
+            value = out.getvalue().lower()
+            self.assertIn('migrations.0001_initial... faked', value)
+            self.assertIn('migrations.0002_second... faked', value)
+        finally:
+            # Fake an apply.
+            call_command('migrate', 'migrations', fake=True, verbosity=0)
+            # Unmigrate everything.
+            call_command('migrate', 'migrations', 'zero', verbosity=0)
 
     @override_settings(MIGRATION_MODULES={"migrations": "migrations.test_migrations_conflict"})
     def test_migrate_conflict_exit(self):
         """
         migrate exits if it detects a conflict.
         """
-        with self.assertRaisesMessage(CommandError, "Conflicting migrations detected"):
+        msg = (
+            "Conflicting migrations detected; multiple leaf nodes in the "
+            "migration graph: (0002_conflicting_second, 0002_second in "
+            "migrations).\n"
+            "To fix them run 'python manage.py makemigrations --merge'"
+        )
+        with self.assertRaisesMessage(CommandError, msg):
             call_command("migrate", "migrations")
 
     @override_settings(MIGRATION_MODULES={
@@ -321,6 +337,44 @@ class MigrateTests(MigrationTestBase):
         )
         # Cleanup by unmigrating everything
         call_command("migrate", "migrations", "zero", verbosity=0)
+
+    @override_settings(MIGRATION_MODULES={'migrations': 'migrations.test_migrations_squashed'})
+    def test_showmigrations_list_squashed(self):
+        out = io.StringIO()
+        call_command('showmigrations', format='list', stdout=out, verbosity=2, no_color=True)
+        self.assertEqual(
+            'migrations\n'
+            ' [ ] 0001_squashed_0002 (2 squashed migrations)\n',
+            out.getvalue().lower(),
+        )
+        out = io.StringIO()
+        call_command(
+            'migrate',
+            'migrations',
+            '0001_squashed_0002',
+            stdout=out,
+            verbosity=2,
+            no_color=True,
+        )
+        try:
+            self.assertIn(
+                'operations to perform:\n'
+                '  target specific migration: 0001_squashed_0002, from migrations\n'
+                'running pre-migrate handlers for application migrations\n'
+                'running migrations:\n'
+                '  applying migrations.0001_squashed_0002... ok (',
+                out.getvalue().lower(),
+            )
+            out = io.StringIO()
+            call_command('showmigrations', format='list', stdout=out, verbosity=2, no_color=True)
+            self.assertEqual(
+                'migrations\n'
+                ' [x] 0001_squashed_0002 (2 squashed migrations)\n',
+                out.getvalue().lower(),
+            )
+        finally:
+            # Unmigrate everything.
+            call_command('migrate', 'migrations', 'zero', verbosity=0)
 
     @override_settings(MIGRATION_MODULES={"migrations": "migrations.test_migrations_run_before"})
     def test_showmigrations_plan(self):
@@ -468,7 +522,15 @@ class MigrateTests(MigrationTestBase):
     def test_showmigrations_unmigrated_app(self):
         out = io.StringIO()
         call_command('showmigrations', 'unmigrated_app', stdout=out, no_color=True)
-        self.assertEqual('unmigrated_app\n (no migrations)\n', out.getvalue().lower())
+        try:
+            self.assertEqual('unmigrated_app\n (no migrations)\n', out.getvalue().lower())
+        finally:
+            # unmigrated_app.SillyModel has a foreign key to
+            # 'migrations.Tribble', but that model is only defined in a
+            # migration, so the global app registry never sees it and the
+            # reference is left dangling. Remove it to avoid problems in
+            # subsequent tests.
+            apps._pending_operations.pop(('migrations', 'tribble'), None)
 
     @override_settings(MIGRATION_MODULES={"migrations": "migrations.test_migrations_empty"})
     def test_showmigrations_plan_no_migrations(self):
@@ -611,7 +673,15 @@ class MigrateTests(MigrationTestBase):
     def test_showmigrations_plan_app_label_no_migrations(self):
         out = io.StringIO()
         call_command('showmigrations', 'unmigrated_app', format='plan', stdout=out, no_color=True)
-        self.assertEqual('(no migrations)\n', out.getvalue())
+        try:
+            self.assertEqual('(no migrations)\n', out.getvalue())
+        finally:
+            # unmigrated_app.SillyModel has a foreign key to
+            # 'migrations.Tribble', but that model is only defined in a
+            # migration, so the global app registry never sees it and the
+            # reference is left dangling. Remove it to avoid problems in
+            # subsequent tests.
+            apps._pending_operations.pop(('migrations', 'tribble'), None)
 
     @override_settings(MIGRATION_MODULES={"migrations": "migrations.test_migrations"})
     def test_sqlmigrate_forwards(self):
@@ -785,7 +855,7 @@ class MigrateTests(MigrationTestBase):
         # but that model is only defined in a migration, so the global app
         # registry never sees it and the reference is left dangling. Remove it
         # to avoid problems in subsequent tests.
-        del apps._pending_operations[('migrations', 'tribble')]
+        apps._pending_operations.pop(('migrations', 'tribble'), None)
 
     @override_settings(INSTALLED_APPS=['migrations.migrations_test_apps.unmigrated_app_syncdb'])
     def test_migrate_syncdb_deferred_sql_executed_with_schemaeditor(self):
@@ -862,6 +932,15 @@ class MigrateTests(MigrationTestBase):
         recorder.record_applied("migrations", "0001_initial")
         recorder.record_applied("migrations", "0002_second")
         out = io.StringIO()
+        call_command('showmigrations', 'migrations', stdout=out, no_color=True)
+        self.assertEqual(
+            "migrations\n"
+            " [-] 0001_squashed_0002 (2 squashed migrations) "
+            "run 'manage.py migrate' to finish recording.\n",
+            out.getvalue().lower(),
+        )
+
+        out = io.StringIO()
         call_command("migrate", "migrations", verbosity=0)
         call_command("showmigrations", "migrations", stdout=out, no_color=True)
         self.assertEqual(
@@ -874,6 +953,47 @@ class MigrateTests(MigrationTestBase):
             recorder.applied_migrations()
         )
         # No changes were actually applied so there is nothing to rollback
+
+    def test_migrate_partially_applied_squashed_migration(self):
+        """
+        Migrating to a squashed migration specified by name should succeed
+        even if it is partially applied.
+        """
+        with self.temporary_migration_module(module='migrations.test_migrations'):
+            recorder = MigrationRecorder(connection)
+            try:
+                call_command('migrate', 'migrations', '0001_initial', verbosity=0)
+                call_command(
+                    'squashmigrations',
+                    'migrations',
+                    '0002',
+                    interactive=False,
+                    verbosity=0,
+                )
+                call_command(
+                    'migrate',
+                    'migrations',
+                    '0001_squashed_0002_second',
+                    verbosity=0,
+                )
+                applied_migrations = recorder.applied_migrations()
+                self.assertIn(('migrations', '0002_second'), applied_migrations)
+            finally:
+                # Unmigrate everything.
+                call_command('migrate', 'migrations', 'zero', verbosity=0)
+
+    @override_settings(MIGRATION_MODULES={'migrations': 'migrations.test_migrations_squashed'})
+    def test_migrate_backward_to_squashed_migration(self):
+        try:
+            call_command('migrate', 'migrations', '0001_squashed_0002', verbosity=0)
+            self.assertTableExists('migrations_author')
+            self.assertTableExists('migrations_book')
+            call_command('migrate', 'migrations', '0001_initial', verbosity=0)
+            self.assertTableExists('migrations_author')
+            self.assertTableNotExists('migrations_book')
+        finally:
+            # Unmigrate everything.
+            call_command('migrate', 'migrations', 'zero', verbosity=0)
 
     @override_settings(MIGRATION_MODULES={'migrations': 'migrations.test_migrations'})
     def test_migrate_inconsistent_history(self):
@@ -888,6 +1008,40 @@ class MigrateTests(MigrationTestBase):
             call_command("migrate")
         applied_migrations = recorder.applied_migrations()
         self.assertNotIn(("migrations", "0001_initial"), applied_migrations)
+
+    @override_settings(INSTALLED_APPS=[
+        'migrations.migrations_test_apps.migrated_unapplied_app',
+        'migrations.migrations_test_apps.migrated_app',
+    ])
+    def test_migrate_not_reflected_changes(self):
+        class NewModel1(models.Model):
+            class Meta():
+                app_label = 'migrated_app'
+
+        class NewModel2(models.Model):
+            class Meta():
+                app_label = 'migrated_unapplied_app'
+
+        out = io.StringIO()
+        try:
+            call_command('migrate', verbosity=0)
+            call_command('migrate', stdout=out, no_color=True)
+            self.assertEqual(
+                "operations to perform:\n"
+                "  apply all migrations: migrated_app, migrated_unapplied_app\n"
+                "running migrations:\n"
+                "  no migrations to apply.\n"
+                "  your models in app(s): 'migrated_app', "
+                "'migrated_unapplied_app' have changes that are not yet "
+                "reflected in a migration, and so won't be applied.\n"
+                "  run 'manage.py makemigrations' to make new migrations, and "
+                "then re-run 'manage.py migrate' to apply them.\n",
+                out.getvalue().lower(),
+            )
+        finally:
+            # Unmigrate everything.
+            call_command('migrate', 'migrated_app', 'zero', verbosity=0)
+            call_command('migrate', 'migrated_unapplied_app', 'zero', verbosity=0)
 
 
 class MakeMigrationsTests(MigrationTestBase):
@@ -1031,16 +1185,13 @@ class MakeMigrationsTests(MigrationTestBase):
         with self.temporary_migration_module(module="migrations.test_migrations_conflict"):
             with self.assertRaises(CommandError) as context:
                 call_command("makemigrations")
-        exception_message = str(context.exception)
-        self.assertIn(
-            'Conflicting migrations detected; multiple leaf nodes '
-            'in the migration graph:',
-            exception_message
+        self.assertEqual(
+            str(context.exception),
+            "Conflicting migrations detected; multiple leaf nodes in the "
+            "migration graph: (0002_conflicting_second, 0002_second in "
+            "migrations).\n"
+            "To fix them run 'python manage.py makemigrations --merge'"
         )
-        self.assertIn('0002_second', exception_message)
-        self.assertIn('0002_conflicting_second', exception_message)
-        self.assertIn('in migrations', exception_message)
-        self.assertIn("To fix them run 'python manage.py makemigrations --merge'", exception_message)
 
     def test_makemigrations_merge_no_conflict(self):
         """
@@ -1170,12 +1321,27 @@ class MakeMigrationsTests(MigrationTestBase):
                 self.assertTrue(os.path.exists(merge_file))
             self.assertIn("Created new merge migration", out.getvalue())
 
+    def test_makemigrations_default_merge_name(self):
+        out = io.StringIO()
+        with self.temporary_migration_module(
+            module='migrations.test_migrations_conflict'
+        ) as migration_dir:
+            call_command('makemigrations', 'migrations', merge=True, interactive=False, stdout=out)
+            merge_file = os.path.join(
+                migration_dir,
+                '0003_merge_0002_conflicting_second_0002_second.py',
+            )
+            self.assertIs(os.path.exists(merge_file), True)
+        self.assertIn('Created new merge migration %s' % merge_file, out.getvalue())
+
     @mock.patch('django.db.migrations.utils.datetime')
-    def test_makemigrations_default_merge_name(self, mock_datetime):
+    def test_makemigrations_auto_merge_name(self, mock_datetime):
         mock_datetime.datetime.now.return_value = datetime.datetime(2016, 1, 2, 3, 4)
         with mock.patch('builtins.input', mock.Mock(return_value='y')):
             out = io.StringIO()
-            with self.temporary_migration_module(module="migrations.test_migrations_conflict") as migration_dir:
+            with self.temporary_migration_module(
+                module='migrations.test_migrations_conflict_long_name'
+            ) as migration_dir:
                 call_command("makemigrations", "migrations", merge=True, interactive=True, stdout=out)
                 merge_file = os.path.join(migration_dir, '0003_merge_20160102_0304.py')
                 self.assertTrue(os.path.exists(merge_file))
@@ -1195,7 +1361,55 @@ class MakeMigrationsTests(MigrationTestBase):
 
         with self.assertRaises(SystemExit):
             with self.temporary_migration_module(module="migrations.test_migrations_no_default"):
-                call_command("makemigrations", "migrations", interactive=False)
+                with captured_stdout() as out:
+                    call_command('makemigrations', 'migrations', interactive=False)
+        self.assertIn(
+            "Field 'silly_int' on model 'sillymodel' not migrated: it is "
+            "impossible to add a non-nullable field without specifying a "
+            "default.",
+            out.getvalue(),
+        )
+
+    def test_makemigrations_interactive_not_null_addition(self):
+        """
+        makemigrations messages when adding a NOT NULL field in interactive
+        mode.
+        """
+        class Author(models.Model):
+            silly_field = models.BooleanField(null=False)
+
+            class Meta:
+                app_label = 'migrations'
+
+        input_msg = (
+            "It is impossible to add a non-nullable field 'silly_field' to "
+            "author without specifying a default. This is because the "
+            "database needs something to populate existing rows.\n"
+            "Please select a fix:\n"
+            " 1) Provide a one-off default now (will be set on all existing "
+            "rows with a null value for this column)\n"
+            " 2) Quit and manually define a default value in models.py."
+        )
+        with self.temporary_migration_module(module='migrations.test_migrations'):
+            # 2 - quit.
+            with mock.patch('builtins.input', return_value='2'):
+                with captured_stdout() as out, self.assertRaises(SystemExit):
+                    call_command('makemigrations', 'migrations', interactive=True)
+            self.assertIn(input_msg, out.getvalue())
+            # 1 - provide a default.
+            with mock.patch('builtins.input', return_value='1'):
+                with captured_stdout() as out:
+                    call_command('makemigrations', 'migrations', interactive=True)
+            output = out.getvalue()
+            self.assertIn(input_msg, output)
+            self.assertIn('Please enter the default value as valid Python.', output)
+            self.assertIn(
+                'The datetime and django.utils.timezone modules are '
+                'available, so it is possible to provide e.g. timezone.now as '
+                'a value',
+                output,
+            )
+            self.assertIn("Type 'exit' to exit this prompt", output)
 
     def test_makemigrations_non_interactive_not_null_alteration(self):
         """
@@ -1210,10 +1424,59 @@ class MakeMigrationsTests(MigrationTestBase):
             class Meta:
                 app_label = "migrations"
 
-        out = io.StringIO()
         with self.temporary_migration_module(module="migrations.test_migrations"):
-            call_command("makemigrations", "migrations", interactive=False, stdout=out)
+            with captured_stdout() as out:
+                call_command('makemigrations', 'migrations', interactive=False)
         self.assertIn("Alter field slug on author", out.getvalue())
+        self.assertIn(
+            "Field 'slug' on model 'author' given a default of NOT PROVIDED "
+            "and must be corrected.",
+            out.getvalue(),
+        )
+
+    def test_makemigrations_interactive_not_null_alteration(self):
+        """
+        makemigrations messages when changing a NULL field to NOT NULL in
+        interactive mode.
+        """
+        class Author(models.Model):
+            slug = models.SlugField(null=False)
+
+            class Meta:
+                app_label = 'migrations'
+
+        input_msg = (
+            "It is impossible to change a nullable field 'slug' on author to "
+            "non-nullable without providing a default. This is because the "
+            "database needs something to populate existing rows.\n"
+            "Please select a fix:\n"
+            " 1) Provide a one-off default now (will be set on all existing "
+            "rows with a null value for this column)\n"
+            " 2) Ignore for now. Existing rows that contain NULL values will "
+            "have to be handled manually, for example with a RunPython or "
+            "RunSQL operation.\n"
+            " 3) Quit and manually define a default value in models.py."
+        )
+        with self.temporary_migration_module(module='migrations.test_migrations'):
+            # 3 - quit.
+            with mock.patch('builtins.input', return_value='3'):
+                with captured_stdout() as out, self.assertRaises(SystemExit):
+                    call_command('makemigrations', 'migrations', interactive=True)
+            self.assertIn(input_msg, out.getvalue())
+            # 1 - provide a default.
+            with mock.patch('builtins.input', return_value='1'):
+                with captured_stdout() as out:
+                    call_command('makemigrations', 'migrations', interactive=True)
+            output = out.getvalue()
+            self.assertIn(input_msg, output)
+            self.assertIn('Please enter the default value as valid Python.', output)
+            self.assertIn(
+                'The datetime and django.utils.timezone modules are '
+                'available, so it is possible to provide e.g. timezone.now as '
+                'a value',
+                output,
+            )
+            self.assertIn("Type 'exit' to exit this prompt", output)
 
     def test_makemigrations_non_interactive_no_model_rename(self):
         """
@@ -1453,20 +1716,16 @@ class MakeMigrationsTests(MigrationTestBase):
                     "makemigrations", "conflicting_app_with_dependencies",
                     merge=True, interactive=True, stdout=out
                 )
-            val = out.getvalue().lower()
-            self.assertIn('merging conflicting_app_with_dependencies\n', val)
-            self.assertIn(
+            self.assertEqual(
+                out.getvalue().lower(),
+                'merging conflicting_app_with_dependencies\n'
                 '  branch 0002_conflicting_second\n'
-                '    - create model something\n',
-                val
-            )
-            self.assertIn(
+                '    - create model something\n'
                 '  branch 0002_second\n'
                 '    - delete model tribble\n'
                 '    - remove field silly_field from author\n'
                 '    - add field rating to author\n'
-                '    - create model book\n',
-                val
+                '    - create model book\n'
             )
 
     def test_makemigrations_with_custom_name(self):
@@ -1555,6 +1814,20 @@ class MakeMigrationsTests(MigrationTestBase):
             with self.assertRaisesMessage(InconsistentMigrationHistory, msg):
                 call_command("makemigrations")
 
+    def test_makemigrations_inconsistent_history_db_failure(self):
+        msg = (
+            "Got an error checking a consistent migration history performed "
+            "for database connection 'default': could not connect to server"
+        )
+        with mock.patch(
+            'django.db.migrations.loader.MigrationLoader.check_consistent_history',
+            side_effect=OperationalError('could not connect to server'),
+        ):
+            with self.temporary_migration_module():
+                with self.assertWarns(RuntimeWarning) as cm:
+                    call_command('makemigrations', verbosity=0)
+                self.assertEqual(str(cm.warning), msg)
+
     @mock.patch('builtins.input', return_value='1')
     @mock.patch('django.db.migrations.questioner.sys.stdin', mock.MagicMock(encoding=sys.getdefaultencoding()))
     def test_makemigrations_auto_now_add_interactive(self, *args):
@@ -1569,6 +1842,15 @@ class MakeMigrationsTests(MigrationTestBase):
             class Meta:
                 app_label = 'migrations'
 
+        input_msg = (
+            "It is impossible to add the field 'creation_date' with "
+            "'auto_now_add=True' to entry without providing a default. This "
+            "is because the database needs something to populate existing "
+            "rows.\n\n"
+            " 1) Provide a one-off default now which will be set on all "
+            "existing rows\n"
+            " 2) Quit and manually define a default value in models.py."
+        )
         # Monkeypatch interactive questioner to auto accept
         with mock.patch('django.db.migrations.questioner.sys.stdout', new_callable=io.StringIO) as prompt_stdout:
             out = io.StringIO()
@@ -1576,8 +1858,118 @@ class MakeMigrationsTests(MigrationTestBase):
                 call_command('makemigrations', 'migrations', interactive=True, stdout=out)
             output = out.getvalue()
             prompt_output = prompt_stdout.getvalue()
-            self.assertIn("You can accept the default 'timezone.now' by pressing 'Enter'", prompt_output)
+            self.assertIn(input_msg, prompt_output)
+            self.assertIn(
+                'Please enter the default value as valid Python.',
+                prompt_output,
+            )
+            self.assertIn(
+                "Accept the default 'timezone.now' by pressing 'Enter' or "
+                "provide another value.",
+                prompt_output,
+            )
+            self.assertIn("Type 'exit' to exit this prompt", prompt_output)
             self.assertIn("Add field creation_date to entry", output)
+
+    @mock.patch('builtins.input', return_value='2')
+    def test_makemigrations_auto_now_add_interactive_quit(self, mock_input):
+        class Author(models.Model):
+            publishing_date = models.DateField(auto_now_add=True)
+
+            class Meta:
+                app_label = 'migrations'
+
+        with self.temporary_migration_module(module='migrations.test_migrations'):
+            with captured_stdout():
+                with self.assertRaises(SystemExit):
+                    call_command('makemigrations', 'migrations', interactive=True)
+
+    def test_makemigrations_non_interactive_auto_now_add_addition(self):
+        """
+        Non-interactive makemigrations fails when a default is missing on a
+        new field when auto_now_add=True.
+        """
+        class Entry(models.Model):
+            creation_date = models.DateTimeField(auto_now_add=True)
+
+            class Meta:
+                app_label = 'migrations'
+
+        with self.temporary_migration_module(module='migrations.test_auto_now_add'):
+            with self.assertRaises(SystemExit), captured_stdout() as out:
+                call_command('makemigrations', 'migrations', interactive=False)
+        self.assertIn(
+            "Field 'creation_date' on model 'entry' not migrated: it is "
+            "impossible to add a field with 'auto_now_add=True' without "
+            "specifying a default.",
+            out.getvalue(),
+        )
+
+    def test_makemigrations_interactive_unique_callable_default_addition(self):
+        """
+        makemigrations prompts the user when adding a unique field with
+        a callable default.
+        """
+        class Book(models.Model):
+            created = models.DateTimeField(unique=True, default=timezone.now)
+
+            class Meta:
+                app_label = 'migrations'
+
+        version = get_docs_version()
+        input_msg = (
+            f'Callable default on unique field book.created will not generate '
+            f'unique values upon migrating.\n'
+            f'Please choose how to proceed:\n\n'
+            f' 1) Continue making this migration as the first step in writing '
+            f'a manual migration to generate unique values described here: '
+            f'https://docs.djangoproject.com/en/{version}/howto/'
+            f'writing-migrations/#migrations-that-add-unique-fields.\n'
+            f' 2) Quit and edit field options in models.py.\n'
+        )
+        with self.temporary_migration_module(module='migrations.test_migrations'):
+            # 2 - quit.
+            with mock.patch('builtins.input', return_value='2'):
+                with captured_stdout() as out, self.assertRaises(SystemExit):
+                    call_command('makemigrations', 'migrations', interactive=True)
+            out_value = out.getvalue()
+            self.assertIn(input_msg, out_value)
+            self.assertNotIn('Add field created to book', out_value)
+            # 1 - continue.
+            with mock.patch('builtins.input', return_value='1'):
+                with captured_stdout() as out:
+                    call_command('makemigrations', 'migrations', interactive=True)
+            out_value = out.getvalue()
+            self.assertIn(input_msg, out_value)
+            self.assertIn('Add field created to book', out_value)
+
+    def test_makemigrations_non_interactive_unique_callable_default_addition(self):
+        class Book(models.Model):
+            created = models.DateTimeField(unique=True, default=timezone.now)
+
+            class Meta:
+                app_label = 'migrations'
+
+        with self.temporary_migration_module(module='migrations.test_migrations'):
+            with captured_stdout() as out:
+                call_command('makemigrations', 'migrations', interactive=False)
+            out_value = out.getvalue()
+            self.assertIn('Add field created to book', out_value)
+
+    @override_settings(
+        MIGRATION_MODULES={'migrations': 'migrations.test_migrations_squashed'},
+    )
+    def test_makemigrations_continues_number_sequence_after_squash(self):
+        with self.temporary_migration_module(module='migrations.test_migrations_squashed'):
+            with captured_stdout() as out:
+                call_command(
+                    'makemigrations',
+                    'migrations',
+                    interactive=False,
+                    empty=True,
+                )
+            out_value = out.getvalue()
+            self.assertIn('0003_auto', out_value)
 
 
 class SquashMigrationsTests(MigrationTestBase):
@@ -1689,6 +2081,15 @@ class SquashMigrationsTests(MigrationTestBase):
             )
             squashed_migration_file = os.path.join(migration_dir, '0001_%s.py' % squashed_name)
             self.assertTrue(os.path.exists(squashed_migration_file))
+
+    def test_squashed_name_exists(self):
+        msg = 'Migration 0001_initial already exists. Use a different name.'
+        with self.temporary_migration_module(module='migrations.test_migrations'):
+            with self.assertRaisesMessage(CommandError, msg):
+                call_command(
+                    'squashmigrations', 'migrations', '0001', '0002',
+                    squashed_name='initial', interactive=False, verbosity=0,
+                )
 
 
 class AppLabelErrorTests(TestCase):

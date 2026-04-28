@@ -5,34 +5,34 @@ import datetime
 import decimal
 import functools
 import hashlib
-import json
 import math
 import operator
+import random
 import re
 import statistics
 import warnings
 from itertools import chain
 from sqlite3 import dbapi2 as Database
 
-import pytz
-
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError
 from django.db.backends import utils as backend_utils
-from django.db.backends.base.base import BaseDatabaseWrapper
+from django.db.backends.base.base import (
+    BaseDatabaseWrapper, timezone_constructor,
+)
 from django.utils import timezone
 from django.utils.asyncio import async_unsafe
+from django.utils.crypto import md5
 from django.utils.dateparse import parse_datetime, parse_time
 from django.utils.duration import duration_microseconds
 from django.utils.regex_helper import _lazy_re_compile
-from django.utils.version import PY38
 
-from .client import DatabaseClient                          # isort:skip
-from .creation import DatabaseCreation                      # isort:skip
-from .features import DatabaseFeatures                      # isort:skip
-from .introspection import DatabaseIntrospection            # isort:skip
-from .operations import DatabaseOperations                  # isort:skip
-from .schema import DatabaseSchemaEditor                    # isort:skip
+from .client import DatabaseClient
+from .creation import DatabaseCreation
+from .features import DatabaseFeatures
+from .introspection import DatabaseIntrospection
+from .operations import DatabaseOperations
+from .schema import DatabaseSchemaEditor
 
 
 def decoder(conv_func):
@@ -64,8 +64,10 @@ def list_aggregate(function):
 
 
 def check_sqlite_version():
-    if Database.sqlite_version_info < (3, 8, 3):
-        raise ImproperlyConfigured('SQLite 3.8.3 or later is required (found %s).' % Database.sqlite_version)
+    if Database.sqlite_version_info < (3, 9, 0):
+        raise ImproperlyConfigured(
+            'SQLite 3.9.0 or later is required (found %s).' % Database.sqlite_version
+        )
 
 
 check_sqlite_version()
@@ -74,7 +76,6 @@ Database.register_converter("bool", b'1'.__eq__)
 Database.register_converter("time", decoder(parse_time))
 Database.register_converter("datetime", decoder(parse_datetime))
 Database.register_converter("timestamp", decoder(parse_datetime))
-Database.register_converter("TIMESTAMP", decoder(parse_datetime))
 
 Database.register_adapter(decimal.Decimal, str)
 
@@ -103,7 +104,6 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         'IPAddressField': 'char(15)',
         'GenericIPAddressField': 'char(39)',
         'JSONField': 'text',
-        'NullBooleanField': 'bool',
         'OneToOneField': 'integer',
         'PositiveBigIntegerField': 'bigint unsigned',
         'PositiveIntegerField': 'integer unsigned',
@@ -180,9 +180,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
                 "settings.DATABASES is improperly configured. "
                 "Please supply the NAME value.")
         kwargs = {
-            # TODO: Remove str() when dropping support for PY36.
-            # https://bugs.python.org/issue33496
-            'database': str(settings_dict['NAME']),
+            'database': settings_dict['NAME'],
             'detect_types': Database.PARSE_DECLTYPES | Database.PARSE_COLNAMES,
             **settings_dict['OPTIONS'],
         }
@@ -206,21 +204,18 @@ class DatabaseWrapper(BaseDatabaseWrapper):
     @async_unsafe
     def get_new_connection(self, conn_params):
         conn = Database.connect(**conn_params)
-        if PY38:
-            create_deterministic_function = functools.partial(
-                conn.create_function,
-                deterministic=True,
-            )
-        else:
-            create_deterministic_function = conn.create_function
+        create_deterministic_function = functools.partial(
+            conn.create_function,
+            deterministic=True,
+        )
         create_deterministic_function('django_date_extract', 2, _sqlite_datetime_extract)
-        create_deterministic_function('django_date_trunc', 2, _sqlite_date_trunc)
+        create_deterministic_function('django_date_trunc', 4, _sqlite_date_trunc)
         create_deterministic_function('django_datetime_cast_date', 3, _sqlite_datetime_cast_date)
         create_deterministic_function('django_datetime_cast_time', 3, _sqlite_datetime_cast_time)
         create_deterministic_function('django_datetime_extract', 4, _sqlite_datetime_extract)
         create_deterministic_function('django_datetime_trunc', 4, _sqlite_datetime_trunc)
         create_deterministic_function('django_time_extract', 2, _sqlite_time_extract)
-        create_deterministic_function('django_time_trunc', 2, _sqlite_time_trunc)
+        create_deterministic_function('django_time_trunc', 4, _sqlite_time_trunc)
         create_deterministic_function('django_time_diff', 2, _sqlite_time_diff)
         create_deterministic_function('django_timestamp_diff', 2, _sqlite_timestamp_diff)
         create_deterministic_function('django_format_dtdelta', 3, _sqlite_format_dtdelta)
@@ -236,11 +231,10 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         create_deterministic_function('DEGREES', 1, none_guard(math.degrees))
         create_deterministic_function('EXP', 1, none_guard(math.exp))
         create_deterministic_function('FLOOR', 1, none_guard(math.floor))
-        create_deterministic_function('JSON_CONTAINS', 2, _sqlite_json_contains)
         create_deterministic_function('LN', 1, none_guard(math.log))
         create_deterministic_function('LOG', 2, none_guard(lambda x, y: math.log(y, x)))
         create_deterministic_function('LPAD', 3, _sqlite_lpad)
-        create_deterministic_function('MD5', 1, none_guard(lambda x: hashlib.md5(x.encode()).hexdigest()))
+        create_deterministic_function('MD5', 1, none_guard(lambda x: md5(x.encode()).hexdigest()))
         create_deterministic_function('MOD', 2, none_guard(math.fmod))
         create_deterministic_function('PI', 0, lambda: math.pi)
         create_deterministic_function('POWER', 2, none_guard(operator.pow))
@@ -257,11 +251,17 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         create_deterministic_function('SIN', 1, none_guard(math.sin))
         create_deterministic_function('SQRT', 1, none_guard(math.sqrt))
         create_deterministic_function('TAN', 1, none_guard(math.tan))
+        # Don't use the built-in RANDOM() function because it returns a value
+        # in the range [-1 * 2^63, 2^63 - 1] instead of [0, 1).
+        conn.create_function('RAND', 0, random.random)
         conn.create_aggregate('STDDEV_POP', 1, list_aggregate(statistics.pstdev))
         conn.create_aggregate('STDDEV_SAMP', 1, list_aggregate(statistics.stdev))
         conn.create_aggregate('VAR_POP', 1, list_aggregate(statistics.pvariance))
         conn.create_aggregate('VAR_SAMP', 1, list_aggregate(statistics.variance))
         conn.execute('PRAGMA foreign_keys = ON')
+        # The macOS bundled SQLite defaults legacy_alter_table ON, which
+        # prevents atomic table renames (feature supports_atomic_references_rename)
+        conn.execute('PRAGMA legacy_alter_table = OFF')
         return conn
 
     def init_connection_state(self):
@@ -326,19 +326,24 @@ class DatabaseWrapper(BaseDatabaseWrapper):
                     violations = cursor.execute('PRAGMA foreign_key_check').fetchall()
                 else:
                     violations = chain.from_iterable(
-                        cursor.execute('PRAGMA foreign_key_check(%s)' % table_name).fetchall()
+                        cursor.execute(
+                            'PRAGMA foreign_key_check(%s)'
+                            % self.ops.quote_name(table_name)
+                        ).fetchall()
                         for table_name in table_names
                     )
                 # See https://www.sqlite.org/pragma.html#pragma_foreign_key_check
                 for table_name, rowid, referenced_table_name, foreign_key_index in violations:
                     foreign_key = cursor.execute(
-                        'PRAGMA foreign_key_list(%s)' % table_name
+                        'PRAGMA foreign_key_list(%s)' % self.ops.quote_name(table_name)
                     ).fetchall()[foreign_key_index]
                     column_name, referenced_column_name = foreign_key[3:5]
                     primary_key_column_name = self.introspection.get_primary_key_column(cursor, table_name)
                     primary_key_value, bad_value = cursor.execute(
                         'SELECT %s, %s FROM %s WHERE rowid = %%s' % (
-                            primary_key_column_name, column_name, table_name
+                            self.ops.quote_name(primary_key_column_name),
+                            self.ops.quote_name(column_name),
+                            self.ops.quote_name(table_name),
                         ),
                         (rowid,),
                     ).fetchone()
@@ -358,8 +363,8 @@ class DatabaseWrapper(BaseDatabaseWrapper):
                     primary_key_column_name = self.introspection.get_primary_key_column(cursor, table_name)
                     if not primary_key_column_name:
                         continue
-                    key_columns = self.introspection.get_key_columns(cursor, table_name)
-                    for column_name, referenced_table_name, referenced_column_name in key_columns:
+                    relations = self.introspection.get_relations(cursor, table_name)
+                    for column_name, (referenced_column_name, referenced_table_name) in relations:
                         cursor.execute(
                             """
                             SELECT REFERRING.`%s`, REFERRING.`%s` FROM `%s` as REFERRING
@@ -430,45 +435,46 @@ def _sqlite_datetime_parse(dt, tzname=None, conn_tzname=None):
     except (TypeError, ValueError):
         return None
     if conn_tzname:
-        dt = dt.replace(tzinfo=pytz.timezone(conn_tzname))
+        dt = dt.replace(tzinfo=timezone_constructor(conn_tzname))
     if tzname is not None and tzname != conn_tzname:
-        sign_index = tzname.find('+') + tzname.find('-') + 1
-        if sign_index > -1:
-            sign = tzname[sign_index]
-            tzname, offset = tzname.split(sign)
-            if offset:
-                hours, minutes = offset.split(':')
-                offset_delta = datetime.timedelta(hours=int(hours), minutes=int(minutes))
-                dt += offset_delta if sign == '+' else -offset_delta
-        dt = timezone.localtime(dt, pytz.timezone(tzname))
+        tzname, sign, offset = backend_utils.split_tzname_delta(tzname)
+        if offset:
+            hours, minutes = offset.split(':')
+            offset_delta = datetime.timedelta(hours=int(hours), minutes=int(minutes))
+            dt += offset_delta if sign == '+' else -offset_delta
+        dt = timezone.localtime(dt, timezone_constructor(tzname))
     return dt
 
 
-def _sqlite_date_trunc(lookup_type, dt):
-    dt = _sqlite_datetime_parse(dt)
+def _sqlite_date_trunc(lookup_type, dt, tzname, conn_tzname):
+    dt = _sqlite_datetime_parse(dt, tzname, conn_tzname)
     if dt is None:
         return None
     if lookup_type == 'year':
-        return "%i-01-01" % dt.year
+        return '%04i-01-01' % dt.year
     elif lookup_type == 'quarter':
         month_in_quarter = dt.month - (dt.month - 1) % 3
-        return '%i-%02i-01' % (dt.year, month_in_quarter)
+        return '%04i-%02i-01' % (dt.year, month_in_quarter)
     elif lookup_type == 'month':
-        return "%i-%02i-01" % (dt.year, dt.month)
+        return '%04i-%02i-01' % (dt.year, dt.month)
     elif lookup_type == 'week':
         dt = dt - datetime.timedelta(days=dt.weekday())
-        return "%i-%02i-%02i" % (dt.year, dt.month, dt.day)
+        return '%04i-%02i-%02i' % (dt.year, dt.month, dt.day)
     elif lookup_type == 'day':
-        return "%i-%02i-%02i" % (dt.year, dt.month, dt.day)
+        return '%04i-%02i-%02i' % (dt.year, dt.month, dt.day)
 
 
-def _sqlite_time_trunc(lookup_type, dt):
+def _sqlite_time_trunc(lookup_type, dt, tzname, conn_tzname):
     if dt is None:
         return None
-    try:
-        dt = backend_utils.typecast_time(dt)
-    except (ValueError, TypeError):
-        return None
+    dt_parsed = _sqlite_datetime_parse(dt, tzname, conn_tzname)
+    if dt_parsed is None:
+        try:
+            dt = backend_utils.typecast_time(dt)
+        except (ValueError, TypeError):
+            return None
+    else:
+        dt = dt_parsed
     if lookup_type == 'hour':
         return "%02i:00:00" % dt.hour
     elif lookup_type == 'minute':
@@ -514,23 +520,23 @@ def _sqlite_datetime_trunc(lookup_type, dt, tzname, conn_tzname):
     if dt is None:
         return None
     if lookup_type == 'year':
-        return "%i-01-01 00:00:00" % dt.year
+        return '%04i-01-01 00:00:00' % dt.year
     elif lookup_type == 'quarter':
         month_in_quarter = dt.month - (dt.month - 1) % 3
-        return '%i-%02i-01 00:00:00' % (dt.year, month_in_quarter)
+        return '%04i-%02i-01 00:00:00' % (dt.year, month_in_quarter)
     elif lookup_type == 'month':
-        return "%i-%02i-01 00:00:00" % (dt.year, dt.month)
+        return '%04i-%02i-01 00:00:00' % (dt.year, dt.month)
     elif lookup_type == 'week':
         dt = dt - datetime.timedelta(days=dt.weekday())
-        return "%i-%02i-%02i 00:00:00" % (dt.year, dt.month, dt.day)
+        return '%04i-%02i-%02i 00:00:00' % (dt.year, dt.month, dt.day)
     elif lookup_type == 'day':
-        return "%i-%02i-%02i 00:00:00" % (dt.year, dt.month, dt.day)
+        return '%04i-%02i-%02i 00:00:00' % (dt.year, dt.month, dt.day)
     elif lookup_type == 'hour':
-        return "%i-%02i-%02i %02i:00:00" % (dt.year, dt.month, dt.day, dt.hour)
+        return '%04i-%02i-%02i %02i:00:00' % (dt.year, dt.month, dt.day, dt.hour)
     elif lookup_type == 'minute':
-        return "%i-%02i-%02i %02i:%02i:00" % (dt.year, dt.month, dt.day, dt.hour, dt.minute)
+        return '%04i-%02i-%02i %02i:%02i:00' % (dt.year, dt.month, dt.day, dt.hour, dt.minute)
     elif lookup_type == 'second':
-        return "%i-%02i-%02i %02i:%02i:%02i" % (dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
+        return '%04i-%02i-%02i %02i:%02i:%02i' % (dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
 
 
 def _sqlite_time_extract(lookup_type, dt):
@@ -543,25 +549,40 @@ def _sqlite_time_extract(lookup_type, dt):
     return getattr(dt, lookup_type)
 
 
+def _sqlite_prepare_dtdelta_param(conn, param):
+    if conn in ['+', '-']:
+        if isinstance(param, int):
+            return datetime.timedelta(0, 0, param)
+        else:
+            return backend_utils.typecast_timestamp(param)
+    return param
+
+
 @none_guard
 def _sqlite_format_dtdelta(conn, lhs, rhs):
     """
     LHS and RHS can be either:
     - An integer number of microseconds
     - A string representing a datetime
+    - A scalar value, e.g. float
     """
+    conn = conn.strip()
     try:
-        real_lhs = datetime.timedelta(0, 0, lhs) if isinstance(lhs, int) else backend_utils.typecast_timestamp(lhs)
-        real_rhs = datetime.timedelta(0, 0, rhs) if isinstance(rhs, int) else backend_utils.typecast_timestamp(rhs)
-        if conn.strip() == '+':
-            out = real_lhs + real_rhs
-        else:
-            out = real_lhs - real_rhs
+        real_lhs = _sqlite_prepare_dtdelta_param(conn, lhs)
+        real_rhs = _sqlite_prepare_dtdelta_param(conn, rhs)
     except (ValueError, TypeError):
         return None
-    # typecast_timestamp returns a date or a datetime without timezone.
-    # It will be formatted as "%Y-%m-%d" or "%Y-%m-%d %H:%M:%S[.%f]"
-    return str(out)
+    if conn == '+':
+        # typecast_timestamp returns a date or a datetime without timezone.
+        # It will be formatted as "%Y-%m-%d" or "%Y-%m-%d %H:%M:%S[.%f]"
+        out = str(real_lhs + real_rhs)
+    elif conn == '-':
+        out = str(real_lhs - real_rhs)
+    elif conn == '*':
+        out = real_lhs * real_rhs
+    else:
+        out = real_lhs / real_rhs
+    return out
 
 
 @none_guard
@@ -602,11 +623,3 @@ def _sqlite_lpad(text, length, fill_text):
 @none_guard
 def _sqlite_rpad(text, length, fill_text):
     return (text + fill_text * length)[:length]
-
-
-@none_guard
-def _sqlite_json_contains(haystack, needle):
-    target, candidate = json.loads(haystack), json.loads(needle)
-    if isinstance(target, dict) and isinstance(candidate, dict):
-        return target.items() >= candidate.items()
-    return target == candidate

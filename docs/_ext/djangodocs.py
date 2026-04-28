@@ -8,13 +8,13 @@ import re
 from docutils import nodes
 from docutils.parsers.rst import Directive
 from docutils.statemachine import ViewList
-from sphinx import addnodes
+from sphinx import addnodes, version_info as sphinx_version
 from sphinx.builders.html import StandaloneHTMLBuilder
 from sphinx.directives.code import CodeBlock
 from sphinx.domains.std import Cmdoption
-from sphinx.errors import ExtensionError, SphinxError
+from sphinx.errors import ExtensionError
 from sphinx.util import logging
-from sphinx.util.console import bold, red
+from sphinx.util.console import bold
 from sphinx.writers.html import HTMLTranslator
 
 logger = logging.getLogger(__name__)
@@ -115,11 +115,17 @@ class DjangoHTMLTranslator(HTMLTranslator):
     def visit_table(self, node):
         self.context.append(self.compact_p)
         self.compact_p = True
-        self._table_row_index = 0  # Needed by Sphinx
+        # Needed by Sphinx.
+        if sphinx_version >= (4, 3):
+            self._table_row_indices.append(0)
+        else:
+            self._table_row_index = 0
         self.body.append(self.starttag(node, 'table', CLASS='docutils'))
 
     def depart_table(self, node):
         self.compact_p = self.context.pop()
+        if sphinx_version >= (4, 3):
+            self._table_row_indices.pop()
         self.body.append('</table>\n')
 
     def visit_desc_parameterlist(self, node):
@@ -280,7 +286,7 @@ class ConsoleDirective(CodeBlock):
     required_arguments = 0
     # The 'doscon' Pygments formatter needs a prompt like this. '>' alone
     # won't do it because then it simply paints the whole command line as a
-    # grey comment with no highlighting at all.
+    # gray comment with no highlighting at all.
     WIN_PROMPT = r'...\> '
 
     def run(self):
@@ -378,8 +384,9 @@ def default_role_error(
     name, rawtext, text, lineno, inliner, options=None, content=None
 ):
     msg = (
-        "Default role used (`single backticks`) at line %s: %s. Did you mean "
-        "to use two backticks for ``code``, or miss an underscore for a "
-        "`link`_ ?" % (lineno, rawtext)
+        "Default role used (`single backticks`): %s. Did you mean to use two "
+        "backticks for ``code``, or miss an underscore for a `link`_ ?"
+        % rawtext
     )
-    raise SphinxError(red(msg))
+    logger.warning(msg, location=(inliner.document.current_source, lineno))
+    return [nodes.Text(text)], []
