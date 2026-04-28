@@ -39,6 +39,7 @@ class AdminSidebarTests(TestCase):
 
     def test_sidebar_not_on_index(self):
         response = self.client.get(reverse('test_with_sidebar:index'))
+        self.assertContains(response, '<div class="main" id="main">')
         self.assertNotContains(response, '<nav class="sticky" id="nav-sidebar">')
 
     def test_sidebar_disabled(self):
@@ -76,6 +77,13 @@ class AdminSidebarTests(TestCase):
         # Does not include aria-current attribute.
         self.assertContains(response, '<a href="%s">Users</a>' % url)
         self.assertNotContains(response, 'aria-current')
+
+    @override_settings(DEBUG=True)
+    def test_included_app_list_template_context_fully_set(self):
+        # All context variables should be set when rendering the sidebar.
+        url = reverse('test_with_sidebar:auth_user_changelist')
+        with self.assertNoLogs('django.template', 'DEBUG'):
+            self.client.get(url)
 
 
 @override_settings(ROOT_URLCONF='admin_views.test_nav_sidebar')
@@ -135,3 +143,16 @@ class SeleniumTests(AdminSeleniumTestCase):
         self.selenium.get(self.live_server_url + reverse('test_with_sidebar:auth_user_changelist'))
         main_element = self.selenium.find_element_by_css_selector('#main')
         self.assertIn('shifted', main_element.get_attribute('class').split())
+
+    def test_sidebar_filter_persists(self):
+        self.selenium.get(
+            self.live_server_url +
+            reverse('test_with_sidebar:auth_user_changelist')
+        )
+        filter_value_script = (
+            "return localStorage.getItem('django.admin.navSidebarFilterValue')"
+        )
+        self.assertIsNone(self.selenium.execute_script(filter_value_script))
+        filter_input = self.selenium.find_element_by_css_selector('#nav-filter')
+        filter_input.send_keys('users')
+        self.assertEqual(self.selenium.execute_script(filter_value_script), 'users')

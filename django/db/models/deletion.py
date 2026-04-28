@@ -305,7 +305,7 @@ class Collector:
                     model.__name__,
                     ', '.join(protected_objects),
                 ),
-                chain.from_iterable(protected_objects.values()),
+                set(chain.from_iterable(protected_objects.values())),
             )
         for related_model, related_fields in model_fast_deletes.items():
             batches = self.get_del_batches(new_objs, related_fields)
@@ -340,7 +340,7 @@ class Collector:
                             model.__name__,
                             ', '.join(restricted_objects),
                         ),
-                        chain.from_iterable(restricted_objects.values()),
+                        set(chain.from_iterable(restricted_objects.values())),
                     )
 
     def related_objects(self, related_model, related_fields, objs):
@@ -392,7 +392,7 @@ class Collector:
         if len(self.data) == 1 and len(instances) == 1:
             instance = list(instances)[0]
             if self.can_fast_delete(instance):
-                with transaction.mark_for_rollback_on_error():
+                with transaction.mark_for_rollback_on_error(self.using):
                     count = sql.DeleteQuery(model).delete_batch([instance.pk], self.using)
                 setattr(instance, model._meta.pk.attname, None)
                 return count, {model._meta.label: count}

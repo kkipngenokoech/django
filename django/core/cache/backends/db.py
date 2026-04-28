@@ -123,10 +123,9 @@ class DatabaseCache(BaseDatabaseCache):
             now = now.replace(microsecond=0)
             if timeout is None:
                 exp = datetime.max
-            elif settings.USE_TZ:
-                exp = datetime.utcfromtimestamp(timeout)
             else:
-                exp = datetime.fromtimestamp(timeout)
+                tz = timezone.utc if settings.USE_TZ else None
+                exp = datetime.fromtimestamp(timeout, tz=tz)
             exp = exp.replace(microsecond=0)
             if num > self._max_entries:
                 self._cull(db, cursor, now)
@@ -225,7 +224,7 @@ class DatabaseCache(BaseDatabaseCache):
                 ),
                 keys,
             )
-        return bool(cursor.rowcount)
+            return bool(cursor.rowcount)
 
     def has_key(self, key, version=None):
         key = self.make_key(key, version=version)
@@ -235,11 +234,7 @@ class DatabaseCache(BaseDatabaseCache):
         connection = connections[db]
         quote_name = connection.ops.quote_name
 
-        if settings.USE_TZ:
-            now = datetime.utcnow()
-        else:
-            now = datetime.now()
-        now = now.replace(microsecond=0)
+        now = timezone.now().replace(microsecond=0, tzinfo=None)
 
         with connection.cursor() as cursor:
             cursor.execute(
@@ -267,9 +262,12 @@ class DatabaseCache(BaseDatabaseCache):
                 cursor.execute(
                     connection.ops.cache_key_culling_sql() % table,
                     [cull_num])
-                cursor.execute("DELETE FROM %s "
-                               "WHERE cache_key < %%s" % table,
-                               [cursor.fetchone()[0]])
+                last_cache_key = cursor.fetchone()
+                if last_cache_key:
+                    cursor.execute(
+                        'DELETE FROM %s WHERE cache_key < %%s' % table,
+                        [last_cache_key[0]],
+                    )
 
     def clear(self):
         db = router.db_for_write(self.cache_model_class)

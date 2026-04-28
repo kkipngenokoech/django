@@ -104,6 +104,20 @@ class ChangeListTests(TestCase):
         cl = m.get_changelist_instance(request)
         self.assertEqual(cl.queryset.query.select_related, {'parent': {}})
 
+    def test_select_related_preserved_when_multi_valued_in_search_fields(self):
+        parent = Parent.objects.create(name='Mary')
+        Child.objects.create(parent=parent, name='Danielle')
+        Child.objects.create(parent=parent, name='Daniel')
+
+        m = ParentAdmin(Parent, custom_site)
+        request = self.factory.get('/parent/', data={SEARCH_VAR: 'daniel'})
+        request.user = self.superuser
+
+        cl = m.get_changelist_instance(request)
+        self.assertEqual(cl.queryset.count(), 1)
+        # select_related is preserved.
+        self.assertEqual(cl.queryset.query.select_related, {'child': {}})
+
     def test_select_related_as_tuple(self):
         ia = InvitationAdmin(Invitation, custom_site)
         request = self.factory.get('/invitation/')
@@ -259,7 +273,7 @@ class ChangeListTests(TestCase):
         Regression test for #14312: list_editable with pagination
         """
         new_parent = Parent.objects.create(name='parent')
-        for i in range(200):
+        for i in range(1, 201):
             Child.objects.create(name='name %s' % i, parent=new_parent)
         request = self.factory.get('/child/', data={'p': -1})  # Anything outside range
         request.user = self.superuser
@@ -274,7 +288,7 @@ class ChangeListTests(TestCase):
 
     def test_custom_paginator(self):
         new_parent = Parent.objects.create(name='parent')
-        for i in range(200):
+        for i in range(1, 201):
             Child.objects.create(name='name %s' % i, parent=new_parent)
 
         request = self.factory.get('/child/')
@@ -285,7 +299,7 @@ class ChangeListTests(TestCase):
         cl.get_results(request)
         self.assertIsInstance(cl.paginator, CustomPaginator)
 
-    def test_distinct_for_m2m_in_list_filter(self):
+    def test_no_duplicates_for_m2m_in_list_filter(self):
         """
         Regression test for #13902: When using a ManyToMany in list_filter,
         results shouldn't appear more than once. Basic ManyToMany.
@@ -305,8 +319,12 @@ class ChangeListTests(TestCase):
 
         # There's only one Group instance
         self.assertEqual(cl.result_count, 1)
+        # Queryset must be deletable.
+        self.assertIs(cl.queryset.query.distinct, False)
+        cl.queryset.delete()
+        self.assertEqual(cl.queryset.count(), 0)
 
-    def test_distinct_for_through_m2m_in_list_filter(self):
+    def test_no_duplicates_for_through_m2m_in_list_filter(self):
         """
         Regression test for #13902: When using a ManyToMany in list_filter,
         results shouldn't appear more than once. With an intermediate model.
@@ -325,12 +343,15 @@ class ChangeListTests(TestCase):
 
         # There's only one Group instance
         self.assertEqual(cl.result_count, 1)
+        # Queryset must be deletable.
+        self.assertIs(cl.queryset.query.distinct, False)
+        cl.queryset.delete()
+        self.assertEqual(cl.queryset.count(), 0)
 
-    def test_distinct_for_through_m2m_at_second_level_in_list_filter(self):
+    def test_no_duplicates_for_through_m2m_at_second_level_in_list_filter(self):
         """
         When using a ManyToMany in list_filter at the second level behind a
-        ForeignKey, distinct() must be called and results shouldn't appear more
-        than once.
+        ForeignKey, results shouldn't appear more than once.
         """
         lead = Musician.objects.create(name='Vox')
         band = Group.objects.create(name='The Hype')
@@ -347,8 +368,12 @@ class ChangeListTests(TestCase):
 
         # There's only one Concert instance
         self.assertEqual(cl.result_count, 1)
+        # Queryset must be deletable.
+        self.assertIs(cl.queryset.query.distinct, False)
+        cl.queryset.delete()
+        self.assertEqual(cl.queryset.count(), 0)
 
-    def test_distinct_for_inherited_m2m_in_list_filter(self):
+    def test_no_duplicates_for_inherited_m2m_in_list_filter(self):
         """
         Regression test for #13902: When using a ManyToMany in list_filter,
         results shouldn't appear more than once. Model managed in the
@@ -368,8 +393,12 @@ class ChangeListTests(TestCase):
 
         # There's only one Quartet instance
         self.assertEqual(cl.result_count, 1)
+        # Queryset must be deletable.
+        self.assertIs(cl.queryset.query.distinct, False)
+        cl.queryset.delete()
+        self.assertEqual(cl.queryset.count(), 0)
 
-    def test_distinct_for_m2m_to_inherited_in_list_filter(self):
+    def test_no_duplicates_for_m2m_to_inherited_in_list_filter(self):
         """
         Regression test for #13902: When using a ManyToMany in list_filter,
         results shouldn't appear more than once. Target of the relationship
@@ -389,11 +418,15 @@ class ChangeListTests(TestCase):
 
         # There's only one ChordsBand instance
         self.assertEqual(cl.result_count, 1)
+        # Queryset must be deletable.
+        self.assertIs(cl.queryset.query.distinct, False)
+        cl.queryset.delete()
+        self.assertEqual(cl.queryset.count(), 0)
 
-    def test_distinct_for_non_unique_related_object_in_list_filter(self):
+    def test_no_duplicates_for_non_unique_related_object_in_list_filter(self):
         """
-        Regressions tests for #15819: If a field listed in list_filters
-        is a non-unique related object, distinct() must be called.
+        Regressions tests for #15819: If a field listed in list_filters is a
+        non-unique related object, results shouldn't appear more than once.
         """
         parent = Parent.objects.create(name='Mary')
         # Two children with the same name
@@ -405,8 +438,12 @@ class ChangeListTests(TestCase):
         request.user = self.superuser
 
         cl = m.get_changelist_instance(request)
-        # Make sure distinct() was called
+        # Exists() is applied.
         self.assertEqual(cl.queryset.count(), 1)
+        # Queryset must be deletable.
+        self.assertIs(cl.queryset.query.distinct, False)
+        cl.queryset.delete()
+        self.assertEqual(cl.queryset.count(), 0)
 
     def test_changelist_search_form_validation(self):
         m = ConcertAdmin(Concert, custom_site)
@@ -424,10 +461,10 @@ class ChangeListTests(TestCase):
                 self.assertEqual(1, len(messages))
                 self.assertEqual(error, messages[0])
 
-    def test_distinct_for_non_unique_related_object_in_search_fields(self):
+    def test_no_duplicates_for_non_unique_related_object_in_search_fields(self):
         """
         Regressions tests for #15819: If a field listed in search_fields
-        is a non-unique related object, distinct() must be called.
+        is a non-unique related object, Exists() must be applied.
         """
         parent = Parent.objects.create(name='Mary')
         Child.objects.create(parent=parent, name='Danielle')
@@ -438,13 +475,17 @@ class ChangeListTests(TestCase):
         request.user = self.superuser
 
         cl = m.get_changelist_instance(request)
-        # Make sure distinct() was called
+        # Exists() is applied.
         self.assertEqual(cl.queryset.count(), 1)
+        # Queryset must be deletable.
+        self.assertIs(cl.queryset.query.distinct, False)
+        cl.queryset.delete()
+        self.assertEqual(cl.queryset.count(), 0)
 
-    def test_distinct_for_many_to_many_at_second_level_in_search_fields(self):
+    def test_no_duplicates_for_many_to_many_at_second_level_in_search_fields(self):
         """
         When using a ManyToMany in search_fields at the second level behind a
-        ForeignKey, distinct() must be called and results shouldn't appear more
+        ForeignKey, Exists() must be applied and results shouldn't appear more
         than once.
         """
         lead = Musician.objects.create(name='Vox')
@@ -460,6 +501,10 @@ class ChangeListTests(TestCase):
         cl = m.get_changelist_instance(request)
         # There's only one Concert instance
         self.assertEqual(cl.queryset.count(), 1)
+        # Queryset must be deletable.
+        self.assertIs(cl.queryset.query.distinct, False)
+        cl.queryset.delete()
+        self.assertEqual(cl.queryset.count(), 0)
 
     def test_pk_in_search_fields(self):
         band = Group.objects.create(name='The Hype')
@@ -552,23 +597,23 @@ class ChangeListTests(TestCase):
         cl = m.get_changelist_instance(request)
         self.assertCountEqual(cl.queryset, [abcd])
 
-    def test_no_distinct_for_m2m_in_list_filter_without_params(self):
+    def test_no_exists_for_m2m_in_list_filter_without_params(self):
         """
         If a ManyToManyField is in list_filter but isn't in any lookup params,
-        the changelist's query shouldn't have distinct.
+        the changelist's query shouldn't have Exists().
         """
         m = BandAdmin(Band, custom_site)
         for lookup_params in ({}, {'name': 'test'}):
             request = self.factory.get('/band/', lookup_params)
             request.user = self.superuser
             cl = m.get_changelist_instance(request)
-            self.assertFalse(cl.queryset.query.distinct)
+            self.assertNotIn(' EXISTS', str(cl.queryset.query))
 
-        # A ManyToManyField in params does have distinct applied.
+        # A ManyToManyField in params does have Exists() applied.
         request = self.factory.get('/band/', {'genres': '0'})
         request.user = self.superuser
         cl = m.get_changelist_instance(request)
-        self.assertTrue(cl.queryset.query.distinct)
+        self.assertIn(' EXISTS', str(cl.queryset.query))
 
     def test_pagination(self):
         """
@@ -576,7 +621,7 @@ class ChangeListTests(TestCase):
         use queryset set by modeladmin.
         """
         parent = Parent.objects.create(name='anything')
-        for i in range(30):
+        for i in range(1, 31):
             Child.objects.create(name='name %s' % i, parent=parent)
             Child.objects.create(name='filtered %s' % i, parent=parent)
 
@@ -652,7 +697,7 @@ class ChangeListTests(TestCase):
 
     def test_show_all(self):
         parent = Parent.objects.create(name='anything')
-        for i in range(30):
+        for i in range(1, 31):
             Child.objects.create(name='name %s' % i, parent=parent)
             Child.objects.create(name='filtered %s' % i, parent=parent)
 
@@ -969,7 +1014,7 @@ class ChangeListTests(TestCase):
             custom_site.register(UnorderedObject, UnorderedObjectAdmin)
             model_admin = UnorderedObjectAdmin(UnorderedObject, custom_site)
             counter = 0 if ascending else 51
-            for page in range(0, 5):
+            for page in range(1, 6):
                 request = self._mocked_authenticated_request('/unorderedobject/?p=%s' % page, superuser)
                 response = model_admin.changelist_view(request)
                 for result in response.context_data['cl'].result_list:
@@ -1013,7 +1058,7 @@ class ChangeListTests(TestCase):
             custom_site.register(OrderedObject, OrderedObjectAdmin)
             model_admin = OrderedObjectAdmin(OrderedObject, custom_site)
             counter = 0 if ascending else 51
-            for page in range(0, 5):
+            for page in range(1, 6):
                 request = self._mocked_authenticated_request('/orderedobject/?p=%s' % page, superuser)
                 response = model_admin.changelist_view(request)
                 for result in response.context_data['cl'].result_list:
@@ -1242,26 +1287,32 @@ class ChangeListTests(TestCase):
         request = self.factory.get('/group/')
         request.user = self.superuser
         cl = m.get_changelist_instance(request)
-        per_page = cl.list_per_page = 10
+        cl.list_per_page = 10
 
-        for page_num, objects_count, expected_page_range in [
-            (0, per_page, []),
-            (0, per_page * 2, list(range(2))),
-            (5, per_page * 11, list(range(11))),
-            (5, per_page * 12, [0, 1, 2, 3, 4, 5, 6, 7, 8, '.', 10, 11]),
-            (6, per_page * 12, [0, 1, '.', 3, 4, 5, 6, 7, 8, 9, 10, 11]),
-            (6, per_page * 13, [0, 1, '.', 3, 4, 5, 6, 7, 8, 9, '.', 11, 12]),
+        ELLIPSIS = cl.paginator.ELLIPSIS
+        for number, pages, expected in [
+            (1, 1, []),
+            (1, 2, [1, 2]),
+            (6, 11, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+            (6, 12, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+            (6, 13, [1, 2, 3, 4, 5, 6, 7, 8, 9, ELLIPSIS, 12, 13]),
+            (7, 12, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+            (7, 13, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]),
+            (7, 14, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, ELLIPSIS, 13, 14]),
+            (8, 13, [1, 2, ELLIPSIS, 5, 6, 7, 8, 9, 10, 11, 12, 13]),
+            (8, 14, [1, 2, ELLIPSIS, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]),
+            (8, 15, [1, 2, ELLIPSIS, 5, 6, 7, 8, 9, 10, 11, ELLIPSIS, 14, 15]),
         ]:
-            # assuming we have exactly `objects_count` objects
-            Group.objects.all().delete()
-            for i in range(objects_count):
-                Group.objects.create(name='test band')
+            with self.subTest(number=number, pages=pages):
+                # assuming exactly `pages * cl.list_per_page` objects
+                Group.objects.all().delete()
+                for i in range(pages * cl.list_per_page):
+                    Group.objects.create(name='test band')
 
-            # setting page number and calculating page range
-            cl.page_num = page_num
-            cl.get_results(request)
-            real_page_range = pagination(cl)['page_range']
-            self.assertEqual(expected_page_range, list(real_page_range))
+                # setting page number and calculating page range
+                cl.page_num = number
+                cl.get_results(request)
+                self.assertEqual(list(pagination(cl)['page_range']), expected)
 
     def test_object_tools_displayed_no_add_permission(self):
         """
@@ -1374,6 +1425,28 @@ class SeleniumTests(AdminSeleniumTestCase):
         self.assertEqual(selection_indicator.text, "0 of 1 selected")
         self.assertIs(all_selector.get_property('checked'), False)
         self.assertEqual(row.get_attribute('class'), '')
+
+    def test_modifier_allows_multiple_section(self):
+        """
+        Selecting a row and then selecting another row whilst holding shift
+        should select all rows in-between.
+        """
+        from selenium.webdriver.common.action_chains import ActionChains
+        from selenium.webdriver.common.keys import Keys
+
+        Parent.objects.bulk_create([Parent(name='parent%d' % i) for i in range(5)])
+        self.admin_login(username='super', password='secret')
+        self.selenium.get(self.live_server_url + reverse('admin:admin_changelist_parent_changelist'))
+        checkboxes = self.selenium.find_elements_by_css_selector('tr input.action-select')
+        self.assertEqual(len(checkboxes), 5)
+        for c in checkboxes:
+            self.assertIs(c.get_property('checked'), False)
+        # Check first row. Hold-shift and check next-to-last row.
+        checkboxes[0].click()
+        ActionChains(self.selenium).key_down(Keys.SHIFT).click(checkboxes[-2]).key_up(Keys.SHIFT).perform()
+        for c in checkboxes[:-2]:
+            self.assertIs(c.get_property('checked'), True)
+        self.assertIs(checkboxes[-1].get_property('checked'), False)
 
     def test_select_all_across_pages(self):
         Parent.objects.bulk_create([Parent(name='parent%d' % i) for i in range(101)])

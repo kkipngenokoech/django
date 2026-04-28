@@ -11,13 +11,14 @@ from django.contrib.admin.options import (
     IS_POPUP_VAR, TO_FIELD_VAR, IncorrectLookupParameters,
 )
 from django.contrib.admin.utils import (
-    get_fields_from_path, lookup_needs_distinct, prepare_lookup_value, quote,
+    get_fields_from_path, lookup_spawns_duplicates, prepare_lookup_value,
+    quote,
 )
 from django.core.exceptions import (
     FieldDoesNotExist, ImproperlyConfigured, SuspiciousOperation,
 )
 from django.core.paginator import InvalidPage
-from django.db.models import F, Field, ManyToOneRel, OrderBy
+from django.db.models import Exists, F, Field, ManyToOneRel, OrderBy, OuterRef
 from django.db.models.expressions import Combinable
 from django.urls import reverse
 from django.utils.http import urlencode
@@ -77,9 +78,9 @@ class ChangeList:
                 messages.error(request, ', '.join(error))
         self.query = _search_form.cleaned_data.get(SEARCH_VAR) or ''
         try:
-            self.page_num = int(request.GET.get(PAGE_VAR, 0))
+            self.page_num = int(request.GET.get(PAGE_VAR, 1))
         except ValueError:
-            self.page_num = 0
+            self.page_num = 1
         self.show_all = ALL_VAR in request.GET
         self.is_popup = IS_POPUP_VAR in request.GET
         to_field = request.GET.get(TO_FIELD_VAR)
@@ -122,7 +123,7 @@ class ChangeList:
 
     def get_filters(self, request):
         lookup_params = self.get_filters_params()
-        use_distinct = False
+        may_have_duplicates = False
         has_active_filters = False
 
         for key, value in lookup_params.items():
@@ -154,10 +155,12 @@ class ChangeList:
                     self.model, self.model_admin, field_path=field_path,
                 )
                 # field_list_filter_class removes any lookup_params it
-                # processes. If that happened, check if distinct() is needed to
-                # remove duplicate results.
+                # processes. If that happened, check if duplicates should be
+                # removed.
                 if lookup_params_count > len(lookup_params):
-                    use_distinct = use_distinct or lookup_needs_distinct(self.lookup_opts, field_path)
+                    may_have_duplicates |= lookup_spawns_duplicates(
+                        self.lookup_opts, field_path,
+                    )
             if spec and spec.has_output():
                 filter_specs.append(spec)
                 if lookup_params_count > len(lookup_params):
@@ -198,14 +201,14 @@ class ChangeList:
         # have been removed from lookup_params, which now only contains other
         # parameters passed via the query string. We now loop through the
         # remaining parameters both to ensure that all the parameters are valid
-        # fields and to determine if at least one of them needs distinct(). If
+        # fields and to determine if at least one of them spawns duplicates. If
         # the lookup parameters aren't real fields, then bail out.
         try:
             for key, value in lookup_params.items():
                 lookup_params[key] = prepare_lookup_value(key, value)
-                use_distinct = use_distinct or lookup_needs_distinct(self.lookup_opts, key)
+                may_have_duplicates |= lookup_spawns_duplicates(self.lookup_opts, key)
             return (
-                filter_specs, bool(filter_specs), lookup_params, use_distinct,
+                filter_specs, bool(filter_specs), lookup_params, may_have_duplicates,
                 has_active_filters,
             )
         except FieldDoesNotExist as e:
@@ -247,7 +250,7 @@ class ChangeList:
             result_list = self.queryset._clone()
         else:
             try:
-                result_list = paginator.page(self.page_num + 1).object_list
+                result_list = paginator.page(self.page_num).object_list
             except InvalidPage:
                 raise IncorrectLookupParameters
 
@@ -445,7 +448,7 @@ class ChangeList:
             self.filter_specs,
             self.has_filters,
             remaining_lookup_params,
-            filters_use_distinct,
+            filters_may_have_duplicates,
             self.has_active_filters,
         ) = self.get_filters(request)
         # Then, we let every list filter modify the queryset to its liking.
@@ -472,15 +475,10 @@ class ChangeList:
             # ValueError, ValidationError, or ?.
             raise IncorrectLookupParameters(e)
 
-        if not qs.query.select_related:
-            qs = self.apply_select_related(qs)
-
-        # Set ordering.
-        ordering = self.get_ordering(request, qs)
-        qs = qs.order_by(*ordering)
-
         # Apply search results
-        qs, search_use_distinct = self.model_admin.get_search_results(request, qs, self.query)
+        qs, search_may_have_duplicates = self.model_admin.get_search_results(
+            request, qs, self.query,
+        )
 
         # Set query string for clearing all filters.
         self.clear_all_filters_qs = self.get_query_string(
@@ -488,10 +486,18 @@ class ChangeList:
             remove=self.get_filters_params(),
         )
         # Remove duplicates from results, if necessary
-        if filters_use_distinct | search_use_distinct:
-            return qs.distinct()
-        else:
-            return qs
+        if filters_may_have_duplicates | search_may_have_duplicates:
+            qs = qs.filter(pk=OuterRef('pk'))
+            qs = self.root_queryset.filter(Exists(qs))
+
+        # Set ordering.
+        ordering = self.get_ordering(request, qs)
+        qs = qs.order_by(*ordering)
+
+        if not qs.query.select_related:
+            qs = self.apply_select_related(qs)
+
+        return qs
 
     def apply_select_related(self, qs):
         if self.list_select_related is True:

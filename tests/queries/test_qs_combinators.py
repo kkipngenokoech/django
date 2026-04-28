@@ -3,8 +3,9 @@ import operator
 from django.db import DatabaseError, NotSupportedError, connection
 from django.db.models import Exists, F, IntegerField, OuterRef, Value
 from django.test import TestCase, skipIfDBFeature, skipUnlessDBFeature
+from django.test.utils import CaptureQueriesContext
 
-from .models import Number, ReservedName
+from .models import Celebrity, Number, ReservedName
 
 
 @skipUnlessDBFeature('supports_select_union')
@@ -50,6 +51,13 @@ class QuerySetSetOperationTests(TestCase):
         qs2 = Number.objects.all()
         self.assertEqual(len(list(qs1.union(qs2, all=True))), 20)
         self.assertEqual(len(list(qs1.union(qs2))), 10)
+
+    def test_union_none(self):
+        qs1 = Number.objects.filter(num__lte=1)
+        qs2 = Number.objects.filter(num__gte=8)
+        qs3 = qs1.union(qs2)
+        self.assertSequenceEqual(qs3.none(), [])
+        self.assertNumbersEqual(qs3, [0, 1, 8, 9], ordered=False)
 
     @skipUnlessDBFeature('supports_select_intersection')
     def test_intersection_with_empty_qs(self):
@@ -98,6 +106,11 @@ class QuerySetSetOperationTests(TestCase):
         self.assertEqual(len(qs2.union(qs1, qs1, all=True)), 20)
         self.assertEqual(len(qs2.union(qs2)), 0)
         self.assertEqual(len(qs3.union(qs3)), 0)
+
+    def test_empty_qs_union_with_ordered_qs(self):
+        qs1 = Number.objects.all().order_by('num')
+        qs2 = Number.objects.none().union(qs1).order_by('num')
+        self.assertEqual(list(qs1), list(qs2))
 
     def test_limits(self):
         qs1 = Number.objects.all()
@@ -199,6 +212,46 @@ class QuerySetSetOperationTests(TestCase):
             with self.subTest(qs=qs):
                 self.assertEqual(list(qs), expected_result)
 
+    def test_union_with_values_list_and_order_on_annotation(self):
+        qs1 = Number.objects.annotate(
+            annotation=Value(-1),
+            multiplier=F('annotation'),
+        ).filter(num__gte=6)
+        qs2 = Number.objects.annotate(
+            annotation=Value(2),
+            multiplier=F('annotation'),
+        ).filter(num__lte=5)
+        self.assertSequenceEqual(
+            qs1.union(qs2).order_by('annotation', 'num').values_list('num', flat=True),
+            [6, 7, 8, 9, 0, 1, 2, 3, 4, 5],
+        )
+        self.assertQuerysetEqual(
+            qs1.union(qs2).order_by(
+                F('annotation') * F('multiplier'),
+                'num',
+            ).values('num'),
+            [6, 7, 8, 9, 0, 1, 2, 3, 4, 5],
+            operator.itemgetter('num'),
+        )
+
+    def test_union_multiple_models_with_values_list_and_order(self):
+        reserved_name = ReservedName.objects.create(name='rn1', order=0)
+        qs1 = Celebrity.objects.all()
+        qs2 = ReservedName.objects.all()
+        self.assertSequenceEqual(
+            qs1.union(qs2).order_by('name').values_list('pk', flat=True),
+            [reserved_name.pk],
+        )
+
+    def test_union_multiple_models_with_values_list_and_order_by_extra_select(self):
+        reserved_name = ReservedName.objects.create(name='rn1', order=0)
+        qs1 = Celebrity.objects.extra(select={'extra_name': 'name'})
+        qs2 = ReservedName.objects.extra(select={'extra_name': 'name'})
+        self.assertSequenceEqual(
+            qs1.union(qs2).order_by('extra_name').values_list('pk', flat=True),
+            [reserved_name.pk],
+        )
+
     def test_count_union(self):
         qs1 = Number.objects.filter(num__lte=1).values('num')
         qs2 = Number.objects.filter(num__gte=2, num__lte=3).values('num')
@@ -220,6 +273,57 @@ class QuerySetSetOperationTests(TestCase):
         qs2 = Number.objects.filter(num__lte=5)
         self.assertEqual(qs1.intersection(qs2).count(), 1)
 
+    def test_exists_union(self):
+        qs1 = Number.objects.filter(num__gte=5)
+        qs2 = Number.objects.filter(num__lte=5)
+        with CaptureQueriesContext(connection) as context:
+            self.assertIs(qs1.union(qs2).exists(), True)
+        captured_queries = context.captured_queries
+        self.assertEqual(len(captured_queries), 1)
+        captured_sql = captured_queries[0]['sql']
+        self.assertNotIn(
+            connection.ops.quote_name(Number._meta.pk.column),
+            captured_sql,
+        )
+        self.assertEqual(
+            captured_sql.count(connection.ops.limit_offset_sql(None, 1)),
+            3 if connection.features.supports_slicing_ordering_in_compound else 1
+        )
+
+    def test_exists_union_empty_result(self):
+        qs = Number.objects.filter(pk__in=[])
+        self.assertIs(qs.union(qs).exists(), False)
+
+    @skipUnlessDBFeature('supports_select_intersection')
+    def test_exists_intersection(self):
+        qs1 = Number.objects.filter(num__gt=5)
+        qs2 = Number.objects.filter(num__lt=5)
+        self.assertIs(qs1.intersection(qs1).exists(), True)
+        self.assertIs(qs1.intersection(qs2).exists(), False)
+
+    @skipUnlessDBFeature('supports_select_difference')
+    def test_exists_difference(self):
+        qs1 = Number.objects.filter(num__gte=5)
+        qs2 = Number.objects.filter(num__gte=3)
+        self.assertIs(qs1.difference(qs2).exists(), False)
+        self.assertIs(qs2.difference(qs1).exists(), True)
+
+    def test_get_union(self):
+        qs = Number.objects.filter(num=2)
+        self.assertEqual(qs.union(qs).get().num, 2)
+
+    @skipUnlessDBFeature('supports_select_difference')
+    def test_get_difference(self):
+        qs1 = Number.objects.all()
+        qs2 = Number.objects.exclude(num=2)
+        self.assertEqual(qs1.difference(qs2).get().num, 2)
+
+    @skipUnlessDBFeature('supports_select_intersection')
+    def test_get_intersection(self):
+        qs1 = Number.objects.all()
+        qs2 = Number.objects.filter(num=2)
+        self.assertEqual(qs1.intersection(qs2).get().num, 2)
+
     @skipUnlessDBFeature('supports_slicing_ordering_in_compound')
     def test_ordering_subqueries(self):
         qs1 = Number.objects.order_by('num')[:2]
@@ -230,12 +334,15 @@ class QuerySetSetOperationTests(TestCase):
     def test_unsupported_ordering_slicing_raises_db_error(self):
         qs1 = Number.objects.all()
         qs2 = Number.objects.all()
+        qs3 = Number.objects.all()
         msg = 'LIMIT/OFFSET not allowed in subqueries of compound statements'
         with self.assertRaisesMessage(DatabaseError, msg):
             list(qs1.union(qs2[:10]))
         msg = 'ORDER BY not allowed in subqueries of compound statements'
         with self.assertRaisesMessage(DatabaseError, msg):
             list(qs1.order_by('id').union(qs2))
+        with self.assertRaisesMessage(DatabaseError, msg):
+            list(qs1.union(qs2).order_by('id').union(qs3))
 
     @skipIfDBFeature('supports_select_intersection')
     def test_unsupported_intersection_raises_db_error(self):
@@ -296,6 +403,7 @@ class QuerySetSetOperationTests(TestCase):
             combinators.append('intersection')
         for combinator in combinators:
             for operation in (
+                'alias',
                 'annotate',
                 'defer',
                 'delete',
@@ -314,3 +422,22 @@ class QuerySetSetOperationTests(TestCase):
                         msg % (operation, combinator),
                     ):
                         getattr(getattr(qs, combinator)(qs), operation)()
+            with self.assertRaisesMessage(
+                NotSupportedError,
+                msg % ('contains', combinator),
+            ):
+                obj = Number.objects.first()
+                getattr(qs, combinator)(qs).contains(obj)
+
+    def test_get_with_filters_unsupported_on_combined_qs(self):
+        qs = Number.objects.all()
+        msg = 'Calling QuerySet.get(...) with filters after %s() is not supported.'
+        combinators = ['union']
+        if connection.features.supports_select_difference:
+            combinators.append('difference')
+        if connection.features.supports_select_intersection:
+            combinators.append('intersection')
+        for combinator in combinators:
+            with self.subTest(combinator=combinator):
+                with self.assertRaisesMessage(NotSupportedError, msg % combinator):
+                    getattr(qs, combinator)(qs).get(num=2)
