@@ -8,9 +8,9 @@ import re
 from docutils import nodes
 from docutils.parsers.rst import Directive
 from docutils.statemachine import ViewList
-from sphinx import addnodes
+from sphinx import addnodes, version_info as sphinx_version
 from sphinx.builders.html import StandaloneHTMLBuilder
-from sphinx.directives import CodeBlock
+from sphinx.directives.code import CodeBlock
 from sphinx.domains.std import Cmdoption
 from sphinx.errors import ExtensionError
 from sphinx.util import logging
@@ -67,6 +67,7 @@ def setup(app):
     )
     app.add_directive('console', ConsoleDirective)
     app.connect('html-page-context', html_page_context_hook)
+    app.add_role('default-role-error', default_role_error)
     return {'parallel_read_safe': True}
 
 
@@ -114,11 +115,17 @@ class DjangoHTMLTranslator(HTMLTranslator):
     def visit_table(self, node):
         self.context.append(self.compact_p)
         self.compact_p = True
-        self._table_row_index = 0  # Needed by Sphinx
+        # Needed by Sphinx.
+        if sphinx_version >= (4, 3):
+            self._table_row_indices.append(0)
+        else:
+            self._table_row_index = 0
         self.body.append(self.starttag(node, 'table', CLASS='docutils'))
 
     def depart_table(self, node):
         self.compact_p = self.context.pop()
+        if sphinx_version >= (4, 3):
+            self._table_row_indices.pop()
         self.body.append('</table>\n')
 
     def visit_desc_parameterlist(self, node):
@@ -153,7 +160,7 @@ class DjangoHTMLTranslator(HTMLTranslator):
         if version_text:
             title = "%s%s" % (
                 version_text % node['version'],
-                ":" if node else "."
+                ":" if len(node) else "."
             )
             self.body.append('<span class="title">%s</span> ' % title)
 
@@ -254,10 +261,7 @@ def visit_console_html(self, node):
         self.body.append('<section class="c-content-win" id="c-content-%(id)s-win">\n' % {'id': uid})
         win_text = node['win_console_text']
         highlight_args = {'force': True}
-        if 'linenos' in node:
-            linenos = node['linenos']
-        else:
-            linenos = win_text.count('\n') >= self.highlightlinenothreshold - 1
+        linenos = node.get('linenos', False)
 
         def warner(msg):
             self.builder.warn(msg, (self.builder.current_docname, node.line))
@@ -282,7 +286,7 @@ class ConsoleDirective(CodeBlock):
     required_arguments = 0
     # The 'doscon' Pygments formatter needs a prompt like this. '>' alone
     # won't do it because then it simply paints the whole command line as a
-    # grey comment with no highlighting at all.
+    # gray comment with no highlighting at all.
     WIN_PROMPT = r'...\> '
 
     def run(self):
@@ -353,7 +357,7 @@ class ConsoleDirective(CodeBlock):
         if env.app.builder.name not in ('djangohtml', 'json'):
             return [lit_blk_obj]
 
-        lit_blk_obj['uid'] = '%s' % env.new_serialno('console')
+        lit_blk_obj['uid'] = str(env.new_serialno('console'))
         # Only add the tabbed UI if there is actually a Windows-specific
         # version of the CLI example.
         win_content = code_block_to_win(self.content)
@@ -374,3 +378,15 @@ def html_page_context_hook(app, pagename, templatename, context, doctree):
     # This way it's include only from HTML files rendered from reST files where
     # the ConsoleDirective is used.
     context['include_console_assets'] = getattr(doctree, '_console_directive_used_flag', False)
+
+
+def default_role_error(
+    name, rawtext, text, lineno, inliner, options=None, content=None
+):
+    msg = (
+        "Default role used (`single backticks`): %s. Did you mean to use two "
+        "backticks for ``code``, or miss an underscore for a `link`_ ?"
+        % rawtext
+    )
+    logger.warning(msg, location=(inliner.document.current_source, lineno))
+    return [nodes.Text(text)], []

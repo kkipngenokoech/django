@@ -1,10 +1,13 @@
 import os
 import sys
 import unittest
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
-from django.conf import ENVIRONMENT_VARIABLE, LazySettings, Settings, settings
+from django.conf import (
+    ENVIRONMENT_VARIABLE, USE_DEPRECATED_PYTZ_DEPRECATED_MSG, LazySettings,
+    Settings, settings,
+)
 from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpRequest
 from django.test import (
@@ -12,6 +15,8 @@ from django.test import (
     override_settings, signals,
 )
 from django.test.utils import requires_tz_support
+from django.urls import clear_script_prefix, set_script_prefix
+from django.utils.deprecation import RemovedInDjango50Warning
 
 
 @modify_settings(ITEMS={
@@ -246,19 +251,19 @@ class SettingsTests(SimpleTestCase):
         Allow deletion of a setting in an overridden settings set (#18824)
         """
         previous_i18n = settings.USE_I18N
-        previous_l10n = settings.USE_L10N
+        previous_tz = settings.USE_TZ
         with self.settings(USE_I18N=False):
             del settings.USE_I18N
             with self.assertRaises(AttributeError):
                 getattr(settings, 'USE_I18N')
             # Should also work for a non-overridden setting
-            del settings.USE_L10N
+            del settings.USE_TZ
             with self.assertRaises(AttributeError):
-                getattr(settings, 'USE_L10N')
+                getattr(settings, 'USE_TZ')
             self.assertNotIn('USE_I18N', dir(settings))
-            self.assertNotIn('USE_L10N', dir(settings))
+            self.assertNotIn('USE_TZ', dir(settings))
         self.assertEqual(settings.USE_I18N, previous_i18n)
-        self.assertEqual(settings.USE_L10N, previous_l10n)
+        self.assertEqual(settings.USE_TZ, previous_tz)
 
     def test_override_settings_nested(self):
         """
@@ -288,15 +293,11 @@ class SettingsTests(SimpleTestCase):
         with self.assertRaises(AttributeError):
             getattr(settings, 'TEST2')
 
+    @override_settings(SECRET_KEY='')
     def test_no_secret_key(self):
-        settings_module = ModuleType('fake_settings_module')
-        sys.modules['fake_settings_module'] = settings_module
         msg = 'The SECRET_KEY setting must not be empty.'
-        try:
-            with self.assertRaisesMessage(ImproperlyConfigured, msg):
-                Settings('fake_settings_module')
-        finally:
-            del sys.modules['fake_settings_module']
+        with self.assertRaisesMessage(ImproperlyConfigured, msg):
+            settings.SECRET_KEY
 
     def test_no_settings_module(self):
         msg = (
@@ -318,11 +319,52 @@ class SettingsTests(SimpleTestCase):
         with self.assertRaisesMessage(RuntimeError, 'Settings already configured.'):
             settings.configure()
 
+    def test_nonupper_settings_prohibited_in_configure(self):
+        s = LazySettings()
+        with self.assertRaisesMessage(TypeError, "Setting 'foo' must be uppercase."):
+            s.configure(foo='bar')
+
+    def test_nonupper_settings_ignored_in_default_settings(self):
+        s = LazySettings()
+        s.configure(SimpleNamespace(foo='bar'))
+        with self.assertRaises(AttributeError):
+            getattr(s, 'foo')
+
     @requires_tz_support
     @mock.patch('django.conf.global_settings.TIME_ZONE', 'test')
     def test_incorrect_timezone(self):
         with self.assertRaisesMessage(ValueError, 'Incorrect timezone setting: test'):
             settings._setup()
+
+    def test_use_tz_false_deprecation(self):
+        settings_module = ModuleType('fake_settings_module')
+        settings_module.SECRET_KEY = 'foo'
+        sys.modules['fake_settings_module'] = settings_module
+        msg = (
+            'The default value of USE_TZ will change from False to True in '
+            'Django 5.0. Set USE_TZ to False in your project settings if you '
+            'want to keep the current default behavior.'
+        )
+        try:
+            with self.assertRaisesMessage(RemovedInDjango50Warning, msg):
+                Settings('fake_settings_module')
+        finally:
+            del sys.modules['fake_settings_module']
+
+    def test_use_deprecated_pytz_deprecation(self):
+        settings_module = ModuleType('fake_settings_module')
+        settings_module.USE_DEPRECATED_PYTZ = True
+        settings_module.USE_TZ = True
+        sys.modules['fake_settings_module'] = settings_module
+        try:
+            with self.assertRaisesMessage(RemovedInDjango50Warning, USE_DEPRECATED_PYTZ_DEPRECATED_MSG):
+                Settings('fake_settings_module')
+        finally:
+            del sys.modules['fake_settings_module']
+
+        holder = LazySettings()
+        with self.assertRaisesMessage(RemovedInDjango50Warning, USE_DEPRECATED_PYTZ_DEPRECATED_MSG):
+            holder.configure(USE_DEPRECATED_PYTZ=True)
 
 
 class TestComplexSettingOverride(SimpleTestCase):
@@ -350,22 +392,34 @@ class SecureProxySslHeaderTest(SimpleTestCase):
         req = HttpRequest()
         self.assertIs(req.is_secure(), False)
 
-    @override_settings(SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTOCOL', 'https'))
+    @override_settings(SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTO', 'https'))
     def test_set_without_xheader(self):
         req = HttpRequest()
         self.assertIs(req.is_secure(), False)
 
-    @override_settings(SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTOCOL', 'https'))
+    @override_settings(SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTO', 'https'))
     def test_set_with_xheader_wrong(self):
         req = HttpRequest()
-        req.META['HTTP_X_FORWARDED_PROTOCOL'] = 'wrongvalue'
+        req.META['HTTP_X_FORWARDED_PROTO'] = 'wrongvalue'
         self.assertIs(req.is_secure(), False)
 
-    @override_settings(SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTOCOL', 'https'))
+    @override_settings(SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTO', 'https'))
     def test_set_with_xheader_right(self):
         req = HttpRequest()
-        req.META['HTTP_X_FORWARDED_PROTOCOL'] = 'https'
+        req.META['HTTP_X_FORWARDED_PROTO'] = 'https'
         self.assertIs(req.is_secure(), True)
+
+    @override_settings(SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTO', 'https'))
+    def test_xheader_preferred_to_underlying_request(self):
+        class ProxyRequest(HttpRequest):
+            def _get_scheme(self):
+                """Proxy always connecting via HTTPS"""
+                return 'https'
+
+        # Client connects via HTTP.
+        req = ProxyRequest()
+        req.META['HTTP_X_FORWARDED_PROTO'] = 'http'
+        self.assertIs(req.is_secure(), False)
 
 
 class IsOverriddenTest(SimpleTestCase):
@@ -378,6 +432,7 @@ class IsOverriddenTest(SimpleTestCase):
     def test_module(self):
         settings_module = ModuleType('fake_settings_module')
         settings_module.SECRET_KEY = 'foo'
+        settings_module.USE_TZ = False
         sys.modules['fake_settings_module'] = settings_module
         try:
             s = Settings('fake_settings_module')
@@ -418,12 +473,13 @@ class IsOverriddenTest(SimpleTestCase):
         self.assertEqual(repr(lazy_settings), expected)
 
 
-class TestListSettings(unittest.TestCase):
+class TestListSettings(SimpleTestCase):
     """
     Make sure settings that should be lists or tuples throw
     ImproperlyConfigured if they are set to a string instead of a list or tuple.
     """
     list_or_tuple_settings = (
+        'ALLOWED_HOSTS',
         "INSTALLED_APPS",
         "TEMPLATE_DIRS",
         "LOCALE_PATHS",
@@ -432,11 +488,12 @@ class TestListSettings(unittest.TestCase):
     def test_tuple_settings(self):
         settings_module = ModuleType('fake_settings_module')
         settings_module.SECRET_KEY = 'foo'
+        msg = 'The %s setting must be a list or a tuple.'
         for setting in self.list_or_tuple_settings:
             setattr(settings_module, setting, ('non_list_or_tuple_value'))
             sys.modules['fake_settings_module'] = settings_module
             try:
-                with self.assertRaises(ImproperlyConfigured):
+                with self.assertRaisesMessage(ImproperlyConfigured, msg % setting):
                     Settings('fake_settings_module')
             finally:
                 del sys.modules['fake_settings_module']
@@ -544,3 +601,53 @@ class OverrideSettingsIsolationOnExceptionTests(SimpleTestCase):
         signals.setting_changed.disconnect(self.receiver)
         # This call shouldn't raise any errors.
         decorated_function()
+
+
+class MediaURLStaticURLPrefixTest(SimpleTestCase):
+    def set_script_name(self, val):
+        clear_script_prefix()
+        if val is not None:
+            set_script_prefix(val)
+
+    def test_not_prefixed(self):
+        # Don't add SCRIPT_NAME prefix to absolute paths, URLs, or None.
+        tests = (
+            '/path/',
+            'http://myhost.com/path/',
+            'http://myhost/path/',
+            'https://myhost/path/',
+            None,
+        )
+        for setting in ('MEDIA_URL', 'STATIC_URL'):
+            for path in tests:
+                new_settings = {setting: path}
+                with self.settings(**new_settings):
+                    for script_name in ['/somesubpath', '/somesubpath/', '/', '', None]:
+                        with self.subTest(script_name=script_name, **new_settings):
+                            try:
+                                self.set_script_name(script_name)
+                                self.assertEqual(getattr(settings, setting), path)
+                            finally:
+                                clear_script_prefix()
+
+    def test_add_script_name_prefix(self):
+        tests = (
+            # Relative paths.
+            ('/somesubpath', 'path/', '/somesubpath/path/'),
+            ('/somesubpath/', 'path/', '/somesubpath/path/'),
+            ('/', 'path/', '/path/'),
+            # Invalid URLs.
+            ('/somesubpath/', 'htp://myhost.com/path/', '/somesubpath/htp://myhost.com/path/'),
+            # Blank settings.
+            ('/somesubpath/', '', '/somesubpath/'),
+        )
+        for setting in ('MEDIA_URL', 'STATIC_URL'):
+            for script_name, path, expected_path in tests:
+                new_settings = {setting: path}
+                with self.settings(**new_settings):
+                    with self.subTest(script_name=script_name, **new_settings):
+                        try:
+                            self.set_script_name(script_name)
+                            self.assertEqual(getattr(settings, setting), expected_path)
+                        finally:
+                            clear_script_prefix()

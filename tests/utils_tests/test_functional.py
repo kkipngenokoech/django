@@ -1,5 +1,9 @@
+from unittest import mock
+
 from django.test import SimpleTestCase
-from django.utils.functional import cached_property, lazy
+from django.test.utils import ignore_warnings
+from django.utils.deprecation import RemovedInDjango50Warning
+from django.utils.functional import cached_property, classproperty, lazy
 
 
 class FunctionalTests(SimpleTestCase):
@@ -95,11 +99,35 @@ class FunctionalTests(SimpleTestCase):
                 """Here is the docstring..."""
                 return 1, object()
 
-            other = cached_property(other_value, name='other')
+            other = cached_property(other_value)
 
         attrs = ['value', 'other', '__foo__']
         for attr in attrs:
             self.assertCachedPropertyWorks(attr, Class)
+
+    @ignore_warnings(category=RemovedInDjango50Warning)
+    def test_cached_property_name(self):
+        class Class:
+            def other_value(self):
+                """Here is the docstring..."""
+                return 1, object()
+
+            other = cached_property(other_value, name='other')
+            other2 = cached_property(other_value, name='different_name')
+
+        self.assertCachedPropertyWorks('other', Class)
+        # An explicit name is ignored.
+        obj = Class()
+        obj.other2
+        self.assertFalse(hasattr(obj, 'different_name'))
+
+    def test_cached_property_name_deprecation_warning(self):
+        def value(self):
+            return 1
+
+        msg = "The name argument is deprecated as it's unnecessary as of Python 3.6."
+        with self.assertWarnsMessage(RemovedInDjango50Warning, msg):
+            cached_property(value, name='other_name')
 
     def test_cached_property_auto_name(self):
         """
@@ -117,16 +145,10 @@ class FunctionalTests(SimpleTestCase):
                 return 1, object()
 
             other = cached_property(other_value)
-            other2 = cached_property(other_value, name='different_name')
 
         attrs = ['_Class__value', 'other']
         for attr in attrs:
             self.assertCachedPropertyWorks(attr, Class)
-
-        # An explicit name is ignored.
-        obj = Class()
-        obj.other2
-        self.assertFalse(hasattr(obj, 'different_name'))
 
     def test_cached_property_reuse_different_names(self):
         """Disallow this case because the decorated function wouldn't be cached."""
@@ -182,6 +204,11 @@ class FunctionalTests(SimpleTestCase):
         with self.assertRaisesMessage(TypeError, msg):
             Foo().cp
 
+    def test_lazy_add(self):
+        lazy_4 = lazy(lambda: 4, int)
+        lazy_5 = lazy(lambda: 5, int)
+        self.assertEqual(lazy_4() + lazy_5(), 9)
+
     def test_lazy_equality(self):
         """
         == and != work correctly for Promises.
@@ -207,3 +234,54 @@ class FunctionalTests(SimpleTestCase):
         original_object = b'J\xc3\xbcst a str\xc3\xadng'
         lazy_obj = lazy(lambda: original_object, bytes)
         self.assertEqual(repr(original_object), repr(lazy_obj()))
+
+    def test_lazy_class_preparation_caching(self):
+        # lazy() should prepare the proxy class only once i.e. the first time
+        # it's used.
+        lazified = lazy(lambda: 0, int)
+        __proxy__ = lazified().__class__
+        with mock.patch.object(__proxy__, '__prepare_class__') as mocked:
+            lazified()
+            mocked.assert_not_called()
+
+    def test_lazy_bytes_and_str_result_classes(self):
+        lazy_obj = lazy(lambda: 'test', str, bytes)
+        msg = 'Cannot call lazy() with both bytes and text return types.'
+        with self.assertRaisesMessage(ValueError, msg):
+            lazy_obj()
+
+    def test_classproperty_getter(self):
+        class Foo:
+            foo_attr = 123
+
+            def __init__(self):
+                self.foo_attr = 456
+
+            @classproperty
+            def foo(cls):
+                return cls.foo_attr
+
+        class Bar:
+            bar = classproperty()
+
+            @bar.getter
+            def bar(cls):
+                return 123
+
+        self.assertEqual(Foo.foo, 123)
+        self.assertEqual(Foo().foo, 123)
+        self.assertEqual(Bar.bar, 123)
+        self.assertEqual(Bar().bar, 123)
+
+    def test_classproperty_override_getter(self):
+        class Foo:
+            @classproperty
+            def foo(cls):
+                return 123
+
+            @foo.getter
+            def foo(cls):
+                return 456
+
+        self.assertEqual(Foo.foo, 456)
+        self.assertEqual(Foo().foo, 456)

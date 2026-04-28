@@ -1,4 +1,5 @@
 from django.template import RequestContext, TemplateSyntaxError
+from django.template.defaulttags import URLNode
 from django.test import RequestFactory, SimpleTestCase, override_settings
 from django.urls import NoReverseMatch, resolve
 
@@ -78,7 +79,7 @@ class UrlTagTests(SimpleTestCase):
     @setup({'url12': '{% url "client_action" id=client.id action="!$&\'()*+,;=~:@," %}'})
     def test_url12(self):
         output = self.engine.render_to_string('url12', {'client': {'id': 1}})
-        self.assertEqual(output, '/client/1/!$&amp;&#39;()*+,;=~:@,/')
+        self.assertEqual(output, '/client/1/!$&amp;&#x27;()*+,;=~:@,/')
 
     @setup({'url13': '{% url "client_action" id=client.id action=arg|join:"-" %}'})
     def test_url13(self):
@@ -271,3 +272,23 @@ class UrlTagTests(SimpleTestCase):
         context = RequestContext(request)
         output = template.render(context)
         self.assertEqual(output, '/ns2/named-client/42/')
+
+
+class URLNodeTest(SimpleTestCase):
+    def test_repr(self):
+        url_node = URLNode(view_name='named-view', args=[], kwargs={}, asvar=None)
+        self.assertEqual(
+            repr(url_node),
+            "<URLNode view_name='named-view' args=[] kwargs={} as=None>",
+        )
+        url_node = URLNode(
+            view_name='named-view',
+            args=[1, 2],
+            kwargs={'action': 'update'},
+            asvar='my_url',
+        )
+        self.assertEqual(
+            repr(url_node),
+            "<URLNode view_name='named-view' args=[1, 2] "
+            "kwargs={'action': 'update'} as='my_url'>",
+        )

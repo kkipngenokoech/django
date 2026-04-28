@@ -16,14 +16,27 @@ from pathlib import Path
 import django
 from django.conf import global_settings
 from django.core.exceptions import ImproperlyConfigured
-from django.utils.deprecation import RemovedInDjango31Warning
+from django.utils.deprecation import RemovedInDjango50Warning
 from django.utils.functional import LazyObject, empty
 
 ENVIRONMENT_VARIABLE = "DJANGO_SETTINGS_MODULE"
 
-FILE_CHARSET_DEPRECATED_MSG = (
-    'The FILE_CHARSET setting is deprecated. Starting with Django 3.1, all '
-    'files read from disk must be UTF-8 encoded.'
+# RemovedInDjango50Warning
+USE_DEPRECATED_PYTZ_DEPRECATED_MSG = (
+    'The USE_DEPRECATED_PYTZ setting, and support for pytz timezones is '
+    'deprecated in favor of the stdlib zoneinfo module. Please update your '
+    'code to use zoneinfo and remove the USE_DEPRECATED_PYTZ setting.'
+)
+
+USE_L10N_DEPRECATED_MSG = (
+    'The USE_L10N setting is deprecated. Starting with Django 5.0, localized '
+    'formatting of data will always be enabled. For example Django will '
+    'display numbers and dates using the format of the current locale.'
+)
+
+CSRF_COOKIE_MASKED_DEPRECATED_MSG = (
+    'The CSRF_COOKIE_MASKED transitional setting is deprecated. Support for '
+    'it will be removed in Django 5.0.'
 )
 
 
@@ -75,6 +88,14 @@ class LazySettings(LazyObject):
         if self._wrapped is empty:
             self._setup(name)
         val = getattr(self._wrapped, name)
+
+        # Special case some settings which require further modification.
+        # This is done here for performance reasons so the modified value is cached.
+        if name in {'MEDIA_URL', 'STATIC_URL'} and val is not None:
+            val = self._add_script_prefix(val)
+        elif name == 'SECRET_KEY' and not val:
+            raise ImproperlyConfigured("The SECRET_KEY setting must not be empty.")
+
         self.__dict__[name] = val
         return val
 
@@ -104,8 +125,24 @@ class LazySettings(LazyObject):
             raise RuntimeError('Settings already configured.')
         holder = UserSettingsHolder(default_settings)
         for name, value in options.items():
+            if not name.isupper():
+                raise TypeError('Setting %r must be uppercase.' % name)
             setattr(holder, name, value)
         self._wrapped = holder
+
+    @staticmethod
+    def _add_script_prefix(value):
+        """
+        Add SCRIPT_NAME prefix to relative paths.
+
+        Useful when the app is being served at a subpath and manually prefixing
+        subpath to STATIC_URL and MEDIA_URL in settings is inconvenient.
+        """
+        # Don't apply prefix to absolute paths and URLs.
+        if value.startswith(('http://', 'https://', '/')):
+            return value
+        from django.urls import get_script_prefix
+        return '%s%s' % (get_script_prefix(), value)
 
     @property
     def configured(self):
@@ -113,18 +150,25 @@ class LazySettings(LazyObject):
         return self._wrapped is not empty
 
     @property
-    def FILE_CHARSET(self):
+    def USE_L10N(self):
         stack = traceback.extract_stack()
         # Show a warning if the setting is used outside of Django.
         # Stack index: -1 this line, -2 the caller.
-        filename, _line_number, _function_name, _text = stack[-2]
+        filename, _, _, _ = stack[-2]
         if not filename.startswith(os.path.dirname(django.__file__)):
             warnings.warn(
-                FILE_CHARSET_DEPRECATED_MSG,
-                RemovedInDjango31Warning,
+                USE_L10N_DEPRECATED_MSG,
+                RemovedInDjango50Warning,
                 stacklevel=2,
             )
-        return self.__getattr__('FILE_CHARSET')
+        return self.__getattr__('USE_L10N')
+
+    # RemovedInDjango50Warning.
+    @property
+    def _USE_L10N_INTERNAL(self):
+        # Special hook to avoid checking a traceback in internal use on hot
+        # paths.
+        return self.__getattr__('USE_L10N')
 
 
 class Settings:
@@ -140,6 +184,7 @@ class Settings:
         mod = importlib.import_module(self.SETTINGS_MODULE)
 
         tuple_settings = (
+            'ALLOWED_HOSTS',
             "INSTALLED_APPS",
             "TEMPLATE_DIRS",
             "LOCALE_PATHS",
@@ -151,15 +196,23 @@ class Settings:
 
                 if (setting in tuple_settings and
                         not isinstance(setting_value, (list, tuple))):
-                    raise ImproperlyConfigured("The %s setting must be a list or a tuple. " % setting)
+                    raise ImproperlyConfigured("The %s setting must be a list or a tuple." % setting)
                 setattr(self, setting, setting_value)
                 self._explicit_settings.add(setting)
 
-        if not self.SECRET_KEY:
-            raise ImproperlyConfigured("The SECRET_KEY setting must not be empty.")
+        if self.USE_TZ is False and not self.is_overridden('USE_TZ'):
+            warnings.warn(
+                'The default value of USE_TZ will change from False to True '
+                'in Django 5.0. Set USE_TZ to False in your project settings '
+                'if you want to keep the current default behavior.',
+                category=RemovedInDjango50Warning,
+            )
 
-        if self.is_overridden('FILE_CHARSET'):
-            warnings.warn(FILE_CHARSET_DEPRECATED_MSG, RemovedInDjango31Warning)
+        if self.is_overridden('USE_DEPRECATED_PYTZ'):
+            warnings.warn(USE_DEPRECATED_PYTZ_DEPRECATED_MSG, RemovedInDjango50Warning)
+
+        if self.is_overridden('CSRF_COOKIE_MASKED'):
+            warnings.warn(CSRF_COOKIE_MASKED_DEPRECATED_MSG, RemovedInDjango50Warning)
 
         if hasattr(time, 'tzset') and self.TIME_ZONE:
             # When we can, attempt to validate the timezone. If we can't find
@@ -172,6 +225,9 @@ class Settings:
             # we don't do this unconditionally (breaks Windows).
             os.environ['TZ'] = self.TIME_ZONE
             time.tzset()
+
+        if self.is_overridden('USE_L10N'):
+            warnings.warn(USE_L10N_DEPRECATED_MSG, RemovedInDjango50Warning)
 
     def is_overridden(self, setting):
         return setting in self._explicit_settings
@@ -198,15 +254,19 @@ class UserSettingsHolder:
         self.default_settings = default_settings
 
     def __getattr__(self, name):
-        if name in self._deleted:
+        if not name.isupper() or name in self._deleted:
             raise AttributeError
         return getattr(self.default_settings, name)
 
     def __setattr__(self, name, value):
         self._deleted.discard(name)
-        if name == 'FILE_CHARSET':
-            warnings.warn(FILE_CHARSET_DEPRECATED_MSG, RemovedInDjango31Warning)
+        if name == 'USE_L10N':
+            warnings.warn(USE_L10N_DEPRECATED_MSG, RemovedInDjango50Warning)
+        if name == 'CSRF_COOKIE_MASKED':
+            warnings.warn(CSRF_COOKIE_MASKED_DEPRECATED_MSG, RemovedInDjango50Warning)
         super().__setattr__(name, value)
+        if name == 'USE_DEPRECATED_PYTZ':
+            warnings.warn(USE_DEPRECATED_PYTZ_DEPRECATED_MSG, RemovedInDjango50Warning)
 
     def __delattr__(self, name):
         self._deleted.add(name)

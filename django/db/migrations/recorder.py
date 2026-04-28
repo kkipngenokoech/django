@@ -1,7 +1,6 @@
 from django.apps.registry import Apps
-from django.db import models
-from django.db.utils import DatabaseError
-from django.utils.decorators import classproperty
+from django.db import DatabaseError, models, router
+from django.utils.functional import classproperty
 from django.utils.timezone import now
 
 from .exceptions import MigrationSchemaMissing
@@ -53,13 +52,18 @@ class MigrationRecorder:
 
     def has_table(self):
         """Return True if the django_migrations table exists."""
-        return self.Migration._meta.db_table in self.connection.introspection.table_names(self.connection.cursor())
+        with self.connection.cursor() as cursor:
+            tables = self.connection.introspection.table_names(cursor)
+        return self.Migration._meta.db_table in tables
 
     def ensure_schema(self):
         """Ensure the table exists and has the correct schema."""
         # If the table's there, that's fine - we've never changed its schema
         # in the codebase.
         if self.has_table():
+            return
+        # Check if migrations are allowed on this database
+        if not router.allow_migrate(self.connection.alias, self.Migration):
             return
         # Make the table
         try:
@@ -69,23 +73,30 @@ class MigrationRecorder:
             raise MigrationSchemaMissing("Unable to create the django_migrations table (%s)" % exc)
 
     def applied_migrations(self):
-        """Return a set of (app, name) of applied migrations."""
+        """
+        Return a dict mapping (app_name, migration_name) to Migration instances
+        for all applied migrations.
+        """
         if self.has_table():
-            return {tuple(x) for x in self.migration_qs.values_list('app', 'name')}
+            return {(migration.app, migration.name): migration for migration in self.migration_qs}
         else:
             # If the django_migrations table doesn't exist, then no migrations
             # are applied.
-            return set()
+            return {}
 
     def record_applied(self, app, name):
         """Record that a migration was applied."""
         self.ensure_schema()
-        self.migration_qs.create(app=app, name=name)
+        # Only record if migrations are allowed and table exists
+        if router.allow_migrate(self.connection.alias, self.Migration) and self.has_table():
+            self.migration_qs.create(app=app, name=name)
 
     def record_unapplied(self, app, name):
         """Record that a migration was unapplied."""
         self.ensure_schema()
-        self.migration_qs.filter(app=app, name=name).delete()
+        # Only record if migrations are allowed and table exists
+        if router.allow_migrate(self.connection.alias, self.Migration) and self.has_table():
+            self.migration_qs.filter(app=app, name=name).delete()
 
     def flush(self):
         """Delete all migration records. Useful for testing migrations."""

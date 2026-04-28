@@ -8,7 +8,7 @@ from django.conf import settings
 from django.core.exceptions import (
     FieldDoesNotExist, ImproperlyConfigured, ValidationError,
 )
-from django.utils.functional import lazy
+from django.utils.functional import cached_property, lazy
 from django.utils.html import format_html, format_html_join
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext as _, ngettext
@@ -34,7 +34,7 @@ def get_password_validators(validator_config):
 
 def validate_password(password, user=None, password_validators=None):
     """
-    Validate whether the password meets all validator requirements.
+    Validate that the password meets all validator requirements.
 
     If the password is valid, return ``None``.
     If the password is invalid, raise ValidationError with all error messages.
@@ -90,7 +90,7 @@ password_validators_help_text_html = lazy(_password_validators_help_text_html, s
 
 class MinimumLengthValidator:
     """
-    Validate whether the password is of a minimum length.
+    Validate that the password is of a minimum length.
     """
     def __init__(self, min_length=8):
         self.min_length = min_length
@@ -117,7 +117,7 @@ class MinimumLengthValidator:
 
 class UserAttributeSimilarityValidator:
     """
-    Validate whether the password is sufficiently different from the user's
+    Validate that the password is sufficiently different from the user's
     attributes.
 
     If no specific attributes are provided, look at a sensible list of
@@ -154,12 +154,12 @@ class UserAttributeSimilarityValidator:
                     )
 
     def get_help_text(self):
-        return _("Your password can't be too similar to your other personal information.")
+        return _('Your password can’t be too similar to your other personal information.')
 
 
 class CommonPasswordValidator:
     """
-    Validate whether the password is a common password.
+    Validate that the password is not a common password.
 
     The password is rejected if it occurs in a provided list of passwords,
     which may be gzipped. The list Django ships with contains 20000 common
@@ -167,17 +167,20 @@ class CommonPasswordValidator:
     https://gist.github.com/roycewilliams/281ce539915a947a23db17137d91aeb7
     The password list must be lowercased to match the comparison in validate().
     """
-    DEFAULT_PASSWORD_LIST_PATH = Path(__file__).resolve().parent / 'common-passwords.txt.gz'
+
+    @cached_property
+    def DEFAULT_PASSWORD_LIST_PATH(self):
+        return Path(__file__).resolve().parent / 'common-passwords.txt.gz'
 
     def __init__(self, password_list_path=DEFAULT_PASSWORD_LIST_PATH):
+        if password_list_path is CommonPasswordValidator.DEFAULT_PASSWORD_LIST_PATH:
+            password_list_path = self.DEFAULT_PASSWORD_LIST_PATH
         try:
-            with gzip.open(str(password_list_path)) as f:
-                common_passwords_lines = f.read().decode().splitlines()
+            with gzip.open(password_list_path, 'rt', encoding='utf-8') as f:
+                self.passwords = {x.strip() for x in f}
         except OSError:
-            with open(str(password_list_path)) as f:
-                common_passwords_lines = f.readlines()
-
-        self.passwords = {p.strip() for p in common_passwords_lines}
+            with open(password_list_path) as f:
+                self.passwords = {x.strip() for x in f}
 
     def validate(self, password, user=None):
         if password.lower().strip() in self.passwords:
@@ -187,12 +190,12 @@ class CommonPasswordValidator:
             )
 
     def get_help_text(self):
-        return _("Your password can't be a commonly used password.")
+        return _('Your password can’t be a commonly used password.')
 
 
 class NumericPasswordValidator:
     """
-    Validate whether the password is alphanumeric.
+    Validate that the password is not entirely numeric.
     """
     def validate(self, password, user=None):
         if password.isdigit():
@@ -202,4 +205,4 @@ class NumericPasswordValidator:
             )
 
     def get_help_text(self):
-        return _("Your password can't be entirely numeric.")
+        return _('Your password can’t be entirely numeric.')
