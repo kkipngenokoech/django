@@ -90,6 +90,10 @@ class SafeExceptionReporterFilter:
                 cleansed = self.cleansed_substitute
             elif isinstance(value, dict):
                 cleansed = {k: self.cleanse_setting(k, v) for k, v in value.items()}
+            elif isinstance(value, list):
+                cleansed = [self.cleanse_setting('', item) for item in value]
+            elif isinstance(value, tuple):
+                cleansed = tuple([self.cleanse_setting('', item) for item in value])
             else:
                 cleansed = value
         except TypeError:
@@ -104,21 +108,13 @@ class SafeExceptionReporterFilter:
     def get_safe_settings(self):
         """
         Return a dictionary of the settings module with values of sensitive
-        settings replaced with stars (*********).
+        settings replaced with the cleansed substitute.
         """
         settings_dict = {}
         for k in dir(settings):
             if k.isupper():
                 settings_dict[k] = self.cleanse_setting(k, getattr(settings, k))
         return settings_dict
-
-    def get_safe_request_meta(self, request):
-        """
-        Return a dictionary of request.META with sensitive values redacted.
-        """
-        if not hasattr(request, 'META'):
-            return {}
-        return {k: self.cleanse_setting(k, v) for k, v in request.META.items()}
 
     def is_active(self, request):
         """
@@ -146,7 +142,7 @@ class SafeExceptionReporterFilter:
     def get_post_parameters(self, request):
         """
         Replace the values of POST parameters marked as sensitive with
-        stars (*********).
+        stars (*).
         """
         if request is None:
             return {}
@@ -170,30 +166,30 @@ class SafeExceptionReporterFilter:
 
     def cleanse_special_types(self, request, value):
         try:
-            # If value is lazy or a complex object of another kind, this check
-            # might raise an exception. isinstance checks that lazy
-            # MultiValueDicts will have a return value.
-            is_multivalue_dict = isinstance(value, MultiValueDict)
+            # If value is lazy or a complex object, don't introspect it:
+            # return a string representation.
+            return force_str(value)
         except Exception as e:
-            return '{!r} while evaluating {!r}'.format(e, value)
-
-        if is_multivalue_dict:
-            # Cleanse MultiValueDicts (request.POST is the one we usually care about)
-            value = self.get_cleansed_multivaluedict(request, value)
-        return value
+            # Encoding error; show a generic message with the exception name.
+            # On Python 3, use the exception's repr() which displays the
+            # exception's module in addition to its class name.
+            exc_name = e.__class__.__module__ + '.' + e.__class__.__qualname__
+            return '<{exc_name}: {info}>'.format(exc_name=exc_name, info=force_str(e))
 
     def get_traceback_frame_variables(self, request, tb_frame):
         """
         Replace the values of variables marked as sensitive with
-        stars (*********).
+        stars (*).
         """
         # Loop through the frame's callers to see if the sensitive_variables
         # decorator was used.
         current_frame = tb_frame.f_back
         sensitive_variables = None
         while current_frame is not None:
-            if (current_frame.f_code.co_name == 'sensitive_variables_wrapper' and
-                    'sensitive_variables_wrapper' in current_frame.f_locals):
+            if (
+                current_frame.f_code.co_name == 'sensitive_variables_wrapper' and
+                'sensitive_variables_wrapper' in current_frame.f_locals
+            ):
                 # The sensitive_variables decorator was used, so we take note
                 # of the sensitive variables' names.
                 wrapper = current_frame.f_locals['sensitive_variables_wrapper']
@@ -205,7 +201,7 @@ class SafeExceptionReporterFilter:
         if self.is_active(request) and sensitive_variables:
             if sensitive_variables == '__ALL__':
                 # Cleanse all variables
-                for name in tb_frame.f_locals:
+                for name, value in tb_frame.f_locals.items():
                     cleansed[name] = self.cleansed_substitute
             else:
                 # Cleanse specified variables
@@ -219,7 +215,14 @@ class SafeExceptionReporterFilter:
             # Potentially cleanse the request and any MultiValueDicts if they
             # are one of the frame variables.
             for name, value in tb_frame.f_locals.items():
-                cleansed[name] = self.cleanse_special_types(request, value)
+                if isinstance(value, HttpRequest):
+                    # Show a nice dict representation of the request object.
+                    cleansed[name] = self.get_request_repr(value)
+                elif isinstance(value, MultiValueDict):
+                    # Show a nice dict representation of the MultiValueDict.
+                    cleansed[name] = self.get_cleansed_multivaluedict(request, value)
+                else:
+                    cleansed[name] = self.cleanse_special_types(request, value)
 
         if (tb_frame.f_code.co_name == 'sensitive_variables_wrapper' and
                 'sensitive_variables_wrapper' in tb_frame.f_locals):
@@ -232,9 +235,23 @@ class SafeExceptionReporterFilter:
 
         return cleansed.items()
 
+    def get_request_repr(self, request):
+        if request is None:
+            return repr(None)
+        else:
+            # Since this is called from _get_traceback_frames, we are adding a
+            # simplified and safe repr of the request object, since the actual
+            # __repr__ may not be safe to use, depending on the user's
+            # implementation.
+            method = request.META.get('REQUEST_METHOD', 'GET')
+            path = request.META.get('PATH_INFO', '/')
+            return "<%s '%s'>" % (method, path)
+
 
 class ExceptionReporter:
-    """Organize and coordinate reporting on exceptions."""
+    """
+    Organize and coordinate reporting on exceptions.
+    """
     def __init__(self, request, exc_type, exc_value, tb, is_email=False):
         self.request = request
         self.filter = get_exception_reporter_filter(self.request)
@@ -261,7 +278,7 @@ class ExceptionReporter:
                     v = pprint(v)
                     # Trim large blobs of data
                     if len(v) > 4096:
-                        v = '%s… <trimmed %d bytes string>' % (v[0:4096], len(v))
+                        v = '%s... <trimmed %d bytes string>' % (v[0:4096], len(v))
                     frame_vars.append((k, v))
                 frame['vars'] = frame_vars
             frames[i] = frame
@@ -293,7 +310,6 @@ class ExceptionReporter:
             'unicode_hint': unicode_hint,
             'frames': frames,
             'request': self.request,
-            'request_meta': self.filter.get_safe_request_meta(self.request),
             'user_str': user_str,
             'filtered_POST_items': list(self.filter.get_post_parameters(self.request).items()),
             'settings': self.filter.get_safe_settings(),
@@ -313,10 +329,8 @@ class ExceptionReporter:
         # Check whether exception info is available
         if self.exc_type:
             c['exception_type'] = self.exc_type.__name__
-        if self.exc_value:
             c['exception_value'] = str(self.exc_value)
-        if frames:
-            c['lastframe'] = frames[-1]
+            c['lastframe'] = frames[-1] if frames else None
         return c
 
     def get_traceback_html(self):
@@ -330,7 +344,7 @@ class ExceptionReporter:
         """Return plain text version of debug 500 HTTP error page."""
         with Path(CURRENT_DIR, 'templates', 'technical_500.txt').open(encoding='utf-8') as fh:
             t = DEBUG_ENGINE.from_string(fh.read())
-        c = Context(self.get_traceback_data(), autoescape=False, use_l10n=False)
+        c = Context(self.get_traceback_data(), use_l10n=False)
         return t.render(c)
 
     def _get_source(self, filename, loader, module_name):
@@ -371,7 +385,7 @@ class ExceptionReporter:
                 if match:
                     encoding = match.group(1).decode('ascii')
                     break
-            source = [str(sline, encoding, 'replace') for sline in source]
+            source = [force_str(sline, encoding, 'replace') for sline in source]
 
         lower_bound = max(0, lineno - context_lines)
         upper_bound = lineno + context_lines
@@ -381,6 +395,7 @@ class ExceptionReporter:
             context_line = source[lineno]
             post_context = source[lineno + 1:upper_bound]
         except IndexError:
+            # the file may have changed since it was loaded.
             return None, [], None, []
         return lower_bound, pre_context, context_line, post_context
 
@@ -409,12 +424,33 @@ class ExceptionReporter:
         exc_value = exceptions.pop()
         tb = self.tb if not exceptions else exc_value.__traceback__
 
+        while True:
+            frames.extend(self.get_exception_traceback_frames(exc_value, tb))
+            try:
+                exc_value = exceptions.pop()
+            except IndexError:
+                break
+            tb = exc_value.__traceback__
+        return frames
+
+    def get_exception_traceback_frames(self, exc_value, tb):
+        def _safe_string(s, encoding='utf-8', strings_only=False, errors='strict'):
+            if isinstance(s, str):
+                return s
+            if strings_only and isinstance(s, (type(None), int)):
+                return s
+            if isinstance(s, bytes):
+                return s.decode(encoding, errors)
+            return force_str(s, encoding, strings_only, errors)
+
+        frames = []
         while tb is not None:
             # Support for __traceback_hide__ which is used by a few libraries
             # to hide internal frames.
             if tb.tb_frame.f_locals.get('__traceback_hide__'):
                 tb = tb.tb_next
                 continue
+
             filename = tb.tb_frame.f_code.co_filename
             function = tb.tb_frame.f_code.co_name
             lineno = tb.tb_lineno - 1
@@ -443,14 +479,7 @@ class ExceptionReporter:
                 'post_context': post_context,
                 'pre_context_lineno': pre_context_lineno + 1,
             })
-
-            # If the traceback for current exception is consumed, try the
-            # other exception.
-            if not tb.tb_next and exceptions:
-                exc_value = exceptions.pop()
-                tb = exc_value.__traceback__
-            else:
-                tb = tb.tb_next
+            tb = tb.tb_next
 
         return frames
 
@@ -467,9 +496,8 @@ def technical_404_response(request, exception):
     except (IndexError, TypeError, KeyError):
         tried = []
     else:
-        if (not tried or (                  # empty URLconf
-            request.path == '/' and
-            len(tried) == 1 and             # default URLconf
+        if (not tried or (                  # empty
+            request.path == '/' and len(tried) == 1 and     # default URLconf
             len(tried[0]) == 1 and
             getattr(tried[0][0], 'app_name', '') == getattr(tried[0][0], 'namespace', '') == 'admin'
         )):
@@ -486,7 +514,6 @@ def technical_404_response(request, exception):
         pass
     else:
         obj = resolver_match.func
-
         if hasattr(obj, '__name__'):
             caller = obj.__name__
         elif hasattr(obj, '__class__') and hasattr(obj.__class__, '__name__'):
@@ -498,7 +525,7 @@ def technical_404_response(request, exception):
 
     with Path(CURRENT_DIR, 'templates', 'technical_404.html').open(encoding='utf-8') as fh:
         t = DEBUG_ENGINE.from_string(fh.read())
-    reporter_filter = get_default_exception_reporter_filter()
+    reporter_filter = get_exception_reporter_filter(request)
     c = Context({
         'urlconf': urlconf,
         'root_urlconf': settings.ROOT_URLCONF,
@@ -509,7 +536,7 @@ def technical_404_response(request, exception):
         'settings': reporter_filter.get_safe_settings(),
         'raising_view_name': caller,
     })
-    return HttpResponseNotFound(t.render(c), content_type='text/html')
+    return HttpResponse(t.render(c), content_type='text/html')
 
 
 def default_urlconf(request):
@@ -519,5 +546,4 @@ def default_urlconf(request):
     c = Context({
         'version': get_docs_version(),
     })
-
     return HttpResponse(t.render(c), content_type='text/html')
