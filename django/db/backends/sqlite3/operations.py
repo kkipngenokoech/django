@@ -56,7 +56,11 @@ class DatabaseOperations(BaseDatabaseOperations):
                             'aggregations on date/time fields in sqlite3 '
                             'since date/time is saved as text.'
                         )
-        if isinstance(expression, models.Aggregate) and len(expression.source_expressions) > 1:
+        if (
+            isinstance(expression, models.Aggregate) and
+            expression.distinct and
+            len(expression.source_expressions) > 1
+        ):
             raise NotSupportedError(
                 "SQLite doesn't support DISTINCT on aggregate functions "
                 "accepting multiple arguments."
@@ -308,6 +312,8 @@ class DatabaseOperations(BaseDatabaseOperations):
         # function that's registered in connect().
         if connector == '^':
             return 'POWER(%s)' % ','.join(sub_expressions)
+        elif connector == '#':
+            return 'BITXOR(%s)' % ','.join(sub_expressions)
         return super().combine_expression(connector, sub_expressions)
 
     def combine_duration_expression(self, connector, sub_expressions):
