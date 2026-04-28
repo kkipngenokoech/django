@@ -52,7 +52,11 @@ def get_internal_wsgi_application():
 
 def is_broken_pipe_error():
     exc_type, _, _ = sys.exc_info()
-    return issubclass(exc_type, BrokenPipeError)
+    return issubclass(exc_type, (
+        BrokenPipeError,
+        ConnectionAbortedError,
+        ConnectionResetError,
+    ))
 
 
 class WSGIServer(simple_server.WSGIServer):
@@ -101,6 +105,9 @@ class ServerHandler(simple_server.ServerHandler):
         # connection.
         if 'Content-Length' not in self.headers:
             self.headers['Connection'] = 'close'
+        # Persistent connections require threading server.
+        elif not isinstance(self.request_handler.server, socketserver.ThreadingMixIn):
+            self.headers['Connection'] = 'close'
         # Mark the connection for closing if it's set as such above or if the
         # application sent the header.
         if self.headers.get('Connection') == 'close':
@@ -109,11 +116,6 @@ class ServerHandler(simple_server.ServerHandler):
     def close(self):
         self.get_stdin()._read_limited()
         super().close()
-
-    def handle_error(self):
-        # Ignore broken pipe errors, otherwise pass on
-        if not is_broken_pipe_error():
-            super().handle_error()
 
 
 class WSGIRequestHandler(simple_server.WSGIRequestHandler):
