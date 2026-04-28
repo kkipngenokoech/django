@@ -51,6 +51,7 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     # Neither MySQL nor MariaDB support partial indexes.
     supports_partial_indexes = False
     supports_order_by_nulls_modifier = False
+    order_by_nulls_first = True
 
     @cached_property
     def _mysql_storage_engine(self):
@@ -68,6 +69,12 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     def can_introspect_foreign_keys(self):
         "Confirm support for introspected foreign keys"
         return self._mysql_storage_engine != 'MyISAM'
+
+    @cached_property
+    def can_return_columns_from_insert(self):
+        return self.connection.mysql_is_mariadb and self.connection.mysql_version >= (10, 5, 0)
+
+    can_return_rows_from_bulk_insert = property(operator.attrgetter('can_return_columns_from_insert'))
 
     @cached_property
     def has_zoneinfo_database(self):
@@ -118,11 +125,6 @@ class DatabaseFeatures(BaseDatabaseFeatures):
         return self.connection.mysql_version >= (8, 0, 1)
 
     @cached_property
-    def needs_explain_extended(self):
-        # EXTENDED is deprecated (and not required) in MySQL 5.7.
-        return not self.connection.mysql_is_mariadb and self.connection.mysql_version < (5, 7)
-
-    @cached_property
     def supports_explain_analyze(self):
         return self.connection.mysql_is_mariadb or self.connection.mysql_version >= (8, 0, 18)
 
@@ -153,3 +155,15 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     def supports_default_in_lead_lag(self):
         # To be added in https://jira.mariadb.org/browse/MDEV-12981.
         return not self.connection.mysql_is_mariadb
+
+    @cached_property
+    def supports_json_field(self):
+        if self.connection.mysql_is_mariadb:
+            return self.connection.mysql_version >= (10, 2, 7)
+        return self.connection.mysql_version >= (5, 7, 8)
+
+    @cached_property
+    def can_introspect_json_field(self):
+        if self.connection.mysql_is_mariadb:
+            return self.supports_json_field and self.can_introspect_check_constraints
+        return self.supports_json_field

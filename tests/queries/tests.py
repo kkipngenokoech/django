@@ -3,14 +3,17 @@ import pickle
 import sys
 import unittest
 from operator import attrgetter
+from threading import Lock
 
 from django.core.exceptions import EmptyResultSet, FieldError
 from django.db import DEFAULT_DB_ALIAS, connection
 from django.db.models import Count, Exists, F, OuterRef, Q
+from django.db.models.expressions import RawSQL
 from django.db.models.sql.constants import LOUTER
 from django.db.models.sql.where import NothingNode, WhereNode
 from django.test import SimpleTestCase, TestCase, skipUnlessDBFeature
-from django.test.utils import CaptureQueriesContext
+from django.test.utils import CaptureQueriesContext, ignore_warnings
+from django.utils.deprecation import RemovedInDjango40Warning
 
 from .models import (
     FK1, Annotation, Article, Author, BaseA, Book, CategoryItem,
@@ -609,13 +612,35 @@ class Queries1Tests(TestCase):
             ['datetime.datetime(2007, 12, 19, 0, 0)']
         )
 
+    @ignore_warnings(category=RemovedInDjango40Warning)
     def test_ticket7098(self):
-        # Make sure semi-deprecated ordering by related models syntax still
-        # works.
         self.assertSequenceEqual(
             Item.objects.values('note__note').order_by('queries_note.note', 'id'),
             [{'note__note': 'n2'}, {'note__note': 'n3'}, {'note__note': 'n3'}, {'note__note': 'n3'}]
         )
+
+    def test_order_by_rawsql(self):
+        self.assertSequenceEqual(
+            Item.objects.values('note__note').order_by(
+                RawSQL('queries_note.note', ()),
+                'id',
+            ),
+            [
+                {'note__note': 'n2'},
+                {'note__note': 'n3'},
+                {'note__note': 'n3'},
+                {'note__note': 'n3'},
+            ],
+        )
+
+    def test_order_by_raw_column_alias_warning(self):
+        msg = (
+            "Passing column raw column aliases to order_by() is deprecated. "
+            "Wrap 'queries_author.name' in a RawSQL expression before "
+            "passing it to order_by()."
+        )
+        with self.assertRaisesMessage(RemovedInDjango40Warning, msg):
+            Item.objects.values('creator__name').order_by('queries_author.name')
 
     def test_ticket7096(self):
         # Make sure exclude() with multiple conditions continues to work.
@@ -1937,7 +1962,8 @@ class Queries6Tests(TestCase):
 
 
 class RawQueriesTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         Note.objects.create(note='n1', misc='foo', id=1)
 
     def test_ticket14729(self):
@@ -1961,10 +1987,11 @@ class GeneratorExpressionTests(SimpleTestCase):
 
 
 class ComparisonTests(TestCase):
-    def setUp(self):
-        self.n1 = Note.objects.create(note='n1', misc='foo', id=1)
-        e1 = ExtraInfo.objects.create(info='e1', note=self.n1)
-        self.a2 = Author.objects.create(name='a2', num=2002, extra=e1)
+    @classmethod
+    def setUpTestData(cls):
+        cls.n1 = Note.objects.create(note='n1', misc='foo', id=1)
+        e1 = ExtraInfo.objects.create(info='e1', note=cls.n1)
+        cls.a2 = Author.objects.create(name='a2', num=2002, extra=e1)
 
     def test_ticket8597(self):
         # Regression tests for case-insensitive comparisons
@@ -2174,6 +2201,10 @@ class CloneTests(TestCase):
         n_list = Note.objects.all()
         # Evaluate the Note queryset, populating the query cache
         list(n_list)
+        # Make one of cached results unpickable.
+        n_list._result_cache[0].lock = Lock()
+        with self.assertRaises(TypeError):
+            pickle.dumps(n_list)
         # Use the note queryset in a query, and evaluate
         # that query in a way that involves cloning.
         self.assertEqual(ExtraInfo.objects.filter(note__in=n_list)[0].info, 'good')
@@ -3086,20 +3117,13 @@ class QuerySetExceptionTests(SimpleTestCase):
         with self.assertRaisesMessage(AttributeError, msg):
             list(qs)
 
-    def test_invalid_qs_list(self):
-        # Test for #19895 - second iteration over invalid queryset
-        # raises errors.
-        qs = Article.objects.order_by('invalid_column')
-        msg = "Cannot resolve keyword 'invalid_column' into field."
-        with self.assertRaisesMessage(FieldError, msg):
-            list(qs)
-        with self.assertRaisesMessage(FieldError, msg):
-            list(qs)
-
     def test_invalid_order_by(self):
-        msg = "Invalid order_by arguments: ['*']"
+        msg = (
+            "Cannot resolve keyword '*' into field. Choices are: created, id, "
+            "name"
+        )
         with self.assertRaisesMessage(FieldError, msg):
-            list(Article.objects.order_by('*'))
+            Article.objects.order_by('*')
 
     def test_invalid_queryset_model(self):
         msg = 'Cannot use QuerySet for "Article": Use a QuerySet for "ExtraInfo".'
