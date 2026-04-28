@@ -12,6 +12,7 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     has_real_datatype = True
     has_native_uuid_field = True
     has_native_duration_field = True
+    has_native_json_field = True
     can_defer_constraint_checks = True
     has_select_for_update = True
     has_select_for_update_nowait = True
@@ -56,6 +57,7 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     supports_aggregate_filter_clause = True
     supported_explain_formats = {'JSON', 'TEXT', 'XML', 'YAML'}
     validates_explain_options = False  # A query will error on invalid options.
+    supports_deferrable_unique_constraints = True
 
     @cached_property
     def is_postgresql_9_6(self):
