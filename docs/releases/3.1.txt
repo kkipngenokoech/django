@@ -59,7 +59,7 @@ Minor features
 :mod:`django.contrib.gis`
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* ...
+* :lookup:`relate` lookup is now supported on MariaDB.
 
 :mod:`django.contrib.messages`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -198,7 +198,9 @@ Templates
 Tests
 ~~~~~
 
-* ...
+* :class:`~django.test.SimpleTestCase` now implements the ``debug()`` method to
+  allow running a test without collecting the result and catching exceptions.
+  This can be used to support running tests under a debugger.
 
 URLs
 ~~~~
@@ -223,6 +225,12 @@ backends.
 
 * ``DatabaseOperations.fetch_returned_insert_columns()`` now requires an
   additional ``returning_params`` argument.
+
+Dropped support for MariaDB 10.1
+--------------------------------
+
+Upstream support for MariaDB 10.1 ends in October 2020. Django 3.1 supports
+MariaDB 10.2 and higher.
 
 Miscellaneous
 -------------

@@ -13,7 +13,8 @@ from django.db import NotSupportedError, connection
 from django.test import TestCase, skipUnlessDBFeature
 
 from ..utils import (
-    mysql, no_oracle, oracle, postgis, skipUnlessGISLookup, spatialite,
+    mariadb, mysql, no_oracle, oracle, postgis, skipUnlessGISLookup,
+    spatialite,
 )
 from .models import (
     City, Country, Feature, MinusOneSRID, NonConcreteModel, PennsylvaniaCity,
@@ -227,8 +228,7 @@ class GeoLookupTest(TestCase):
 
     def test_disjoint_lookup(self):
         "Testing the `disjoint` lookup type."
-        if (connection.vendor == 'mysql' and not connection.mysql_is_mariadb and
-                connection.mysql_version < (8, 0, 0)):
+        if mysql and not mariadb and connection.mysql_version < (8, 0, 0):
             raise unittest.SkipTest('MySQL < 8 gives different results.')
         ptown = City.objects.get(name='Pueblo')
         qs1 = City.objects.filter(point__disjoint=ptown.point)
@@ -450,7 +450,7 @@ class GeoLookupTest(TestCase):
                 qs.count()
 
         # Relate works differently for the different backends.
-        if postgis or spatialite:
+        if postgis or spatialite or mariadb:
             contains_mask = 'T*T***FF*'
             within_mask = 'T*F**F***'
             intersects_mask = 'T********'
@@ -461,7 +461,11 @@ class GeoLookupTest(TestCase):
             intersects_mask = 'overlapbdyintersect'
 
         # Testing contains relation mask.
-        self.assertEqual('Texas', Country.objects.get(mpoly__relate=(pnt1, contains_mask)).name)
+        if connection.features.supports_transform:
+            self.assertEqual(
+                Country.objects.get(mpoly__relate=(pnt1, contains_mask)).name,
+                'Texas',
+            )
         self.assertEqual('Texas', Country.objects.get(mpoly__relate=(pnt2, contains_mask)).name)
 
         # Testing within relation mask.
@@ -470,7 +474,11 @@ class GeoLookupTest(TestCase):
 
         # Testing intersection relation mask.
         if not oracle:
-            self.assertEqual('Texas', Country.objects.get(mpoly__relate=(pnt1, intersects_mask)).name)
+            if connection.features.supports_transform:
+                self.assertEqual(
+                    Country.objects.get(mpoly__relate=(pnt1, intersects_mask)).name,
+                    'Texas',
+                )
             self.assertEqual('Texas', Country.objects.get(mpoly__relate=(pnt2, intersects_mask)).name)
             self.assertEqual('Lawrence', City.objects.get(point__relate=(ks.poly, intersects_mask)).name)
 
