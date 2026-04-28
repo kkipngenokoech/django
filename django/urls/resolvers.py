@@ -356,6 +356,8 @@ class URLPattern:
             new_path, args, kwargs = match
             # Pass any extra_kwargs as **kwargs.
             kwargs.update(self.default_args)
+            # Filter out None values from kwargs to handle optional URL parameters
+            kwargs = {k: v for k, v in kwargs.items() if v is not None}
             return ResolverMatch(self.callback, args, kwargs, self.pattern.name, route=str(self.pattern))
 
     @cached_property
