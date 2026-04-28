@@ -1,21 +1,18 @@
-import asyncore
-import base64
 import mimetypes
 import os
 import shutil
-import smtpd
+import socket
 import sys
 import tempfile
-import threading
 from email import charset, message_from_binary_file, message_from_bytes
 from email.header import Header
 from email.mime.text import MIMEText
 from email.utils import parseaddr
 from io import StringIO
 from pathlib import Path
-from smtplib import SMTP, SMTPAuthenticationError, SMTPException
+from smtplib import SMTP, SMTPException
 from ssl import SSLError
-from unittest import mock
+from unittest import mock, skipUnless
 
 from django.core import mail
 from django.core.mail import (
@@ -27,6 +24,12 @@ from django.core.mail.message import BadHeaderError, sanitize_address
 from django.test import SimpleTestCase, override_settings
 from django.test.utils import requires_tz_support
 from django.utils.translation import gettext_lazy
+
+try:
+    from aiosmtpd.controller import Controller
+    HAS_AIOSMTPD = True
+except ImportError:
+    HAS_AIOSMTPD = False
 
 
 class HeadersCheckMixin:
@@ -188,14 +191,22 @@ class MailTests(HeadersCheckMixin, SimpleTestCase):
             EmailMessage(reply_to='reply_to@example.com')
 
     def test_header_injection(self):
+        msg = "Header values can't contain newlines "
         email = EmailMessage('Subject\nInjection Test', 'Content', 'from@example.com', ['to@example.com'])
-        with self.assertRaises(BadHeaderError):
+        with self.assertRaisesMessage(BadHeaderError, msg):
             email.message()
         email = EmailMessage(
             gettext_lazy('Subject\nInjection Test'), 'Content', 'from@example.com', ['to@example.com']
         )
-        with self.assertRaises(BadHeaderError):
+        with self.assertRaisesMessage(BadHeaderError, msg):
             email.message()
+        with self.assertRaisesMessage(BadHeaderError, msg):
+            EmailMessage(
+                'Subject',
+                'Content',
+                'from@example.com',
+                ['Name\nInjection test <to@example.com>'],
+            ).message()
 
     def test_space_continuation(self):
         """
@@ -521,6 +532,24 @@ class MailTests(HeadersCheckMixin, SimpleTestCase):
         self.assertEqual(content, b'\xff')
         self.assertEqual(mimetype, 'application/octet-stream')
 
+    def test_attach_mimetext_content_mimetype(self):
+        email_msg = EmailMessage()
+        txt = MIMEText('content')
+        msg = (
+            'content and mimetype must not be given when a MIMEBase instance '
+            'is provided.'
+        )
+        with self.assertRaisesMessage(ValueError, msg):
+            email_msg.attach(txt, content='content')
+        with self.assertRaisesMessage(ValueError, msg):
+            email_msg.attach(txt, mimetype='text/plain')
+
+    def test_attach_content_none(self):
+        email_msg = EmailMessage()
+        msg = 'content must be provided.'
+        with self.assertRaisesMessage(ValueError, msg):
+            email_msg.attach('file.txt', mimetype="application/pdf")
+
     def test_dummy_backend(self):
         """
         Make sure that dummy backends returns correct number of sent messages
@@ -730,14 +759,14 @@ class MailTests(HeadersCheckMixin, SimpleTestCase):
             (
                 ('A name', 'to@example.com'),
                 'utf-8',
-                '=?utf-8?q?A_name?= <to@example.com>',
+                'A name <to@example.com>',
             ),
             ('localpartonly', 'ascii', 'localpartonly'),
             # ASCII addresses with display names.
             ('A name <to@example.com>', 'ascii', 'A name <to@example.com>'),
-            ('A name <to@example.com>', 'utf-8', '=?utf-8?q?A_name?= <to@example.com>'),
+            ('A name <to@example.com>', 'utf-8', 'A name <to@example.com>'),
             ('"A name" <to@example.com>', 'ascii', 'A name <to@example.com>'),
-            ('"A name" <to@example.com>', 'utf-8', '=?utf-8?q?A_name?= <to@example.com>'),
+            ('"A name" <to@example.com>', 'utf-8', 'A name <to@example.com>'),
             # Unicode addresses (supported per RFC-6532).
             ('tó@example.com', 'utf-8', '=?utf-8?b?dMOz?=@example.com'),
             ('to@éxample.com', 'utf-8', 'to@xn--xample-9ua.com'),
@@ -756,20 +785,45 @@ class MailTests(HeadersCheckMixin, SimpleTestCase):
             (
                 'To Example <to@éxample.com>',
                 'utf-8',
-                '=?utf-8?q?To_Example?= <to@xn--xample-9ua.com>',
+                'To Example <to@xn--xample-9ua.com>',
             ),
             # Addresses with two @ signs.
             ('"to@other.com"@example.com', 'utf-8', r'"to@other.com"@example.com'),
             (
                 '"to@other.com" <to@example.com>',
                 'utf-8',
-                '=?utf-8?q?to=40other=2Ecom?= <to@example.com>',
+                '"to@other.com" <to@example.com>',
             ),
             (
                 ('To Example', 'to@other.com@example.com'),
                 'utf-8',
-                '=?utf-8?q?To_Example?= <"to@other.com"@example.com>',
+                'To Example <"to@other.com"@example.com>',
             ),
+            # Addresses with long unicode display names.
+            (
+                'Tó Example very long' * 4 + ' <to@example.com>',
+                'utf-8',
+                '=?utf-8?q?T=C3=B3_Example_very_longT=C3=B3_Example_very_longT'
+                '=C3=B3_Example_?=\n'
+                ' =?utf-8?q?very_longT=C3=B3_Example_very_long?= '
+                '<to@example.com>',
+            ),
+            (
+                ('Tó Example very long' * 4, 'to@example.com'),
+                'utf-8',
+                '=?utf-8?q?T=C3=B3_Example_very_longT=C3=B3_Example_very_longT'
+                '=C3=B3_Example_?=\n'
+                ' =?utf-8?q?very_longT=C3=B3_Example_very_long?= '
+                '<to@example.com>',
+            ),
+            # Address with long display name and unicode domain.
+            (
+                ('To Example very long' * 4, 'to@exampl€.com'),
+                'utf-8',
+                'To Example very longTo Example very longTo Example very longT'
+                'o Example very\n'
+                ' long <to@xn--exampl-nc1c.com>'
+            )
         ):
             with self.subTest(email_address=email_address, encoding=encoding):
                 self.assertEqual(sanitize_address(email_address, encoding), expected_result)
@@ -788,6 +842,27 @@ class MailTests(HeadersCheckMixin, SimpleTestCase):
             with self.subTest(email_address=email_address):
                 with self.assertRaises(ValueError):
                     sanitize_address(email_address, encoding='utf-8')
+
+    def test_sanitize_address_header_injection(self):
+        msg = 'Invalid address; address parts cannot contain newlines.'
+        tests = [
+            'Name\nInjection <to@example.com>',
+            ('Name\nInjection', 'to@xample.com'),
+            'Name <to\ninjection@example.com>',
+            ('Name', 'to\ninjection@example.com'),
+        ]
+        for email_address in tests:
+            with self.subTest(email_address=email_address):
+                with self.assertRaisesMessage(ValueError, msg):
+                    sanitize_address(email_address, encoding='utf-8')
+
+    def test_email_multi_alternatives_content_mimetype_none(self):
+        email_msg = EmailMultiAlternatives()
+        msg = 'Both content and mimetype must be provided.'
+        with self.assertRaisesMessage(ValueError, msg):
+            email_msg.attach_alternative(None, 'text/html')
+        with self.assertRaisesMessage(ValueError, msg):
+            email_msg.attach_alternative('<p>content</p>', None)
 
 
 @requires_tz_support
@@ -1265,136 +1340,78 @@ class ConsoleBackendTests(BaseEmailBackendTests, SimpleTestCase):
         self.assertIn(b'\nDate: ', message)
 
 
-class FakeSMTPChannel(smtpd.SMTPChannel):
-
-    def collect_incoming_data(self, data):
-        try:
-            smtpd.SMTPChannel.collect_incoming_data(self, data)
-        except UnicodeDecodeError:
-            # Ignore decode error in SSL/TLS connection tests as the test only
-            # cares whether the connection attempt was made.
-            pass
-
-    def smtp_AUTH(self, arg):
-        if arg == 'CRAM-MD5':
-            # This is only the first part of the login process. But it's enough
-            # for our tests.
-            challenge = base64.b64encode(b'somerandomstring13579')
-            self.push('334 %s' % challenge.decode())
-        else:
-            self.push('502 Error: login "%s" not implemented' % arg)
-
-
-class FakeSMTPServer(smtpd.SMTPServer, threading.Thread):
-    """
-    Asyncore SMTP server wrapped into a thread. Based on DummyFTPServer from:
-    http://svn.python.org/view/python/branches/py3k/Lib/test/test_ftplib.py?revision=86061&view=markup
-    """
-    channel_class = FakeSMTPChannel
-
+class SMTPHandler:
     def __init__(self, *args, **kwargs):
-        threading.Thread.__init__(self)
-        smtpd.SMTPServer.__init__(self, *args, decode_data=True, **kwargs)
-        self._sink = []
-        self.active = False
-        self.active_lock = threading.Lock()
-        self.sink_lock = threading.Lock()
+        self.mailbox = []
 
-    def process_message(self, peer, mailfrom, rcpttos, data):
-        data = data.encode()
-        m = message_from_bytes(data)
-        maddr = parseaddr(m.get('from'))[1]
+    async def handle_DATA(self, server, session, envelope):
+        data = envelope.content
+        mail_from = envelope.mail_from
 
-        if mailfrom != maddr:
-            # According to the spec, mailfrom does not necessarily match the
+        message = message_from_bytes(data.rstrip())
+        message_addr = parseaddr(message.get('from'))[1]
+        if mail_from != message_addr:
+            # According to the spec, mail_from does not necessarily match the
             # From header - this is the case where the local part isn't
             # encoded, so try to correct that.
-            lp, domain = mailfrom.split('@', 1)
+            lp, domain = mail_from.split('@', 1)
             lp = Header(lp, 'utf-8').encode()
-            mailfrom = '@'.join([lp, domain])
+            mail_from = '@'.join([lp, domain])
 
-        if mailfrom != maddr:
-            return "553 '%s' != '%s'" % (mailfrom, maddr)
-        with self.sink_lock:
-            self._sink.append(m)
+        if mail_from != message_addr:
+            return f"553 '{mail_from}' != '{message_addr}'"
+        self.mailbox.append(message)
+        return '250 OK'
 
-    def get_sink(self):
-        with self.sink_lock:
-            return self._sink[:]
-
-    def flush_sink(self):
-        with self.sink_lock:
-            self._sink[:] = []
-
-    def start(self):
-        assert not self.active
-        self.__flag = threading.Event()
-        threading.Thread.start(self)
-        self.__flag.wait()
-
-    def run(self):
-        self.active = True
-        self.__flag.set()
-        while self.active and asyncore.socket_map:
-            with self.active_lock:
-                asyncore.loop(timeout=0.1, count=1)
-        asyncore.close_all()
-
-    def stop(self):
-        if self.active:
-            self.active = False
-            self.join()
+    def flush_mailbox(self):
+        self.mailbox[:] = []
 
 
-class FakeAUTHSMTPConnection(SMTP):
-    """
-    A SMTP connection pretending support for the AUTH command. It does not, but
-    at least this can allow testing the first part of the AUTH process.
-    """
-
-    def ehlo(self, name=''):
-        response = SMTP.ehlo(self, name=name)
-        self.esmtp_features.update({
-            'auth': 'CRAM-MD5 PLAIN LOGIN',
-        })
-        return response
-
-
+@skipUnless(HAS_AIOSMTPD, 'No aiosmtpd library detected.')
 class SMTPBackendTestsBase(SimpleTestCase):
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.server = FakeSMTPServer(('127.0.0.1', 0), None)
+        # Find a free port.
+        with socket.socket() as s:
+            s.bind(('127.0.0.1', 0))
+            port = s.getsockname()[1]
+        cls.smtp_handler = SMTPHandler()
+        cls.smtp_controller = Controller(
+            cls.smtp_handler, hostname='127.0.0.1', port=port,
+        )
         cls._settings_override = override_settings(
-            EMAIL_HOST="127.0.0.1",
-            EMAIL_PORT=cls.server.socket.getsockname()[1])
+            EMAIL_HOST=cls.smtp_controller.hostname,
+            EMAIL_PORT=cls.smtp_controller.port,
+        )
         cls._settings_override.enable()
-        cls.server.start()
+        cls.addClassCleanup(cls._settings_override.disable)
+        cls.smtp_controller.start()
+        cls.addClassCleanup(cls.stop_smtp)
 
     @classmethod
-    def tearDownClass(cls):
-        cls._settings_override.disable()
-        cls.server.stop()
-        super().tearDownClass()
+    def stop_smtp(cls):
+        cls.smtp_controller.stop()
 
 
+@skipUnless(HAS_AIOSMTPD, 'No aiosmtpd library detected.')
 class SMTPBackendTests(BaseEmailBackendTests, SMTPBackendTestsBase):
     email_backend = 'django.core.mail.backends.smtp.EmailBackend'
 
     def setUp(self):
         super().setUp()
-        self.server.flush_sink()
+        self.smtp_handler.flush_mailbox()
 
     def tearDown(self):
-        self.server.flush_sink()
+        self.smtp_handler.flush_mailbox()
         super().tearDown()
 
     def flush_mailbox(self):
-        self.server.flush_sink()
+        self.smtp_handler.flush_mailbox()
 
     def get_mailbox_content(self):
-        return self.server.get_sink()
+        return self.smtp_handler.mailbox
 
     @override_settings(
         EMAIL_HOST_USER="not empty username",
@@ -1447,21 +1464,8 @@ class SMTPBackendTests(BaseEmailBackendTests, SMTPBackendTestsBase):
     def test_reopen_connection(self):
         backend = smtp.EmailBackend()
         # Simulate an already open connection.
-        backend.connection = True
+        backend.connection = mock.Mock(spec=object())
         self.assertIs(backend.open(), False)
-
-    def test_server_login(self):
-        """
-        Even if the Python SMTP server doesn't support authentication, the
-        login process starts and the appropriate exception is raised.
-        """
-        class CustomEmailBackend(smtp.EmailBackend):
-            connection_class = FakeAUTHSMTPConnection
-
-        backend = CustomEmailBackend(username='username', password='password')
-        with self.assertRaises(SMTPAuthenticationError):
-            with backend:
-                pass
 
     @override_settings(EMAIL_USE_TLS=True)
     def test_email_tls_use_settings(self):
@@ -1607,36 +1611,37 @@ class SMTPBackendTests(BaseEmailBackendTests, SMTPBackendTestsBase):
         backend = smtp.EmailBackend()
         # Simulate connection initialization success and a subsequent
         # connection exception.
-        backend.connection = True
+        backend.connection = mock.Mock(spec=object())
         backend.open = lambda: None
         email = EmailMessage('Subject', 'Content', 'from@example.com', ['to@example.com'])
         self.assertEqual(backend.send_messages([email]), 0)
 
     def test_send_messages_empty_list(self):
         backend = smtp.EmailBackend()
-        backend.connection = True
+        backend.connection = mock.Mock(spec=object())
         self.assertEqual(backend.send_messages([]), 0)
 
     def test_send_messages_zero_sent(self):
         """A message isn't sent if it doesn't have any recipients."""
         backend = smtp.EmailBackend()
-        backend.connection = True
+        backend.connection = mock.Mock(spec=object())
         email = EmailMessage('Subject', 'Content', 'from@example.com', to=[])
         sent = backend.send_messages([email])
         self.assertEqual(sent, 0)
 
 
+@skipUnless(HAS_AIOSMTPD, 'No aiosmtpd library detected.')
 class SMTPBackendStoppedServerTests(SMTPBackendTestsBase):
-    """
-    These tests require a separate class, because the FakeSMTPServer is shut
-    down in setUpClass(), and it cannot be restarted ("RuntimeError: threads
-    can only be started once").
-    """
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
         cls.backend = smtp.EmailBackend(username='', password='')
-        cls.server.stop()
+        cls.smtp_controller.stop()
+
+    @classmethod
+    def stop_smtp(cls):
+        # SMTP controller is stopped in setUpClass().
+        pass
 
     def test_server_stopped(self):
         """

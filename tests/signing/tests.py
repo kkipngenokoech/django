@@ -58,14 +58,6 @@ class TestSigner(SimpleTestCase):
         with self.assertRaisesMessage(InvalidAlgorithm, msg):
             signer.sign('hello')
 
-    def test_legacy_signature(self):
-        # RemovedInDjango40Warning: pre-Django 3.1 signatures won't be
-        # supported.
-        signer = signing.Signer()
-        sha1_sig = 'foo:l-EMM5FtewpcHMbKFeQodt3X9z8'
-        self.assertNotEqual(signer.sign('foo'), sha1_sig)
-        self.assertEqual(signer.unsign(sha1_sig), 'foo')
-
     def test_sign_unsign(self):
         "sign/unsign should be reversible"
         signer = signing.Signer('predictable-secret')
@@ -112,6 +104,22 @@ class TestSigner(SimpleTestCase):
         for transform in transforms:
             with self.assertRaises(signing.BadSignature):
                 signer.unsign(transform(signed_value))
+
+    def test_sign_unsign_object(self):
+        signer = signing.Signer('predictable-secret')
+        tests = [
+            ['a', 'list'],
+            'a string \u2019',
+            {'a': 'dictionary'},
+        ]
+        for obj in tests:
+            with self.subTest(obj=obj):
+                signed_obj = signer.sign_object(obj)
+                self.assertNotEqual(obj, signed_obj)
+                self.assertEqual(obj, signer.unsign_object(signed_obj))
+                signed_obj = signer.sign_object(obj, compress=True)
+                self.assertNotEqual(obj, signed_obj)
+                self.assertEqual(obj, signer.unsign_object(signed_obj))
 
     def test_dumps_loads(self):
         "dumps and loads be reversible for any JSON serializable object"
@@ -187,3 +195,10 @@ class TestTimestampSigner(SimpleTestCase):
             self.assertEqual(signer.unsign(ts, max_age=datetime.timedelta(seconds=11)), value)
             with self.assertRaises(signing.SignatureExpired):
                 signer.unsign(ts, max_age=10)
+
+
+class TestBase62(SimpleTestCase):
+    def test_base62(self):
+        tests = [-10 ** 10, 10 ** 10, 1620378259, *range(-100, 100)]
+        for i in tests:
+            self.assertEqual(i, signing.b62_decode(signing.b62_encode(i)))
