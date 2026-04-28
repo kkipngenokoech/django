@@ -18,6 +18,7 @@ from django.conf import settings
 from django.core.checks import Error, Warning
 from django.core.checks.urls import check_resolver
 from django.core.exceptions import ImproperlyConfigured, ViewDoesNotExist
+from django.http import Http404
 from django.utils.datastructures import MultiValueDict
 from django.utils.functional import cached_property
 from django.utils.http import RFC3986_SUBDELIMS, escape_leading_slashes
@@ -128,7 +129,7 @@ class CheckURLMixin:
             # Skip check as it can be useful to start a URL pattern with a slash
             # when APPEND_SLASH=False.
             return []
-        if regex_pattern.startswith(('/', '^/', '^\\/')) and not regex_pattern.endswith('/'):
+        if regex_pattern.startswith(('/', '^/', '^\/')) and not regex_pattern.endswith('/'):
             warning = Warning(
                 "Your URL pattern {} has a route beginning with a '/'. Remove this "
                 "slash as it is unnecessary. If this pattern is targeted in an "
@@ -265,6 +266,9 @@ class RoutePattern(CheckURLMixin):
                     kwargs[key] = converter.to_python(value)
                 except ValueError:
                     return None
+                except Http404:
+                    # Re-raise Http404 to allow it to be handled properly
+                    raise
             return path[match.end():], (), kwargs
         return None
 
@@ -522,68 +526,14 @@ class URLResolver:
             self._populate()
         return self._app_dict[language_code]
 
-    @staticmethod
-    def _join_route(route1, route2):
-        """Join two routes, without the starting ^ in the second route."""
-        if not route1:
-            return route2
-        if route2.startswith('^'):
-            route2 = route2[1:]
-        return route1 + route2
-
-    def _is_callback(self, name):
-        if not self._populated:
-            self._populate()
-        return name in self._callback_strs
-
-    def resolve(self, path):
-        path = str(path)  # path may be a reverse_lazy object
-        tried = []
-        match = self.pattern.match(path)
-        if match:
-            new_path, args, kwargs = match
-            for pattern in self.url_patterns:
-                try:
-                    sub_match = pattern.resolve(new_path)
-                except Resolver404 as e:
-                    sub_tried = e.args[0].get('tried')
-                    if sub_tried is not None:
-                        tried.extend([pattern] + t for t in sub_tried)
-                    else:
-                        tried.append([pattern])
-                else:
-                    if sub_match:
-                        # Merge captured arguments in match with submatch
-                        sub_match_dict = {**kwargs, **self.default_kwargs}
-                        # Update the sub_match_dict with the kwargs from the sub_match.
-                        sub_match_dict.update(sub_match.kwargs)
-                        # If there are *any* named groups, ignore all non-named groups.
-                        # Otherwise, pass all non-named arguments as positional arguments.
-                        sub_match_args = sub_match.args
-                        if not sub_match_dict:
-                            sub_match_args = args + sub_match.args
-                        current_route = '' if isinstance(pattern, URLPattern) else str(pattern.pattern)
-                        return ResolverMatch(
-                            sub_match.func,
-                            sub_match_args,
-                            sub_match_dict,
-                            sub_match.url_name,
-                            [self.app_name] + sub_match.app_names,
-                            [self.namespace] + sub_match.namespaces,
-                            self._join_route(current_route, sub_match.route),
-                        )
-                    tried.append([pattern])
-            raise Resolver404({'tried': tried, 'path': new_path})
-        raise Resolver404({'path': path})
-
-    @cached_property
+    @property
     def urlconf_module(self):
         if isinstance(self.urlconf_name, str):
             return import_module(self.urlconf_name)
         else:
             return self.urlconf_name
 
-    @cached_property
+    @property
     def url_patterns(self):
         # urlconf_module might be a valid set of patterns, so we default to it
         patterns = getattr(self.urlconf_module, "urlpatterns", self.urlconf_module)
@@ -597,6 +547,59 @@ class URLResolver:
             )
             raise ImproperlyConfigured(msg.format(name=self.urlconf_name)) from e
         return patterns
+
+    def resolve(self, path):
+        path = str(path)  # path may be a reverse_lazy object
+        tried = []
+        match = self.pattern.match(path)
+        if match:
+            new_path, args, kwargs = match
+            for pattern in self.url_patterns:
+                try:
+                    sub_match = pattern.resolve(new_path)
+                except Resolver404 as e:
+                    sub_tried = e.args[0].get('tried')
+                    if sub_tried is not None:
+                        tried.extend(sub_tried)
+                    else:
+                        tried.append([pattern])
+                else:
+                    if sub_match:
+                        # Merge captured arguments in match with submatch
+                        sub_match_dict = {**kwargs, **self.default_kwargs}
+                        # Update the sub_match_dict with the kwargs from the sub_match.
+                        sub_match_dict.update(sub_match.kwargs)
+                        # If there are *any* named groups, ignore all non-named groups.
+                        # Otherwise, pass all non-named arguments as positional arguments.
+                        args = (args + sub_match.args) if not sub_match_dict else ()
+                        current_route = '' if isinstance(pattern, URLPattern) else str(pattern.pattern)
+                        return ResolverMatch(
+                            sub_match.func,
+                            args,
+                            sub_match_dict,
+                            sub_match.url_name,
+                            [self.app_name] + sub_match.app_names,
+                            [self.namespace] + sub_match.namespaces,
+                            self._join_route(current_route, sub_match.route),
+                        )
+                    tried.append([pattern])
+            raise Resolver404({'tried': tried, 'path': new_path})
+        raise Resolver404({'path': path})
+
+    def _join_route(self, route1, route2):
+        """Join two routes, without the leading ^ in the second route."""
+        if not route1:
+            return route2
+        if route2.startswith('^'):
+            route2 = route2[1:]
+        return route1 + route2
+
+    @cached_property
+    def urlconf_name(self):
+        if isinstance(self.urlconf_name, str):
+            return self.urlconf_name
+        else:
+            return self.urlconf_name.__name__
 
     def resolve_error_handler(self, view_type):
         callback = getattr(self.urlconf_module, 'handler%s' % view_type, None)
@@ -618,7 +621,6 @@ class URLResolver:
             self._populate()
 
         possibilities = self.reverse_dict.getlist(lookup_view)
-
         for possibility, pattern, defaults, converters in possibilities:
             for result, params in possibility:
                 if args:
@@ -631,7 +633,7 @@ class URLResolver:
                     if any(kwargs.get(k, v) != v for k, v in defaults.items()):
                         continue
                     candidate_subs = kwargs
-                # Convert the candidate subs to text using Converter.to_url().
+                # Convert the candidate substitutions to text using Converter.to_url().
                 text_candidate_subs = {}
                 match = True
                 for k, v in candidate_subs.items():
@@ -651,7 +653,7 @@ class URLResolver:
                 # Then, if we have a match, redo the substitution with quoted
                 # arguments in order to return a properly encoded URL.
                 candidate_pat = _prefix.replace('%', '%%') + result
-                if re.search('^%s%s' % (re.escape(_prefix), pattern), candidate_pat % text_candidate_subs):
+                if re.search('^%s%s' % (re.escape(_prefix), pattern), candidate_pat % text_candidate_subs, re.MULTILINE):
                     # safe characters from `pchar` definition of RFC 3986
                     url = quote(candidate_pat % text_candidate_subs, safe=RFC3986_SUBDELIMS + '/~:@')
                     # Don't allow construction of scheme relative urls.
@@ -665,7 +667,7 @@ class URLResolver:
         else:
             lookup_view_s = lookup_view
 
-        patterns = [pattern for (_, pattern, _, _) in possibilities]
+        patterns = [pattern for (possibility, pattern, defaults, converters) in possibilities]
         if patterns:
             if args:
                 arg_msg = "arguments '%s'" % (args,)
@@ -679,7 +681,7 @@ class URLResolver:
             )
         else:
             msg = (
-                "Reverse for '%(view)s' not found. '%(view)s' is not "
-                "a valid view function or pattern name." % {'view': lookup_view_s}
+                "Reverse for '%s' not found. '%s' is not a valid view function or pattern name." %
+                (lookup_view_s, lookup_view_s)
             )
         raise NoReverseMatch(msg)
