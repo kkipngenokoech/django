@@ -8,12 +8,15 @@ class Tags:
     Built-in tags for internal checks.
     """
     admin = 'admin'
+    async_support = 'async_support'
     caches = 'caches'
     compatibility = 'compatibility'
     database = 'database'
     models = 'models'
     security = 'security'
     signals = 'signals'
+    sites = 'sites'
+    staticfiles = 'staticfiles'
     templates = 'templates'
     translation = 'translation'
     urls = 'urls'

@@ -221,7 +221,7 @@ class Field(RegisterLookupMixin):
         elif LOOKUP_SEP in self.name:
             return [
                 checks.Error(
-                    'Field names must not contain "%s".' % (LOOKUP_SEP,),
+                    'Field names must not contain "%s".' % LOOKUP_SEP,
                     obj=self,
                     id='fields.E002',
                 )
@@ -335,12 +335,15 @@ class Field(RegisterLookupMixin):
         else:
             return []
 
-    def _check_backend_specific_checks(self, **kwargs):
+    def _check_backend_specific_checks(self, databases=None, **kwargs):
+        if databases is None:
+            return []
         app_label = self.model._meta.app_label
-        for db in connections:
-            if router.allow_migrate(db, app_label, model_name=self.model._meta.model_name):
-                return connections[db].validation.check_field(self, **kwargs)
-        return []
+        errors = []
+        for alias in databases:
+            if router.allow_migrate(alias, app_label, model_name=self.model._meta.model_name):
+                errors.extend(connections[alias].validation.check_field(self, **kwargs))
+        return errors
 
     def _check_validators(self):
         errors = []
@@ -493,6 +496,8 @@ class Field(RegisterLookupMixin):
             path = path.replace("django.db.models.fields.related", "django.db.models")
         elif path.startswith("django.db.models.fields.files"):
             path = path.replace("django.db.models.fields.files", "django.db.models")
+        elif path.startswith('django.db.models.fields.json'):
+            path = path.replace('django.db.models.fields.json', 'django.db.models')
         elif path.startswith("django.db.models.fields.proxy"):
             path = path.replace("django.db.models.fields.proxy", "django.db.models")
         elif path.startswith("django.db.models.fields"):
@@ -511,16 +516,37 @@ class Field(RegisterLookupMixin):
     def __eq__(self, other):
         # Needed for @total_ordering
         if isinstance(other, Field):
-            return self.creation_counter == other.creation_counter
+            if self.creation_counter != other.creation_counter:
+                return False
+            # If creation_counters are equal, check if they belong to the same model
+            return getattr(self, 'model', None) == getattr(other, 'model', None)
         return NotImplemented
 
     def __lt__(self, other):
         # This is needed because bisect does not take a comparison function.
         if isinstance(other, Field):
-            return self.creation_counter < other.creation_counter
+            if self.creation_counter != other.creation_counter:
+                return self.creation_counter < other.creation_counter
+            # If creation_counters are equal, compare by model
+            self_model = getattr(self, 'model', None)
+            other_model = getattr(other, 'model', None)
+            if self_model is None and other_model is None:
+                return False
+            if self_model is None:
+                return True
+            if other_model is None:
+                return False
+            # Compare by model's full name for consistent ordering
+            self_model_name = f"{self_model._meta.app_label}.{self_model._meta.model_name}"
+            other_model_name = f"{other_model._meta.app_label}.{other_model._meta.model_name}"
+            return self_model_name < other_model_name
         return NotImplemented
 
     def __hash__(self):
+        model = getattr(self, 'model', None)
+        if model is not None:
+            model_key = (model._meta.app_label, model._meta.model_name)
+            return hash((self.creation_counter, model_key))
         return hash(self.creation_counter)
 
     def __deepcopy__(self, memodict):
@@ -1496,7 +1522,7 @@ class DecimalField(Field):
             return self.context.create_decimal_from_float(value)
         try:
             return decimal.Decimal(value)
-        except decimal.InvalidOperation:
+        except (decimal.InvalidOperation, TypeError, ValueError):
             raise exceptions.ValidationError(
                 self.error_messages['invalid'],
                 code='invalid',
@@ -1926,6 +1952,14 @@ class NullBooleanField(BooleanField):
         'invalid_nullable': _('“%(value)s” value must be either None, True or False.'),
     }
     description = _("Boolean (Either True, False or None)")
+    system_check_deprecated_details = {
+        'msg': (
+            'NullBooleanField is deprecated. Support for it (except in '
+            'historical migrations) will be removed in Django 4.0.'
+        ),
+        'hint': 'Use BooleanField(null=True) instead.',
+        'id': 'fields.W903',
+    }
 
     def __init__(self, *args, **kwargs):
         kwargs['null'] = True

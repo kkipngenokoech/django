@@ -86,6 +86,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         'BigIntegerField': 'bigint',
         'IPAddressField': 'inet',
         'GenericIPAddressField': 'inet',
+        'JSONField': 'jsonb',
         'NullBooleanField': 'boolean',
         'OneToOneField': 'integer',
         'PositiveBigIntegerField': 'bigint',
@@ -199,7 +200,10 @@ class DatabaseWrapper(BaseDatabaseWrapper):
             # Set the isolation level to the value from OPTIONS.
             if self.isolation_level != connection.isolation_level:
                 connection.set_session(isolation_level=self.isolation_level)
-
+        # Register dummy loads() to avoid a round trip from psycopg2's decode
+        # to json.dumps() to json.loads(), when using a custom decoder in
+        # JSONField.
+        psycopg2.extras.register_default_jsonb(conn_or_curs=connection, loads=lambda x: x)
         return connection
 
     def ensure_timezone(self):

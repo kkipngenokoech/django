@@ -4,11 +4,14 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.test import TestCase
+from django.test.utils import ignore_warnings
+from django.utils.deprecation import RemovedInDjango40Warning
 
 
 class MockedPasswordResetTokenGenerator(PasswordResetTokenGenerator):
     def __init__(self, now):
         self._now_val = now
+        super().__init__()
 
     def _now(self):
         return self._now_val
@@ -39,23 +42,24 @@ class TokenGeneratorTest(TestCase):
         # Uses a mocked version of PasswordResetTokenGenerator so we can change
         # the value of 'now'.
         user = User.objects.create_user('tokentestuser', 'test2@example.com', 'testpw')
-        p0 = PasswordResetTokenGenerator()
+        now = datetime.now()
+        p0 = MockedPasswordResetTokenGenerator(now)
         tk1 = p0.make_token(user)
         p1 = MockedPasswordResetTokenGenerator(
-            datetime.now() + timedelta(seconds=settings.PASSWORD_RESET_TIMEOUT)
+            now + timedelta(seconds=settings.PASSWORD_RESET_TIMEOUT)
         )
         self.assertIs(p1.check_token(user, tk1), True)
         p2 = MockedPasswordResetTokenGenerator(
-            datetime.now() + timedelta(seconds=(settings.PASSWORD_RESET_TIMEOUT + 1))
+            now + timedelta(seconds=(settings.PASSWORD_RESET_TIMEOUT + 1))
         )
         self.assertIs(p2.check_token(user, tk1), False)
         with self.settings(PASSWORD_RESET_TIMEOUT=60 * 60):
             p3 = MockedPasswordResetTokenGenerator(
-                datetime.now() + timedelta(seconds=settings.PASSWORD_RESET_TIMEOUT)
+                now + timedelta(seconds=settings.PASSWORD_RESET_TIMEOUT)
             )
             self.assertIs(p3.check_token(user, tk1), True)
             p4 = MockedPasswordResetTokenGenerator(
-                datetime.now() + timedelta(seconds=(settings.PASSWORD_RESET_TIMEOUT + 1))
+                now + timedelta(seconds=(settings.PASSWORD_RESET_TIMEOUT + 1))
             )
             self.assertIs(p4.check_token(user, tk1), False)
 
@@ -86,6 +90,15 @@ class TokenGeneratorTest(TestCase):
         # Tokens created with a different secret don't validate.
         self.assertIs(p0.check_token(user, tk1), False)
         self.assertIs(p1.check_token(user, tk0), False)
+
+    @ignore_warnings(category=RemovedInDjango40Warning)
+    def test_token_default_hashing_algorithm(self):
+        user = User.objects.create_user('tokentestuser', 'test2@example.com', 'testpw')
+        with self.settings(DEFAULT_HASHING_ALGORITHM='sha1'):
+            generator = PasswordResetTokenGenerator()
+            self.assertEqual(generator.algorithm, 'sha1')
+            token = generator.make_token(user)
+            self.assertIs(generator.check_token(user, token), True)
 
     def test_legacy_token_validation(self):
         # RemovedInDjango40Warning: pre-Django 3.1 tokens will be invalid.
