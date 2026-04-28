@@ -516,16 +516,34 @@ class Field(RegisterLookupMixin):
     def __eq__(self, other):
         # Needed for @total_ordering
         if isinstance(other, Field):
-            return self.creation_counter == other.creation_counter
+            return (
+                self.creation_counter == other.creation_counter and
+                self.model == other.model
+            )
         return NotImplemented
 
     def __lt__(self, other):
         # This is needed because bisect does not take a comparison function.
         if isinstance(other, Field):
-            return self.creation_counter < other.creation_counter
+            # Order by creation_counter first to preserve existing behavior,
+            # then by model to ensure consistent ordering for fields from different models
+            if self.creation_counter != other.creation_counter:
+                return self.creation_counter < other.creation_counter
+            # If creation_counters are equal, compare by model
+            if hasattr(self, 'model') and hasattr(other, 'model'):
+                if self.model != other.model:
+                    # Use model's full name for consistent ordering
+                    self_model_name = f"{self.model._meta.app_label}.{self.model._meta.model_name}"
+                    other_model_name = f"{other.model._meta.app_label}.{other.model._meta.model_name}"
+                    return self_model_name < other_model_name
+            return False  # If models are the same or not available, they're equal in ordering
         return NotImplemented
 
     def __hash__(self):
+        # Include model in hash calculation to ensure fields from different models
+        # have different hash values
+        if hasattr(self, 'model') and self.model is not None:
+            return hash((self.creation_counter, self.model))
         return hash(self.creation_counter)
 
     def __deepcopy__(self, memodict):
