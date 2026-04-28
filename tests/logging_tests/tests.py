@@ -6,7 +6,9 @@ from admin_scripts.tests import AdminScriptTestCase
 
 from django.conf import settings
 from django.core import mail
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import (
+    DisallowedHost, PermissionDenied, SuspiciousOperation,
+)
 from django.core.files.temp import NamedTemporaryFile
 from django.core.management import color
 from django.http.multipartparser import MultiPartParserError
@@ -16,28 +18,10 @@ from django.utils.log import (
     DEFAULT_LOGGING, AdminEmailHandler, CallbackFilter, RequireDebugFalse,
     RequireDebugTrue, ServerFormatter,
 )
+from django.views.debug import ExceptionReporter
 
 from . import views
 from .logconfig import MyEmailBackend
-
-# logging config prior to using filter with mail_admins
-OLD_LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'handlers': {
-        'mail_admins': {
-            'level': 'ERROR',
-            'class': 'django.utils.log.AdminEmailHandler'
-        }
-    },
-    'loggers': {
-        'django.request': {
-            'handlers': ['mail_admins'],
-            'level': 'ERROR',
-            'propagate': True,
-        },
-    }
-}
 
 
 class LoggingFiltersTest(SimpleTestCase):
@@ -71,13 +55,8 @@ class SetupDefaultLoggingMixin:
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls._logging = settings.LOGGING
         logging.config.dictConfig(DEFAULT_LOGGING)
-
-    @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-        logging.config.dictConfig(cls._logging)
+        cls.addClassCleanup(logging.config.dictConfig, settings.LOGGING)
 
 
 class DefaultLoggingTests(SetupDefaultLoggingMixin, LoggingCaptureMixin, SimpleTestCase):
@@ -228,8 +207,8 @@ class CallbackFilterTest(SimpleTestCase):
         f_false = CallbackFilter(lambda r: False)
         f_true = CallbackFilter(lambda r: True)
 
-        self.assertEqual(f_false.filter("record"), False)
-        self.assertEqual(f_true.filter("record"), True)
+        self.assertFalse(f_false.filter('record'))
+        self.assertTrue(f_true.filter('record'))
 
     def test_passes_on_record(self):
         collector = []
@@ -251,11 +230,10 @@ class AdminEmailHandlerTest(SimpleTestCase):
     def get_admin_email_handler(self, logger):
         # AdminEmailHandler does not get filtered out
         # even with DEBUG=True.
-        admin_email_handler = [
+        return [
             h for h in logger.handlers
             if h.__class__.__name__ == "AdminEmailHandler"
         ][0]
-        return admin_email_handler
 
     def test_fail_silently(self):
         admin_email_handler = self.get_admin_email_handler(self.logger)
@@ -432,6 +410,36 @@ class AdminEmailHandlerTest(SimpleTestCase):
         finally:
             admin_email_handler.include_html = old_include_html
 
+    def test_default_exception_reporter_class(self):
+        admin_email_handler = self.get_admin_email_handler(self.logger)
+        self.assertEqual(admin_email_handler.reporter_class, ExceptionReporter)
+
+    @override_settings(ADMINS=[('A.N.Admin', 'admin@example.com')])
+    def test_custom_exception_reporter_is_used(self):
+        record = self.logger.makeRecord('name', logging.ERROR, 'function', 'lno', 'message', None, None)
+        record.request = self.request_factory.get('/')
+        handler = AdminEmailHandler(reporter_class='logging_tests.logconfig.CustomExceptionReporter')
+        handler.emit(record)
+        self.assertEqual(len(mail.outbox), 1)
+        msg = mail.outbox[0]
+        self.assertEqual(msg.body, 'message\n\ncustom traceback text')
+
+    @override_settings(ADMINS=[('admin', 'admin@example.com')])
+    def test_emit_no_form_tag(self):
+        """HTML email doesn't contain forms."""
+        handler = AdminEmailHandler(include_html=True)
+        record = self.logger.makeRecord(
+            'name', logging.ERROR, 'function', 'lno', 'message', None, None,
+        )
+        handler.emit(record)
+        self.assertEqual(len(mail.outbox), 1)
+        msg = mail.outbox[0]
+        self.assertEqual(msg.subject, '[Django] ERROR: message')
+        self.assertEqual(len(msg.alternatives), 1)
+        body_html = str(msg.alternatives[0][0])
+        self.assertIn('<div id="traceback">', body_html)
+        self.assertNotIn('<form', body_html)
+
 
 class SettingsConfigTest(AdminScriptTestCase):
     """
@@ -469,13 +477,16 @@ class SetupConfigureLogging(SimpleTestCase):
     """
     Calling django.setup() initializes the logging configuration.
     """
-    @override_settings(
-        LOGGING_CONFIG='logging_tests.tests.dictConfig',
-        LOGGING=OLD_LOGGING,
-    )
     def test_configure_initializes_logging(self):
         from django import setup
-        setup()
+        try:
+            with override_settings(
+                LOGGING_CONFIG='logging_tests.tests.dictConfig',
+            ):
+                setup()
+        finally:
+            # Restore logging from settings.
+            setup()
         self.assertTrue(dictConfig.called)
 
 
@@ -489,6 +500,7 @@ class SecurityLoggerTest(LoggingAssertionMixin, SimpleTestCase):
             msg='dubious',
             status_code=400,
             logger='django.security.SuspiciousOperation',
+            exc_class=SuspiciousOperation,
         )
 
     def test_suspicious_operation_uses_sublogger(self):
@@ -498,6 +510,7 @@ class SecurityLoggerTest(LoggingAssertionMixin, SimpleTestCase):
             msg='dubious',
             status_code=400,
             logger='django.security.DisallowedHost',
+            exc_class=DisallowedHost,
         )
 
     @override_settings(
@@ -507,7 +520,7 @@ class SecurityLoggerTest(LoggingAssertionMixin, SimpleTestCase):
     def test_suspicious_email_admins(self):
         self.client.get('/suspicious/')
         self.assertEqual(len(mail.outbox), 1)
-        self.assertIn('Report at /suspicious/', mail.outbox[0].body)
+        self.assertIn('SuspiciousOperation at /suspicious/', mail.outbox[0].body)
 
 
 class SettingsCustomLoggingTest(AdminScriptTestCase):
@@ -591,4 +604,4 @@ class LogFormattersTests(SimpleTestCase):
 
         with patch_django_server_logger() as logger_output:
             logger.info(log_msg)
-            self.assertRegex(logger_output.getvalue(), r'^\[[-:,.\s\d]+\] %s' % log_msg)
+            self.assertRegex(logger_output.getvalue(), r'^\[[/:,\w\s\d]+\] %s\n' % log_msg)

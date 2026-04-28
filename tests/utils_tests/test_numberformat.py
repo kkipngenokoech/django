@@ -15,9 +15,8 @@ class TestNumberFormat(SimpleTestCase):
         self.assertEqual(nformat(1234, '.', grouping=2, thousand_sep=',', force_grouping=True), '12,34')
         self.assertEqual(nformat(-1234.33, '.', decimal_pos=1), '-1234.3')
         # The use_l10n parameter can force thousand grouping behavior.
-        with self.settings(USE_THOUSAND_SEPARATOR=True, USE_L10N=True):
+        with self.settings(USE_THOUSAND_SEPARATOR=True):
             self.assertEqual(nformat(1234, '.', grouping=3, thousand_sep=',', use_l10n=False), '1234')
-        with self.settings(USE_THOUSAND_SEPARATOR=True, USE_L10N=False):
             self.assertEqual(nformat(1234, '.', grouping=3, thousand_sep=',', use_l10n=True), '1,234')
 
     def test_format_string(self):
@@ -55,10 +54,30 @@ class TestNumberFormat(SimpleTestCase):
         self.assertEqual(nformat(-2 * int_max, '.'), most_max2.format('-'))
 
     def test_float_numbers(self):
-        # A float without a fractional part (3.) results in a ".0" when no
-        # deimal_pos is given. Contrast that with the Decimal('3.') case in
-        # test_decimal_numbers which doesn't return a fractional part.
-        self.assertEqual(nformat(3., '.'), '3.0')
+        tests = [
+            (9e-10, 10, '0.0000000009'),
+            (9e-19, 2, '0.00'),
+            (.00000000000099, 0, '0'),
+            (.00000000000099, 13, '0.0000000000009'),
+            (1e16, None, '10000000000000000'),
+            (1e16, 2, '10000000000000000.00'),
+            # A float without a fractional part (3.) results in a ".0" when no
+            # decimal_pos is given. Contrast that with the Decimal('3.') case
+            # in test_decimal_numbers which doesn't return a fractional part.
+            (3., None, '3.0'),
+        ]
+        for value, decimal_pos, expected_value in tests:
+            with self.subTest(value=value, decimal_pos=decimal_pos):
+                self.assertEqual(nformat(value, '.', decimal_pos), expected_value)
+        # Thousand grouping behavior.
+        self.assertEqual(
+            nformat(1e16, '.', thousand_sep=',', grouping=3, force_grouping=True),
+            '10,000,000,000,000,000',
+        )
+        self.assertEqual(
+            nformat(1e16, '.', decimal_pos=2, thousand_sep=',', grouping=3, force_grouping=True),
+            '10,000,000,000,000,000.00',
+        )
 
     def test_decimal_numbers(self):
         self.assertEqual(nformat(Decimal('1234'), '.'), '1234')
@@ -94,7 +113,7 @@ class TestNumberFormat(SimpleTestCase):
             ('1e-10', 8, '0.00000000'),
             ('1e-11', 8, '0.00000000'),
             ('1' + ('0' * 300), 3, '1.000e+300'),
-            ('0.{}1234'.format('0' * 299), 3, '1.234e-300'),
+            ('0.{}1234'.format('0' * 299), 3, '0.000'),
         ]
         for value, decimal_pos, expected_value in tests:
             with self.subTest(value=value):

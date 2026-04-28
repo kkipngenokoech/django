@@ -101,6 +101,7 @@ urlpatterns = [
     ),
     path('edit/author/<int:pk>/delete/', views.AuthorDelete.as_view()),
     path('edit/author/<int:pk>/delete/special/', views.SpecializedAuthorDelete.as_view()),
+    path('edit/author/<int:pk>/delete/form/', views.AuthorDeleteFormView.as_view()),
 
     # ArchiveIndexView
     path('dates/books/', views.BookArchive.as_view()),
@@ -186,6 +187,14 @@ urlpatterns = [
     path(
         'dates/books/<int:year>/week/<int:week>/unknown_week_format/',
         views.BookWeekArchive.as_view(week_format='%T'),
+    ),
+    path(
+        'dates/books/<int:year>/week/<int:week>/iso_format/',
+        views.BookWeekArchive.as_view(year_format='%G', week_format='%V'),
+    ),
+    path(
+        'dates/books/<int:year>/week/<int:week>/invalid_iso_week_year_format/',
+        views.BookWeekArchive.as_view(week_format='%V'),
     ),
     path('dates/booksignings/<int:year>/week/<int:week>/', views.BookSigningWeekArchive.as_view()),
 

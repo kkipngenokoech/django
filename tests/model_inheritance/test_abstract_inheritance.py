@@ -34,33 +34,97 @@ class AbstractInheritanceTests(SimpleTestCase):
         self.assertEqual(DerivedChild._meta.get_field('name').max_length, 50)
         self.assertEqual(DerivedGrandChild._meta.get_field('name').max_length, 50)
 
-    def test_multiple_parents_mro(self):
-        class AbstractBaseOne(models.Model):
-            class Meta:
-                abstract = True
+    def test_multiple_inheritance_allows_inherited_field(self):
+        """
+        Single layer multiple inheritance is as expected, deriving the
+        inherited field from the first base.
+        """
 
-        class AbstractBaseTwo(models.Model):
-            name = models.CharField(max_length=30)
-
-            class Meta:
-                abstract = True
-
-        class DescendantOne(AbstractBaseOne, AbstractBaseTwo):
-            class Meta:
-                abstract = True
-
-        class DescendantTwo(AbstractBaseOne, AbstractBaseTwo):
-            name = models.CharField(max_length=50)
+        class ParentA(models.Model):
+            name = models.CharField(max_length=255)
 
             class Meta:
                 abstract = True
 
-        class Derived(DescendantOne, DescendantTwo):
+        class ParentB(models.Model):
+            name = models.IntegerField()
+
+            class Meta:
+                abstract = True
+
+        class Child(ParentA, ParentB):
             pass
 
-        self.assertEqual(DescendantOne._meta.get_field('name').max_length, 30)
-        self.assertEqual(DescendantTwo._meta.get_field('name').max_length, 50)
-        self.assertEqual(Derived._meta.get_field('name').max_length, 50)
+        self.assertEqual(Child.check(), [])
+        inherited_field = Child._meta.get_field('name')
+        self.assertIsInstance(inherited_field, models.CharField)
+        self.assertEqual(inherited_field.max_length, 255)
+
+    def test_diamond_shaped_multiple_inheritance_is_depth_first(self):
+        """
+        In contrast to standard Python MRO, resolution of inherited fields is
+        strictly depth-first, rather than breadth-first in diamond-shaped cases.
+
+        This is because a copy of the parent field descriptor is placed onto
+        the model class in ModelBase.__new__(), rather than the attribute
+        lookup going via bases. (It only **looks** like inheritance.)
+
+        Here, Child inherits name from Root, rather than ParentB.
+        """
+
+        class Root(models.Model):
+            name = models.CharField(max_length=255)
+
+            class Meta:
+                abstract = True
+
+        class ParentA(Root):
+            class Meta:
+                abstract = True
+
+        class ParentB(Root):
+            name = models.IntegerField()
+
+            class Meta:
+                abstract = True
+
+        class Child(ParentA, ParentB):
+            pass
+
+        self.assertEqual(Child.check(), [])
+        inherited_field = Child._meta.get_field('name')
+        self.assertIsInstance(inherited_field, models.CharField)
+        self.assertEqual(inherited_field.max_length, 255)
+
+    def test_target_field_may_be_pushed_down(self):
+        """
+        Where the Child model needs to inherit a field from a different base
+        than that given by depth-first resolution, the target field can be
+        **pushed down** by being re-declared.
+        """
+
+        class Root(models.Model):
+            name = models.CharField(max_length=255)
+
+            class Meta:
+                abstract = True
+
+        class ParentA(Root):
+            class Meta:
+                abstract = True
+
+        class ParentB(Root):
+            name = models.IntegerField()
+
+            class Meta:
+                abstract = True
+
+        class Child(ParentA, ParentB):
+            name = models.IntegerField()
+
+        self.assertEqual(Child.check(), [])
+        inherited_field = Child._meta.get_field('name')
+        self.assertIsInstance(inherited_field, models.IntegerField)
 
     def test_multiple_inheritance_cannot_shadow_concrete_inherited_field(self):
         class ConcreteParent(models.Model):
@@ -228,19 +292,25 @@ class AbstractInheritanceTests(SimpleTestCase):
             Foo._meta.get_field('foo').check(),
             [
                 Error(
-                    "Reverse accessor for 'Foo.foo' clashes with field name 'Descendant.foo'.",
+                    "Reverse accessor 'Descendant.foo' for "
+                    "'model_inheritance.Foo.foo' clashes with field name "
+                    "'model_inheritance.Descendant.foo'.",
                     hint=(
-                        "Rename field 'Descendant.foo', or add/change a related_name "
-                        "argument to the definition for field 'Foo.foo'."
+                        "Rename field 'model_inheritance.Descendant.foo', or "
+                        "add/change a related_name argument to the definition "
+                        "for field 'model_inheritance.Foo.foo'."
                     ),
                     obj=Foo._meta.get_field('foo'),
                     id='fields.E302',
                 ),
                 Error(
-                    "Reverse query name for 'Foo.foo' clashes with field name 'Descendant.foo'.",
+                    "Reverse query name for 'model_inheritance.Foo.foo' "
+                    "clashes with field name "
+                    "'model_inheritance.Descendant.foo'.",
                     hint=(
-                        "Rename field 'Descendant.foo', or add/change a related_name "
-                        "argument to the definition for field 'Foo.foo'."
+                        "Rename field 'model_inheritance.Descendant.foo', or "
+                        "add/change a related_name argument to the definition "
+                        "for field 'model_inheritance.Foo.foo'."
                     ),
                     obj=Foo._meta.get_field('foo'),
                     id='fields.E303',
