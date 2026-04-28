@@ -39,10 +39,12 @@ Usage example::
 
     >>> from django.db.models import FloatField
     >>> from django.db.models.functions import Cast
-    >>> Value.objects.create(integer=4)
-    >>> value = Value.objects.annotate(as_float=Cast('integer', FloatField())).get()
-    >>> print(value.as_float)
-    4.0
+    >>> Author.objects.create(age=25, name='Margaret Smith')
+    >>> author = Author.objects.annotate(
+    ...    age_as_float=Cast('age', output_field=FloatField()),
+    ... ).get()
+    >>> print(author.age_as_float)
+    25.0
 
 ``Coalesce``
 ------------
@@ -57,7 +59,7 @@ will result in a database error.
 Usage examples::
 
     >>> # Get a screen name from least to most public
-    >>> from django.db.models import Sum, Value as V
+    >>> from django.db.models import Sum
     >>> from django.db.models.functions import Coalesce
     >>> Author.objects.create(name='Margaret Smith', goes_by='Maggie')
     >>> author = Author.objects.annotate(
@@ -66,13 +68,18 @@ Usage examples::
     Maggie
 
     >>> # Prevent an aggregate Sum() from returning None
+    >>> # The aggregate default argument uses Coalesce() under the hood.
     >>> aggregated = Author.objects.aggregate(
-    ...    combined_age=Coalesce(Sum('age'), V(0)),
-    ...    combined_age_default=Sum('age'))
+    ...    combined_age=Sum('age'),
+    ...    combined_age_default=Sum('age', default=0),
+    ...    combined_age_coalesce=Coalesce(Sum('age'), 0),
+    ... )
     >>> print(aggregated['combined_age'])
-    0
-    >>> print(aggregated['combined_age_default'])
     None
+    >>> print(aggregated['combined_age_default'])
+    0
+    >>> print(aggregated['combined_age_coalesce'])
+    0
 
 .. warning::
 
@@ -84,6 +91,23 @@ Usage examples::
     >>> from django.utils import timezone
     >>> now = timezone.now()
     >>> Coalesce('updated', Cast(now, DateTimeField()))
+
+``Collate``
+-----------
+
+.. class:: Collate(expression, collation)
+
+Takes an expression and a collation name to query against.
+
+For example, to filter case-insensitively in SQLite::
+
+    >>> Author.objects.filter(name=Collate(Value('john'), 'nocase'))
+    <QuerySet [<Author: John>, <Author: john>]>
+
+It can also be used when ordering, for example with PostgreSQL::
+
+    >>> Author.objects.order_by(Collate('name', 'et-x-icu'))
+    <QuerySet [<Author: Ursula>, <Author: Veronika>, <Author: Ülle>]>
 
 ``Greatest``
 ------------
@@ -126,6 +150,27 @@ and ``comment.modified``.
 
     The PostgreSQL behavior can be emulated using ``Coalesce`` if you know
     a sensible minimum value to provide as a default.
+
+``JSONObject``
+--------------
+
+.. class:: JSONObject(**fields)
+
+Takes a list of key-value pairs and returns a JSON object containing those
+pairs.
+
+Usage example::
+
+    >>> from django.db.models import F
+    >>> from django.db.models.functions import JSONObject, Lower
+    >>> Author.objects.create(name='Margaret Smith', alias='msmith', age=25)
+    >>> author = Author.objects.annotate(json_object=JSONObject(
+    ...     name=Lower('name'),
+    ...     alias='alias',
+    ...     age=F('age') * 2,
+    ... )).get()
+    >>> author.json_object
+    {'name': 'margaret smith', 'alias': 'msmith', 'age': 50}
 
 ``Least``
 ---------
@@ -193,7 +238,8 @@ Takes an ``expression`` representing a ``DateField``, ``DateTimeField``,
 of the date referenced by ``lookup_name`` as an ``IntegerField``.
 Django usually uses the databases' extract function, so you may use any
 ``lookup_name`` that your database supports. A ``tzinfo`` subclass, usually
-provided by ``pytz``, can be passed to extract a value in a specific timezone.
+provided by :mod:`zoneinfo`, can be passed to extract a value in a specific
+timezone.
 
 Given the datetime ``2015-06-15 23:30:01.000321+00:00``, the built-in
 ``lookup_name``\s return:
@@ -292,8 +338,6 @@ Usage example::
 
 .. class:: ExtractIsoWeekDay(expression, tzinfo=None, **extra)
 
-    .. versionadded:: 3.1
-
     Returns the ISO-8601 week day with day 1 being Monday and day 7 being
     Sunday.
 
@@ -314,8 +358,7 @@ as ``__(lookup_name)``, e.g. ``__year``.
 Since ``DateField``\s don't have a time component, only ``Extract`` subclasses
 that deal with date-parts can be used with ``DateField``::
 
-    >>> from datetime import datetime
-    >>> from django.utils import timezone
+    >>> from datetime import datetime, timezone
     >>> from django.db.models.functions import (
     ...     ExtractDay, ExtractMonth, ExtractQuarter, ExtractWeek,
     ...     ExtractIsoWeekDay, ExtractWeekDay, ExtractIsoYear, ExtractYear,
@@ -365,8 +408,7 @@ Each class is also a ``Transform`` registered on ``DateTimeField`` as
 
 ``DateTimeField`` examples::
 
-    >>> from datetime import datetime
-    >>> from django.utils import timezone
+    >>> from datetime import datetime, timezone
     >>> from django.db.models.functions import (
     ...     ExtractDay, ExtractHour, ExtractMinute, ExtractMonth,
     ...     ExtractQuarter, ExtractSecond, ExtractWeek, ExtractIsoWeekDay,
@@ -403,8 +445,9 @@ to that timezone before the value is extracted. The example below converts to
 the Melbourne timezone (UTC +10:00), which changes the day, weekday, and hour
 values that are returned::
 
-    >>> import pytz
-    >>> melb = pytz.timezone('Australia/Melbourne')  # UTC+10:00
+    >>> from django.utils import timezone
+    >>> import zoneinfo
+    >>> melb = zoneinfo.ZoneInfo('Australia/Melbourne')  # UTC+10:00
     >>> with timezone.override(melb):
     ...    Experiment.objects.annotate(
     ...        day=ExtractDay('start_datetime'),
@@ -419,8 +462,8 @@ values that are returned::
 Explicitly passing the timezone to the ``Extract`` function behaves in the same
 way, and takes priority over an active timezone::
 
-    >>> import pytz
-    >>> melb = pytz.timezone('Australia/Melbourne')
+    >>> import zoneinfo
+    >>> melb = zoneinfo.ZoneInfo('Australia/Melbourne')
     >>> Experiment.objects.annotate(
     ...     day=ExtractDay('start_datetime', tzinfo=melb),
     ...     weekday=ExtractWeekDay('start_datetime', tzinfo=melb),
@@ -470,16 +513,16 @@ part, and an ``output_field`` that's either ``DateTimeField()``,
 ``TimeField()``, or ``DateField()``. It returns a datetime, date, or time
 depending on ``output_field``, with fields up to ``kind`` set to their minimum
 value. If ``output_field`` is omitted, it will default to the ``output_field``
-of ``expression``. A ``tzinfo`` subclass, usually provided by ``pytz``, can be
-passed to truncate a value in a specific timezone.
+of ``expression``. A ``tzinfo`` subclass, usually provided by :mod:`zoneinfo`,
+can be passed to truncate a value in a specific timezone.
 
-The ``is_dst`` parameter indicates whether or not ``pytz`` should interpret
-nonexistent and ambiguous datetimes in daylight saving time. By default (when
-``is_dst=None``), ``pytz`` raises an exception for such datetimes.
+.. deprecated:: 4.0
 
-.. versionadded:: 3.0
+    The ``is_dst`` parameter indicates whether or not ``pytz`` should interpret
+    nonexistent and ambiguous datetimes in daylight saving time. By default
+    (when ``is_dst=None``), ``pytz`` raises an exception for such datetimes.
 
-    The ``is_dst`` parameter was added.
+    The ``is_dst`` parameter is deprecated and will be removed in Django 5.0.
 
 Given the datetime ``2015-06-15 14:30:50.000321+00:00``, the built-in ``kind``\s
 return:
@@ -515,8 +558,8 @@ should typically be used instead of the more verbose equivalent,
 e.g. use ``TruncYear(...)`` rather than ``Trunc(..., kind='year')``.
 
 The subclasses are all defined as transforms, but they aren't registered with
-any fields, because the obvious lookup names are already reserved by the
-``Extract`` subclasses.
+any fields, because the lookup names are already reserved by the ``Extract``
+subclasses.
 
 Usage example::
 
@@ -564,6 +607,10 @@ Usage example::
 
     .. attribute:: kind = 'quarter'
 
+.. deprecated:: 4.0
+
+    The ``is_dst`` parameter is deprecated and will be removed in Django 5.0.
+
 These are logically equivalent to ``Trunc('date_field', kind)``. They truncate
 all parts of the date up to ``kind`` which allows grouping or filtering dates
 with less precision. ``expression`` can have an ``output_field`` of either
@@ -572,10 +619,9 @@ with less precision. ``expression`` can have an ``output_field`` of either
 Since ``DateField``\s don't have a time component, only ``Trunc`` subclasses
 that deal with date-parts can be used with ``DateField``::
 
-    >>> from datetime import datetime
+    >>> from datetime import datetime, timezone
     >>> from django.db.models import Count
     >>> from django.db.models.functions import TruncMonth, TruncYear
-    >>> from django.utils import timezone
     >>> start1 = datetime(2014, 6, 15, 14, 30, 50, 321, tzinfo=timezone.utc)
     >>> start2 = datetime(2015, 6, 15, 14, 40, 2, 123, tzinfo=timezone.utc)
     >>> start3 = datetime(2015, 12, 31, 17, 5, 27, 999, tzinfo=timezone.utc)
@@ -591,8 +637,8 @@ that deal with date-parts can be used with ``DateField``::
     2014-01-01 1
     2015-01-01 2
 
-    >>> import pytz
-    >>> melb = pytz.timezone('Australia/Melbourne')
+    >>> import zoneinfo
+    >>> melb = zoneinfo.ZoneInfo('Australia/Melbourne')
     >>> experiments_per_month = Experiment.objects.annotate(
     ...    month=TruncMonth('start_datetime', tzinfo=melb)).values('month').annotate(
     ...    experiments=Count('id'))
@@ -606,7 +652,7 @@ that deal with date-parts can be used with ``DateField``::
 ``DateTimeField`` truncation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. class:: TruncDate(expression, **extra)
+.. class:: TruncDate(expression, tzinfo=None, **extra)
 
     .. attribute:: lookup_name = 'date'
     .. attribute:: output_field = DateField()
@@ -615,7 +661,7 @@ that deal with date-parts can be used with ``DateField``::
 truncate function. It's also registered as a transform on  ``DateTimeField`` as
 ``__date``.
 
-.. class:: TruncTime(expression, **extra)
+.. class:: TruncTime(expression, tzinfo=None, **extra)
 
     .. attribute:: lookup_name = 'time'
     .. attribute:: output_field = TimeField()
@@ -640,6 +686,10 @@ truncate function. It's also registered as a transform on ``DateTimeField`` as
 
     .. attribute:: kind = 'second'
 
+.. deprecated:: 4.0
+
+    The ``is_dst`` parameter is deprecated and will be removed in Django 5.0.
+
 These are logically equivalent to ``Trunc('datetime_field', kind)``. They
 truncate all parts of the date up to ``kind`` and allow grouping or filtering
 datetimes with less precision. ``expression`` must have an ``output_field`` of
@@ -647,16 +697,15 @@ datetimes with less precision. ``expression`` must have an ``output_field`` of
 
 Usage example::
 
-    >>> from datetime import date, datetime
+    >>> from datetime import date, datetime, timezone
     >>> from django.db.models import Count
     >>> from django.db.models.functions import (
     ...     TruncDate, TruncDay, TruncHour, TruncMinute, TruncSecond,
     ... )
-    >>> from django.utils import timezone
-    >>> import pytz
+    >>> import zoneinfo
     >>> start1 = datetime(2014, 6, 15, 14, 30, 50, 321, tzinfo=timezone.utc)
     >>> Experiment.objects.create(start_datetime=start1, start_date=start1.date())
-    >>> melb = pytz.timezone('Australia/Melbourne')
+    >>> melb = zoneinfo.ZoneInfo('Australia/Melbourne')
     >>> Experiment.objects.annotate(
     ...     date=TruncDate('start_datetime'),
     ...     day=TruncDay('start_datetime', tzinfo=melb),
@@ -665,26 +714,33 @@ Usage example::
     ...     second=TruncSecond('start_datetime'),
     ... ).values('date', 'day', 'hour', 'minute', 'second').get()
     {'date': datetime.date(2014, 6, 15),
-     'day': datetime.datetime(2014, 6, 16, 0, 0, tzinfo=<DstTzInfo 'Australia/Melbourne' AEST+10:00:00 STD>),
-     'hour': datetime.datetime(2014, 6, 16, 0, 0, tzinfo=<DstTzInfo 'Australia/Melbourne' AEST+10:00:00 STD>),
-     'minute': 'minute': datetime.datetime(2014, 6, 15, 14, 30, tzinfo=<UTC>),
-     'second': datetime.datetime(2014, 6, 15, 14, 30, 50, tzinfo=<UTC>)
+     'day': datetime.datetime(2014, 6, 16, 0, 0, tzinfo=zoneinfo.ZoneInfo('Australia/Melbourne')),
+     'hour': datetime.datetime(2014, 6, 16, 0, 0, tzinfo=zoneinfo.ZoneInfo('Australia/Melbourne')),
+     'minute': 'minute': datetime.datetime(2014, 6, 15, 14, 30, tzinfo=zoneinfo.ZoneInfo('UTC')),
+     'second': datetime.datetime(2014, 6, 15, 14, 30, 50, tzinfo=zoneinfo.ZoneInfo('UTC'))
     }
 
 ``TimeField`` truncation
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. class:: TruncHour(expression, output_field=None, tzinfo=None, is_dst=None, **extra)
+    :noindex:
 
     .. attribute:: kind = 'hour'
 
 .. class:: TruncMinute(expression, output_field=None, tzinfo=None, is_dst=None, **extra)
+    :noindex:
 
     .. attribute:: kind = 'minute'
 
 .. class:: TruncSecond(expression, output_field=None, tzinfo=None, is_dst=None, **extra)
+    :noindex:
 
     .. attribute:: kind = 'second'
+
+.. deprecated:: 4.0
+
+    The ``is_dst`` parameter is deprecated and will be removed in Django 5.0.
 
 These are logically equivalent to ``Trunc('time_field', kind)``. They truncate
 all parts of the time up to ``kind`` which allows grouping or filtering times
@@ -694,10 +750,9 @@ with less precision. ``expression`` can have an ``output_field`` of either
 Since ``TimeField``\s don't have a date component, only ``Trunc`` subclasses
 that deal with time-parts can be used with ``TimeField``::
 
-    >>> from datetime import datetime
+    >>> from datetime import datetime, timezone
     >>> from django.db.models import Count, TimeField
     >>> from django.db.models.functions import TruncHour
-    >>> from django.utils import timezone
     >>> start1 = datetime(2014, 6, 15, 14, 30, 50, 321, tzinfo=timezone.utc)
     >>> start2 = datetime(2014, 6, 15, 14, 40, 2, 123, tzinfo=timezone.utc)
     >>> start3 = datetime(2015, 12, 31, 17, 5, 27, 999, tzinfo=timezone.utc)
@@ -713,8 +768,8 @@ that deal with time-parts can be used with ``TimeField``::
     14:00:00 2
     17:00:00 1
 
-    >>> import pytz
-    >>> melb = pytz.timezone('Australia/Melbourne')
+    >>> import zoneinfo
+    >>> melb = zoneinfo.ZoneInfo('Australia/Melbourne')
     >>> experiments_per_hour = Experiment.objects.annotate(
     ...    hour=TruncHour('start_datetime', tzinfo=melb),
     ... ).values('hour').annotate(experiments=Count('id'))
@@ -1086,21 +1141,29 @@ It can also be registered as a transform. For example::
     >>> # Get vectors whose radians are less than 1
     >>> vectors = Vector.objects.filter(x__radians__lt=1, y__radians__lt=1)
 
+``Random``
+----------
+
+.. class:: Random(**extra)
+
+Returns a random value in the range ``0.0 ≤ x < 1.0``.
+
 ``Round``
 ---------
 
-.. class:: Round(expression, **extra)
+.. class:: Round(expression, precision=0, **extra)
 
-Rounds a numeric field or expression to the nearest integer. Whether half
+Rounds a numeric field or expression to ``precision`` (must be an integer)
+decimal places. By default, it rounds to the nearest integer. Whether half
 values are rounded up or down depends on the database.
 
 Usage example::
 
     >>> from django.db.models.functions import Round
-    >>> Vector.objects.create(x=5.4, y=-2.3)
-    >>> vector = Vector.objects.annotate(x_r=Round('x'), y_r=Round('y')).get()
+    >>> Vector.objects.create(x=5.4, y=-2.37)
+    >>> vector = Vector.objects.annotate(x_r=Round('x'), y_r=Round('y', precision=1)).get()
     >>> vector.x_r, vector.y_r
-    (5.0, -2.0)
+    (5.0, -2.4)
 
 It can also be registered as a transform. For example::
 
@@ -1114,8 +1177,6 @@ It can also be registered as a transform. For example::
 --------
 
 .. class:: Sign(expression, **extra)
-
-.. versionadded:: 3.0
 
 Returns the sign (-1, 0, 1) of a numeric field or expression.
 
@@ -1352,8 +1413,6 @@ spaces.
 
 .. class:: MD5(expression, **extra)
 
-.. versionadded:: 3.0
-
 Accepts a single text field or expression and returns the MD5 hash of the
 string.
 
@@ -1483,8 +1542,6 @@ spaces.
 .. class:: SHA256(expression, **extra)
 .. class:: SHA384(expression, **extra)
 .. class:: SHA512(expression, **extra)
-
-.. versionadded:: 3.0
 
 Accepts a single text field or expression and returns the particular hash of
 the string.
