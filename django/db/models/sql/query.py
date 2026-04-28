@@ -458,7 +458,9 @@ class Query(BaseExpression):
                     if getattr(annotation, 'contains_aggregate', True)
                 )
                 if inner_query.default_cols and has_existing_aggregate_annotations:
-                    inner_query.group_by = (self.model._meta.pk.get_col(inner_query.get_initial_alias()),)
+                    # Only set GROUP BY to primary key if there's no existing GROUP BY
+                    if not inner_query.group_by:
+                        inner_query.group_by = (self.model._meta.pk.get_col(inner_query.get_initial_alias()),)
                 inner_query.default_cols = False
 
             relabels = {t: 'subquery' for t in inner_query.alias_map}
