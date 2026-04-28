@@ -1,6 +1,7 @@
 import os
 import tempfile
 from os.path import abspath, dirname, join, normcase, sep
+from pathlib import Path
 
 from django.core.exceptions import SuspiciousFileOperation
 
@@ -22,12 +23,15 @@ def safe_join(base, *paths):
     #     safe_join("/dir", "/../d"))
     #  b) The final path must be the same as the base path.
     #  c) The base path must be the most root path (meaning either "/" or "C:\\")
-    if (not normcase(final_path).startswith(normcase(base_path + sep)) and
-            normcase(final_path) != normcase(base_path) and
-            dirname(normcase(base_path)) != normcase(base_path)):
+    if (
+        not normcase(final_path).startswith(normcase(base_path + sep))
+        and normcase(final_path) != normcase(base_path)
+        and dirname(normcase(base_path)) != normcase(base_path)
+    ):
         raise SuspiciousFileOperation(
-            'The joined path ({}) is located outside of the base path '
-            'component ({})'.format(final_path, base_path))
+            "The joined path ({}) is located outside of the base path "
+            "component ({})".format(final_path, base_path)
+        )
     return final_path
 
 
@@ -38,8 +42,8 @@ def symlinks_supported():
     permissions).
     """
     with tempfile.TemporaryDirectory() as temp_dir:
-        original_path = os.path.join(temp_dir, 'original')
-        symlink_path = os.path.join(temp_dir, 'symlink')
+        original_path = os.path.join(temp_dir, "original")
+        symlink_path = os.path.join(temp_dir, "symlink")
         os.makedirs(original_path)
         try:
             os.symlink(original_path, symlink_path)
@@ -47,3 +51,12 @@ def symlinks_supported():
         except (OSError, NotImplementedError):
             supported = False
         return supported
+
+
+def to_path(value):
+    """Convert value to a pathlib.Path instance, if not already a Path."""
+    if isinstance(value, Path):
+        return value
+    elif not isinstance(value, str):
+        raise TypeError("Invalid path type: %s" % type(value).__name__)
+    return Path(value)

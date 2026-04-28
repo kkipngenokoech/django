@@ -4,14 +4,15 @@ from . import PostgreSQLTestCase
 
 try:
     from django.contrib.postgres.signals import (
-        get_citext_oids, get_hstore_oids, register_type_handlers,
+        get_citext_oids,
+        get_hstore_oids,
+        register_type_handlers,
     )
 except ImportError:
     pass  # pyscogp2 isn't installed.
 
 
 class OIDTests(PostgreSQLTestCase):
-
     def assertOIDs(self, oids):
         self.assertIsInstance(oids, tuple)
         self.assertGreater(len(oids), 0)
@@ -38,4 +39,5 @@ class OIDTests(PostgreSQLTestCase):
 
     def test_register_type_handlers_no_db(self):
         """Registering type handlers for the nodb connection does nothing."""
-        register_type_handlers(connection._nodb_connection)
+        with connection._nodb_cursor() as cursor:
+            register_type_handlers(cursor.db)
