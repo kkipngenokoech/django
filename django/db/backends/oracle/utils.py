@@ -16,6 +16,7 @@ class InsertVar:
         'IntegerField': int,
         'BigIntegerField': int,
         'SmallIntegerField': int,
+        'PositiveBigIntegerField': int,
         'PositiveSmallIntegerField': int,
         'PositiveIntegerField': int,
         'FloatField': Database.NATIVE_FLOAT,
@@ -61,6 +62,8 @@ class BulkInsertMapper:
     TIMESTAMP = 'TO_TIMESTAMP(%s)'
 
     types = {
+        'AutoField': NUMBER,
+        'BigAutoField': NUMBER,
         'BigIntegerField': NUMBER,
         'BinaryField': BLOB,
         'BooleanField': NUMBER,
@@ -71,8 +74,10 @@ class BulkInsertMapper:
         'FloatField': NUMBER,
         'IntegerField': NUMBER,
         'NullBooleanField': NUMBER,
+        'PositiveBigIntegerField': NUMBER,
         'PositiveIntegerField': NUMBER,
         'PositiveSmallIntegerField': NUMBER,
+        'SmallAutoField': NUMBER,
         'SmallIntegerField': NUMBER,
         'TextField': CLOB,
         'TimeField': TIMESTAMP,

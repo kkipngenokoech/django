@@ -4,16 +4,17 @@ from functools import partial
 from itertools import chain
 
 from django.core.exceptions import EmptyResultSet, FieldError
+from django.db import DatabaseError, NotSupportedError
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.expressions import OrderBy, Random, RawSQL, Ref, Value
 from django.db.models.functions import Cast
-from django.db.models.query_utils import QueryWrapper, select_related_descend
+from django.db.models.query_utils import Q, select_related_descend
 from django.db.models.sql.constants import (
     CURSOR, GET_ITERATOR_CHUNK_SIZE, MULTI, NO_RESULTS, ORDER_DIR, SINGLE,
 )
 from django.db.models.sql.query import Query, get_order_dir
 from django.db.transaction import TransactionManagementError
-from django.db.utils import DatabaseError, NotSupportedError
+from django.utils.functional import cached_property
 from django.utils.hashable import make_hashable
 
 
@@ -108,15 +109,22 @@ class SQLCompiler:
         # Note that even if the group_by is set, it is only the minimal
         # set to group by. So, we need to add cols in select, order_by, and
         # having into the select in any case.
+        ref_sources = {
+            expr.source for expr in expressions if isinstance(expr, Ref)
+        }
         for expr, _, _ in select:
+            # Skip members of the select clause that are already included
+            # by reference.
+            if expr in ref_sources:
+                continue
             cols = expr.get_group_by_cols()
             for col in cols:
                 expressions.append(col)
         for expr, (sql, params, is_ref) in order_by:
             # Skip References to the select clause, as all expressions in the
             # select clause are already part of the group by.
-            if not expr.contains_aggregate and not is_ref:
-                expressions.extend(expr.get_source_expressions())
+            if not is_ref:
+                expressions.extend(expr.get_group_by_cols())
         having_group_by = self.having.get_group_by_cols() if self.having else ()
         for expr in having_group_by:
             expressions.append(expr)
@@ -398,7 +406,7 @@ class SQLCompiler:
             return self.quote_cache[name]
         if ((name in self.query.alias_map and name not in self.query.table_map) or
                 name in self.query.extra_select or (
-                    name in self.query.external_aliases and name not in self.query.table_map)):
+                    self.query.external_aliases.get(name) and name not in self.query.table_map)):
             self.quote_cache[name] = name
             return name
         r = self.connection.ops.quote_name(name)
@@ -701,9 +709,9 @@ class SQLCompiler:
         field, targets, alias, joins, path, opts, transform_function = self._setup_joins(pieces, opts, alias)
 
         # If we get to this point and the field is a relation to another model,
-        # append the default ordering for that model unless the attribute name
-        # of the field is specified.
-        if field.is_relation and opts.ordering and getattr(field, 'attname', None) != name:
+        # append the default ordering for that model unless it is the pk
+        # shortcut or the attribute name of the field that is specified.
+        if field.is_relation and opts.ordering and getattr(field, 'attname', None) != name and name != 'pk':
             # Firstly, avoid infinite loops.
             already_seen = already_seen or set()
             join_tuple = tuple(getattr(self.query.alias_map[j], 'join_cols', None) for j in joins)
@@ -952,6 +960,36 @@ class SQLCompiler:
         Return a quoted list of arguments for the SELECT FOR UPDATE OF part of
         the query.
         """
+        def _get_parent_klass_info(klass_info):
+            for parent_model, parent_link in klass_info['model']._meta.parents.items():
+                parent_list = parent_model._meta.get_parent_list()
+                yield {
+                    'model': parent_model,
+                    'field': parent_link,
+                    'reverse': False,
+                    'select_fields': [
+                        select_index
+                        for select_index in klass_info['select_fields']
+                        # Selected columns from a model or its parents.
+                        if (
+                            self.select[select_index][0].target.model == parent_model or
+                            self.select[select_index][0].target.model in parent_list
+                        )
+                    ],
+                }
+
+        def _get_first_selected_col_from_model(klass_info):
+            """
+            Find the first selected column from a model. If it doesn't exist,
+            don't lock a model.
+
+            select_fields is filled recursively, so it also contains fields
+            from the parent models.
+            """
+            for select_index in klass_info['select_fields']:
+                if self.select[select_index][0].target.model == klass_info['model']:
+                    return self.select[select_index][0]
+
         def _get_field_choices():
             """Yield all allowed field paths in breadth-first search order."""
             queue = collections.deque([(None, self.klass_info)])
@@ -968,33 +1006,43 @@ class SQLCompiler:
                     yield LOOKUP_SEP.join(path)
                 queue.extend(
                     (path, klass_info)
+                    for klass_info in _get_parent_klass_info(klass_info)
+                )
+                queue.extend(
+                    (path, klass_info)
                     for klass_info in klass_info.get('related_klass_infos', [])
                 )
         result = []
         invalid_names = []
         for name in self.query.select_for_update_of:
-            parts = [] if name == 'self' else name.split(LOOKUP_SEP)
             klass_info = self.klass_info
-            for part in parts:
-                for related_klass_info in klass_info.get('related_klass_infos', []):
-                    field = related_klass_info['field']
-                    if related_klass_info['reverse']:
-                        field = field.remote_field
-                    if field.name == part:
-                        klass_info = related_klass_info
-                        break
-                else:
-                    klass_info = None
-                    break
-            if klass_info is None:
-                invalid_names.append(name)
-                continue
-            select_index = klass_info['select_fields'][0]
-            col = self.select[select_index][0]
-            if self.connection.features.select_for_update_of_column:
-                result.append(self.compile(col)[0])
+            if name == 'self':
+                col = _get_first_selected_col_from_model(klass_info)
             else:
-                result.append(self.quote_name_unless_alias(col.alias))
+                for part in name.split(LOOKUP_SEP):
+                    klass_infos = (
+                        *klass_info.get('related_klass_infos', []),
+                        *_get_parent_klass_info(klass_info),
+                    )
+                    for related_klass_info in klass_infos:
+                        field = related_klass_info['field']
+                        if related_klass_info['reverse']:
+                            field = field.remote_field
+                        if field.name == part:
+                            klass_info = related_klass_info
+                            break
+                    else:
+                        klass_info = None
+                        break
+                if klass_info is None:
+                    invalid_names.append(name)
+                    continue
+                col = _get_first_selected_col_from_model(klass_info)
+            if col is not None:
+                if self.connection.features.select_for_update_of_column:
+                    result.append(self.compile(col)[0])
+                else:
+                    result.append(self.quote_name_unless_alias(col.alias))
         if invalid_names:
             raise FieldError(
                 'Invalid field name(s) given in select_for_update(of=(...)): %s. '
@@ -1136,7 +1184,7 @@ class SQLCompiler:
             lhs_sql, lhs_params = self.compile(select_col)
             rhs = '%s.%s' % (qn(alias), qn2(columns[index]))
             self.query.where.add(
-                QueryWrapper('%s = %s' % (lhs_sql, rhs), lhs_params), 'AND')
+                RawSQL('%s = %s' % (lhs_sql, rhs), lhs_params), 'AND')
 
         sql, params = self.as_sql()
         return 'EXISTS (%s)' % sql, params
@@ -1337,26 +1385,44 @@ class SQLInsertCompiler(SQLCompiler):
                 return self.connection.ops.fetch_returned_insert_rows(cursor)
             if self.connection.features.can_return_columns_from_insert:
                 assert len(self.query.objs) == 1
-                return self.connection.ops.fetch_returned_insert_columns(cursor, self.returning_params)
-            return [self.connection.ops.last_insert_id(
+                return [self.connection.ops.fetch_returned_insert_columns(cursor, self.returning_params)]
+            return [(self.connection.ops.last_insert_id(
                 cursor, self.query.get_meta().db_table, self.query.get_meta().pk.column
-            )]
+            ),)]
 
 
 class SQLDeleteCompiler(SQLCompiler):
+    @cached_property
+    def single_alias(self):
+        return sum(self.query.alias_refcount[t] > 0 for t in self.query.alias_map) == 1
+
+    def _as_sql(self, query):
+        result = [
+            'DELETE FROM %s' % self.quote_name_unless_alias(query.base_table)
+        ]
+        where, params = self.compile(query.where)
+        if where:
+            result.append('WHERE %s' % where)
+        return ' '.join(result), tuple(params)
+
     def as_sql(self):
         """
         Create the SQL for this query. Return the SQL string and list of
         parameters.
         """
-        assert len([t for t in self.query.alias_map if self.query.alias_refcount[t] > 0]) == 1, \
-            "Can only delete from one table at a time."
-        qn = self.quote_name_unless_alias
-        result = ['DELETE FROM %s' % qn(self.query.base_table)]
-        where, params = self.compile(self.query.where)
-        if where:
-            result.append('WHERE %s' % where)
-        return ' '.join(result), tuple(params)
+        if self.single_alias:
+            return self._as_sql(self.query)
+        innerq = self.query.clone()
+        innerq.__class__ = Query
+        innerq.clear_select_clause()
+        pk = self.query.model._meta.pk
+        innerq.select = [
+            pk.get_col(self.query.get_initial_alias())
+        ]
+        outerq = Query(self.query.model)
+        outerq.where = self.query.where_class()
+        outerq.add_q(Q(pk__in=innerq))
+        return self._as_sql(outerq)
 
 
 class SQLUpdateCompiler(SQLCompiler):

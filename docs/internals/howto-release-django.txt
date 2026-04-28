@@ -206,7 +206,7 @@ OK, this is the fun part, where we actually push out a release!
    on ``VERSION``.
 
 #. If this is a pre-release package, update the "Development Status" trove
-   classifier in ``setup.py`` to reflect this. Otherwise, make sure the
+   classifier in ``setup.cfg`` to reflect this. Otherwise, make sure the
    classifier is set to ``Development Status :: 5 - Production/Stable``.
 
 #. Tag the release using ``git tag``. For example::
@@ -379,7 +379,7 @@ Now you're ready to actually put the release out there. To do this:
    message body should include the vulnerability details, for example, the
    announcement blog post text. Include a link to the announcement blog post.
 
-#. Add a link to the blog post in the topic of the `#django` IRC channel:
+#. Add a link to the blog post in the topic of the ``#django`` IRC channel:
    ``/msg chanserv TOPIC #django new topic goes here``.
 
 Post-release

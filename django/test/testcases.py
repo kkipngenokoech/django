@@ -1,3 +1,4 @@
+import asyncio
 import difflib
 import json
 import posixpath
@@ -9,11 +10,14 @@ from contextlib import contextmanager
 from copy import copy
 from difflib import get_close_matches
 from functools import wraps
+from unittest.suite import _DebugResult
 from unittest.util import safe_repr
 from urllib.parse import (
     parse_qsl, unquote, urlencode, urljoin, urlparse, urlsplit, urlunparse,
 )
 from urllib.request import url2pathname
+
+from asgiref.sync import async_to_sync
 
 from django.apps import apps
 from django.conf import settings
@@ -29,14 +33,14 @@ from django.db import DEFAULT_DB_ALIAS, connection, connections, transaction
 from django.forms.fields import CharField
 from django.http import QueryDict
 from django.http.request import split_domain_port, validate_host
-from django.test.client import Client
+from django.test.client import AsyncClient, Client
 from django.test.html import HTMLParseError, parse_html
 from django.test.signals import setting_changed, template_rendered
 from django.test.utils import (
     CaptureQueriesContext, ContextList, compare_xml, modify_settings,
     override_settings,
 )
-from django.utils.decorators import classproperty
+from django.utils.functional import classproperty
 from django.views.static import serve
 
 __all__ = ('TestCase', 'TransactionTestCase',
@@ -147,6 +151,7 @@ class SimpleTestCase(unittest.TestCase):
     # The class we'll use for the test client self.client.
     # Can be overridden in derived classes.
     client_class = Client
+    async_client_class = AsyncClient
     _overridden_settings = None
     _modified_settings = None
 
@@ -235,23 +240,49 @@ class SimpleTestCase(unittest.TestCase):
         set up. This means that user-defined Test Cases aren't required to
         include a call to super().setUp().
         """
+        self._setup_and_call(result)
+
+    def debug(self):
+        """Perform the same as __call__(), without catching the exception."""
+        debug_result = _DebugResult()
+        self._setup_and_call(debug_result, debug=True)
+
+    def _setup_and_call(self, result, debug=False):
+        """
+        Perform the following in order: pre-setup, run test, post-teardown,
+        skipping pre/post hooks if test is set to be skipped.
+
+        If debug=True, reraise any errors in setup and use super().debug()
+        instead of __call__() to run the test.
+        """
         testMethod = getattr(self, self._testMethodName)
         skipped = (
             getattr(self.__class__, "__unittest_skip__", False) or
             getattr(testMethod, "__unittest_skip__", False)
         )
 
+        # Convert async test methods.
+        if asyncio.iscoroutinefunction(testMethod):
+            setattr(self, self._testMethodName, async_to_sync(testMethod))
+
         if not skipped:
             try:
                 self._pre_setup()
             except Exception:
+                if debug:
+                    raise
                 result.addError(self, sys.exc_info())
                 return
-        super().__call__(result)
+        if debug:
+            super().debug()
+        else:
+            super().__call__(result)
         if not skipped:
             try:
                 self._post_teardown()
             except Exception:
+                if debug:
+                    raise
                 result.addError(self, sys.exc_info())
                 return
 
@@ -262,6 +293,7 @@ class SimpleTestCase(unittest.TestCase):
         * Clear the mail test outbox.
         """
         self.client = self.client_class()
+        self.async_client = self.async_client_class()
         mail.outbox = []
 
     def _post_teardown(self):
@@ -347,10 +379,15 @@ class SimpleTestCase(unittest.TestCase):
                         "Otherwise, use assertRedirects(..., fetch_redirect_response=False)."
                         % (url, domain)
                     )
-                redirect_response = response.client.get(path, QueryDict(query), secure=(scheme == 'https'))
-
                 # Get the redirection page, using the same client that was used
                 # to obtain the original response.
+                extra = response.client.extra or {}
+                redirect_response = response.client.get(
+                    path,
+                    QueryDict(query),
+                    secure=(scheme == 'https'),
+                    **extra,
+                )
                 self.assertEqual(
                     redirect_response.status_code, target_status_code,
                     msg_prefix + "Couldn't retrieve redirection page '%s': response code was %d (expected %d)"

@@ -1,12 +1,12 @@
 from django.core.exceptions import FieldDoesNotExist
-from django.db import connection, migrations, models, transaction
+from django.db import (
+    IntegrityError, connection, migrations, models, transaction,
+)
 from django.db.migrations.migration import Migration
 from django.db.migrations.operations import CreateModel
 from django.db.migrations.operations.fields import FieldOperation
 from django.db.migrations.state import ModelState, ProjectState
-from django.db.models.fields import NOT_PROVIDED
 from django.db.transaction import atomic
-from django.db.utils import IntegrityError
 from django.test import SimpleTestCase, override_settings, skipUnlessDBFeature
 
 from .models import FoodManager, FoodQuerySet, UnicodeModel
@@ -979,7 +979,7 @@ class OperationTests(OperationTestBase):
             f for n, f in new_state.models["test_adflpd", "pony"].fields
             if n == "height"
         ][0]
-        self.assertEqual(field.default, NOT_PROVIDED)
+        self.assertEqual(field.default, models.NOT_PROVIDED)
         # Test the database alteration
         project_state.apps.get_model("test_adflpd", "pony").objects.create(
             weight=4,
@@ -1815,6 +1815,34 @@ class OperationTests(OperationTestBase):
             Pony(pink=1, weight=-1.0),
             Pony(pink=3, weight=3.0),
         ])
+
+    @skipUnlessDBFeature('supports_table_check_constraints')
+    def test_add_constraint_combinable(self):
+        app_label = 'test_addconstraint_combinable'
+        operations = [
+            CreateModel(
+                'Book',
+                fields=[
+                    ('id', models.AutoField(primary_key=True)),
+                    ('read', models.PositiveIntegerField()),
+                    ('unread', models.PositiveIntegerField()),
+                ],
+            ),
+        ]
+        from_state = self.apply_operations(app_label, ProjectState(), operations)
+        constraint = models.CheckConstraint(
+            check=models.Q(read=(100 - models.F('unread'))),
+            name='test_addconstraint_combinable_sum_100',
+        )
+        operation = migrations.AddConstraint('Book', constraint)
+        to_state = from_state.clone()
+        operation.state_forwards(app_label, to_state)
+        with connection.schema_editor() as editor:
+            operation.database_forwards(app_label, editor, from_state, to_state)
+        Book = to_state.apps.get_model(app_label, 'Book')
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Book.objects.create(read=70, unread=10)
+        Book.objects.create(read=70, unread=30)
 
     @skipUnlessDBFeature('supports_table_check_constraints')
     def test_remove_constraint(self):
@@ -2889,54 +2917,54 @@ class SwappableOperationTests(OperationTestBase):
 class TestCreateModel(SimpleTestCase):
 
     def test_references_model_mixin(self):
-        CreateModel('name', [], bases=(Mixin, models.Model)).references_model('other_model')
+        CreateModel('name', [], bases=(Mixin, models.Model)).references_model('other_model', 'migrations')
 
 
 class FieldOperationTests(SimpleTestCase):
     def test_references_model(self):
         operation = FieldOperation('MoDel', 'field', models.ForeignKey('Other', models.CASCADE))
         # Model name match.
-        self.assertIs(operation.references_model('mOdEl'), True)
+        self.assertIs(operation.references_model('mOdEl', 'migrations'), True)
         # Referenced field.
-        self.assertIs(operation.references_model('oTher'), True)
+        self.assertIs(operation.references_model('oTher', 'migrations'), True)
         # Doesn't reference.
-        self.assertIs(operation.references_model('Whatever'), False)
+        self.assertIs(operation.references_model('Whatever', 'migrations'), False)
 
     def test_references_field_by_name(self):
         operation = FieldOperation('MoDel', 'field', models.BooleanField(default=False))
-        self.assertIs(operation.references_field('model', 'field'), True)
+        self.assertIs(operation.references_field('model', 'field', 'migrations'), True)
 
     def test_references_field_by_remote_field_model(self):
         operation = FieldOperation('Model', 'field', models.ForeignKey('Other', models.CASCADE))
-        self.assertIs(operation.references_field('Other', 'whatever'), True)
-        self.assertIs(operation.references_field('Missing', 'whatever'), False)
+        self.assertIs(operation.references_field('Other', 'whatever', 'migrations'), True)
+        self.assertIs(operation.references_field('Missing', 'whatever', 'migrations'), False)
 
     def test_references_field_by_from_fields(self):
         operation = FieldOperation(
             'Model', 'field', models.fields.related.ForeignObject('Other', models.CASCADE, ['from'], ['to'])
         )
-        self.assertIs(operation.references_field('Model', 'from'), True)
-        self.assertIs(operation.references_field('Model', 'to'), False)
-        self.assertIs(operation.references_field('Other', 'from'), False)
-        self.assertIs(operation.references_field('Model', 'to'), False)
+        self.assertIs(operation.references_field('Model', 'from', 'migrations'), True)
+        self.assertIs(operation.references_field('Model', 'to', 'migrations'), False)
+        self.assertIs(operation.references_field('Other', 'from', 'migrations'), False)
+        self.assertIs(operation.references_field('Model', 'to', 'migrations'), False)
 
     def test_references_field_by_to_fields(self):
         operation = FieldOperation('Model', 'field', models.ForeignKey('Other', models.CASCADE, to_field='field'))
-        self.assertIs(operation.references_field('Other', 'field'), True)
-        self.assertIs(operation.references_field('Other', 'whatever'), False)
-        self.assertIs(operation.references_field('Missing', 'whatever'), False)
+        self.assertIs(operation.references_field('Other', 'field', 'migrations'), True)
+        self.assertIs(operation.references_field('Other', 'whatever', 'migrations'), False)
+        self.assertIs(operation.references_field('Missing', 'whatever', 'migrations'), False)
 
     def test_references_field_by_through(self):
         operation = FieldOperation('Model', 'field', models.ManyToManyField('Other', through='Through'))
-        self.assertIs(operation.references_field('Other', 'whatever'), True)
-        self.assertIs(operation.references_field('Through', 'whatever'), True)
-        self.assertIs(operation.references_field('Missing', 'whatever'), False)
+        self.assertIs(operation.references_field('Other', 'whatever', 'migrations'), True)
+        self.assertIs(operation.references_field('Through', 'whatever', 'migrations'), True)
+        self.assertIs(operation.references_field('Missing', 'whatever', 'migrations'), False)
 
     def test_reference_field_by_through_fields(self):
         operation = FieldOperation(
             'Model', 'field', models.ManyToManyField('Other', through='Through', through_fields=('first', 'second'))
         )
-        self.assertIs(operation.references_field('Other', 'whatever'), True)
-        self.assertIs(operation.references_field('Through', 'whatever'), False)
-        self.assertIs(operation.references_field('Through', 'first'), True)
-        self.assertIs(operation.references_field('Through', 'second'), True)
+        self.assertIs(operation.references_field('Other', 'whatever', 'migrations'), True)
+        self.assertIs(operation.references_field('Through', 'whatever', 'migrations'), False)
+        self.assertIs(operation.references_field('Through', 'first', 'migrations'), True)
+        self.assertIs(operation.references_field('Through', 'second', 'migrations'), True)

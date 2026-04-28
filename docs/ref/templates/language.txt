@@ -29,12 +29,12 @@ or Jinja2_, you should feel right at home with Django's templates.
 
 .. _`The Django template language: For Python programmers`: ../templates_python/
 .. _Smarty: https://www.smarty.net/
-.. _Jinja2: http://jinja.pocoo.org/
+.. _Jinja2: https://palletsprojects.com/p/jinja/
 
 Templates
 =========
 
-.. highlightlang:: html+django
+.. highlight:: html+django
 
 A template is a text file. It can generate any text-based format (HTML, XML,
 CSV, etc.).
@@ -414,7 +414,7 @@ Here are some tips for working with inheritance:
   tag ``as`` syntax can't be used inside the block. For example, this template
   doesn't render anything::
 
-      {% trans "Title" as title %}
+      {% translate "Title" as title %}
       {% block content %}{{ title }}{% endblock %}
 
 * For extra readability, you can optionally give a *name* to your

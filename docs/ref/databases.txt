@@ -37,7 +37,7 @@ connection. It can be set independently for each database.
 
 The default value is ``0``, preserving the historical behavior of closing the
 database connection at the end of each request. To enable persistent
-connections, set :setting:`CONN_MAX_AGE` to a positive number of seconds. For
+connections, set :setting:`CONN_MAX_AGE` to a positive integer of seconds. For
 unlimited persistent connections, set it to ``None``.
 
 Connection management
@@ -106,7 +106,7 @@ PostgreSQL notes
 Django supports PostgreSQL 9.5 and higher. `psycopg2`_ 2.5.4 or higher is
 required, though the latest release is recommended.
 
-.. _psycopg2: http://initd.org/psycopg/
+.. _psycopg2: https://www.psycopg.org/
 
 PostgreSQL connection settings
 -------------------------------
@@ -121,8 +121,11 @@ Django needs the following parameters for its database connections:
 - ``client_encoding``: ``'UTF8'``,
 - ``default_transaction_isolation``: ``'read committed'`` by default,
   or the value set in the connection options (see below),
-- ``timezone``: ``'UTC'`` when :setting:`USE_TZ` is ``True``, value of
-  :setting:`TIME_ZONE` otherwise.
+- ``timezone``:
+    - when :setting:`USE_TZ` is ``True``, ``'UTC'`` by default, or the
+      :setting:`TIME_ZONE <DATABASE-TIME_ZONE>` value set for the connection,
+    - when :setting:`USE_TZ` is ``False``, the value of the global
+      :setting:`TIME_ZONE` setting.
 
 If these parameters already have the correct values, Django won't set them for
 every new connection, which improves performance slightly. You can configure
@@ -203,7 +206,7 @@ cursor query is controlled with the `cursor_tuple_fraction`_ option.
 Transaction pooling and server-side cursors
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Using a connection pooler in transaction pooling mode (e.g. `pgBouncer`_)
+Using a connection pooler in transaction pooling mode (e.g. `PgBouncer`_)
 requires disabling server-side cursors for that connection.
 
 Server-side cursors are local to a connection and remain open at the end of a
@@ -229,7 +232,7 @@ Another option is to wrap each ``QuerySet`` using server-side cursors in an
 for the duration of the transaction. This way, the server-side cursor will only
 live for the duration of the transaction.
 
-.. _pgBouncer: https://pgbouncer.github.io/
+.. _PgBouncer: https://pgbouncer.github.io/
 
 .. _manually-specified-autoincrement-pk:
 
@@ -286,7 +289,7 @@ MariaDB notes
 
 .. versionadded:: 3.0
 
-Django supports MariaDB 10.1 and higher.
+Django supports MariaDB 10.2 and higher.
 
 To use MariaDB, use the MySQL backend, which is shared between the two. See the
 :ref:`MySQL notes <mysql-notes>` for more details.
@@ -578,13 +581,18 @@ these methods in no-op's based in the results of such detection.
 Notes on specific fields
 ------------------------
 
+.. _mysql-character-fields:
+
 Character fields
 ~~~~~~~~~~~~~~~~
 
-Any fields that are stored with ``VARCHAR`` column types have their
+Any fields that are stored with ``VARCHAR`` column types may have their
 ``max_length`` restricted to 255 characters if you are using ``unique=True``
 for the field. This affects :class:`~django.db.models.CharField`,
-:class:`~django.db.models.SlugField`.
+:class:`~django.db.models.SlugField`. See `the MySQL documentation`_ for more
+details.
+
+.. _the MySQL documentation: https://dev.mysql.com/doc/refman/en/create-index.html#create-index-column-prefixes
 
 ``TextField`` limitations
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -625,10 +633,22 @@ both MySQL and Django will attempt to convert the values from UTC to local time.
 Row locking with ``QuerySet.select_for_update()``
 -------------------------------------------------
 
-MySQL does not support the ``NOWAIT``, ``SKIP LOCKED``, and ``OF`` options to
-the ``SELECT ... FOR UPDATE`` statement. If ``select_for_update()`` is used
-with ``nowait=True``, ``skip_locked=True``, or ``of`` then a
-:exc:`~django.db.NotSupportedError` is raised.
+MySQL and MariaDB do not support some options to the ``SELECT ... FOR UPDATE``
+statement. If ``select_for_update()`` is used with an unsupported option, then
+a :exc:`~django.db.NotSupportedError` is raised.
+
+=============== ========= ==========
+Option          MariaDB   MySQL
+=============== ========= ==========
+``SKIP LOCKED``           X (≥8.0.1)
+``NOWAIT``      X (≥10.3) X (≥8.0.1)
+``OF``
+=============== ========= ==========
+
+When using ``select_for_update()`` on MySQL, make sure you filter a queryset
+against at least set of fields contained in unique constraints or only against
+fields covered by indexes. Otherwise, an exclusive write lock will be acquired
+over the full table for the duration of the transaction.
 
 Automatic typecasting can cause unexpected results
 --------------------------------------------------
@@ -1033,7 +1053,7 @@ vary considerably. Queries regarding the specific capabilities of these
 unofficial backends, along with any support queries, should be directed to
 the support channels provided by each 3rd party project.
 
-.. _IBM DB2: https://pypi.org/project/ibm_db/
+.. _IBM DB2: https://pypi.org/project/ibm_db_django/
 .. _Microsoft SQL Server: https://pypi.org/project/django-pyodbc-azure/
 .. _Firebird: https://github.com/maxirobaina/django-firebird
 .. _ODBC: https://github.com/lionheart/django-pyodbc/

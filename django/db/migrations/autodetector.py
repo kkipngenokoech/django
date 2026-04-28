@@ -369,7 +369,7 @@ class MigrationAutodetector:
         # Optimize migrations
         for app_label, migrations in self.migrations.items():
             for migration in migrations:
-                migration.operations = MigrationOptimizer().optimize(migration.operations, app_label=app_label)
+                migration.operations = MigrationOptimizer().optimize(migration.operations, app_label)
 
     def check_dependency(self, operation, dependency):
         """
@@ -496,10 +496,13 @@ class MigrationAutodetector:
                                 dependencies=dependencies,
                             )
                             self.renamed_models[app_label, model_name] = rem_model_name
-                            renamed_models_rel_key = '%s.%s' % (rem_model_state.app_label, rem_model_state.name)
+                            renamed_models_rel_key = '%s.%s' % (
+                                rem_model_state.app_label,
+                                rem_model_state.name_lower,
+                            )
                             self.renamed_models_rel[renamed_models_rel_key] = '%s.%s' % (
                                 model_state.app_label,
-                                model_state.name,
+                                model_state.name_lower,
                             )
                             self.old_model_keys.remove((rem_app_label, rem_model_name))
                             self.old_model_keys.add((app_label, model_name))
@@ -927,6 +930,10 @@ class MigrationAutodetector:
                 if remote_field_name:
                     to_field_rename_key = rename_key + (remote_field_name,)
                     if to_field_rename_key in self.renamed_fields:
+                        # Repoint both model and field name because to_field
+                        # inclusion in ForeignKey.deconstruct() is based on
+                        # both.
+                        new_field.remote_field.model = old_field.remote_field.model
                         new_field.remote_field.field_name = old_field.remote_field.field_name
                 # Handle ForeignObjects which can have multiple from_fields/to_fields.
                 from_fields = getattr(new_field, 'from_fields', None)

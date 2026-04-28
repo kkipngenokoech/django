@@ -46,6 +46,7 @@ class IntegerArrayModel(PostgreSQLModel):
 
 class NullableIntegerArrayModel(PostgreSQLModel):
     field = ArrayField(models.IntegerField(), blank=True, null=True)
+    field_nested = ArrayField(ArrayField(models.IntegerField(null=True)), null=True)
 
 
 class CharArrayModel(PostgreSQLModel):
@@ -92,6 +93,14 @@ class TextFieldModel(models.Model):
         return self.field
 
 
+class SmallAutoFieldModel(models.Model):
+    id = models.SmallAutoField(primary_key=True)
+
+
+class BigAutoFieldModel(models.Model):
+    id = models.BigAutoField(primary_key=True)
+
+
 # Scene/Character/Line models are used to test full text search. They're
 # populated with content from Monty Python and the Holy Grail.
 class Scene(models.Model):
@@ -130,6 +139,11 @@ class Line(PostgreSQLModel):
         return self.dialogue or ''
 
 
+class LineSavedSearch(PostgreSQLModel):
+    line = models.ForeignKey('Line', models.CASCADE)
+    query = models.CharField(max_length=100)
+
+
 class RangesModel(PostgreSQLModel):
     ints = IntegerRangeField(blank=True, null=True)
     bigints = BigIntegerRangeField(blank=True, null=True)
@@ -147,6 +161,8 @@ class RangeLookupsModel(PostgreSQLModel):
     float = models.FloatField(blank=True, null=True)
     timestamp = models.DateTimeField(blank=True, null=True)
     date = models.DateField(blank=True, null=True)
+    small_integer = models.SmallIntegerField(blank=True, null=True)
+    decimal_field = models.DecimalField(max_digits=5, decimal_places=2, blank=True, null=True)
 
 
 class JSONModel(PostgreSQLModel):
