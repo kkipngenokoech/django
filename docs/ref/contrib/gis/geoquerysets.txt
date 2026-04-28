@@ -351,8 +351,8 @@ SpatiaLite  ``Intersects(poly, geom)``
 ``isvalid``
 -----------
 
-*Availability*: MySQL (≥ 5.7.5), `PostGIS
-<https://postgis.net/docs/ST_IsValid.html>`__, Oracle, SpatiaLite
+*Availability*: MySQL, `PostGIS <https://postgis.net/docs/ST_IsValid.html>`__,
+Oracle, SpatiaLite
 
 Tests if the geometry is valid.
 
@@ -438,10 +438,6 @@ PostGIS SQL equivalent:
 
     SELECT ... WHERE ST_Relate(poly, ST_Polygon(rast, 1), 'T*T***FF*')
     SELECT ... WHERE ST_Relate(ST_Polygon(rast, 2), ST_Polygon(rast, 1), 'T*T***FF*')
-
-.. versionchanged:: 3.1
-
-    MariaDB support was added.
 
 Oracle
 ~~~~~~
@@ -842,7 +838,7 @@ Keyword Argument       Description
                        details.
 =====================  =====================================================
 
-__ https://docs.oracle.com/en/database/oracle/oracle-database/18/spatl/
+__ https://docs.oracle.com/en/database/oracle/oracle-database/21/spatl/
    spatial-concepts.html#GUID-CE10AB14-D5EA-43BA-A647-DAC9EEF41EE6
 
 Example::
@@ -939,7 +935,7 @@ Example::
     >>> u = Zipcode.objects.filter(poly__within=bbox).aggregate(Union(poly))  # A more sensible approach.
 
 .. rubric:: Footnotes
-.. [#fnde9im] *See* `OpenGIS Simple Feature Specification For SQL <http://www.opengis.org/docs/99-049.pdf>`_, at Ch. 2.1.13.2, p. 2-13 (The Dimensionally Extended Nine-Intersection Model).
+.. [#fnde9im] *See* `OpenGIS Simple Feature Specification For SQL <https://portal.ogc.org/files/?artifact_id=829>`_, at Ch. 2.1.13.2, p. 2-13 (The Dimensionally Extended Nine-Intersection Model).
 .. [#fnsdorelate] *See* `SDO_RELATE documentation <https://docs.oracle.com/en/
    database/oracle/oracle-database/18/spatl/spatial-operators-reference.html#
    GUID-97C17C18-F05E-49B4-BE11-E89B972E2A02>`_, from the Oracle Spatial and
