@@ -4,28 +4,44 @@ File storage API
 
 .. module:: django.core.files.storage
 
-Getting the current storage class
+Getting the default storage class
 =================================
 
-Django provides two convenient ways to access the current storage class:
+Django provides convenient ways to access the default storage class:
+
+.. data:: storages
+
+    .. versionadded:: 4.2
+
+    Storage instances as defined by :setting:`STORAGES`.
 
 .. class:: DefaultStorage
 
     :class:`~django.core.files.storage.DefaultStorage` provides
-    lazy access to the current default storage system as defined by
-    :setting:`DEFAULT_FILE_STORAGE`. :class:`DefaultStorage` uses
-    :func:`~django.core.files.storage.get_storage_class` internally.
+    lazy access to the default storage system as defined by ``default`` key in
+    :setting:`STORAGES`. :class:`DefaultStorage` uses
+    :data:`~django.core.files.storage.storages` internally.
+
+.. data:: default_storage
+
+    :data:`~django.core.files.storage.default_storage` is an instance of the
+    :class:`~django.core.files.storage.DefaultStorage`.
 
 .. function:: get_storage_class(import_path=None)
 
     Returns a class or module which implements the storage API.
 
     When called without the ``import_path`` parameter ``get_storage_class``
-    will return the current default storage system as defined by
-    :setting:`DEFAULT_FILE_STORAGE`. If ``import_path`` is provided,
-    ``get_storage_class`` will attempt to import the class or module from the
-    given path and will return it if successful. An exception will be
-    raised if the import is unsuccessful.
+    will return the default storage system as defined by ``default`` key in
+    :setting:`STORAGES`. If ``import_path`` is provided, ``get_storage_class``
+    will attempt to import the class or module from the given path and will
+    return it if successful. An exception will be raised if the import is
+    unsuccessful.
+
+    .. deprecated:: 4.2
+
+        The ``get_storage_class()`` function is deprecated. Use
+        :data:`storages` instead
 
 The ``FileSystemStorage`` class
 ===============================
@@ -69,6 +85,39 @@ The ``FileSystemStorage`` class
         time of the last metadata change, and on others (like Windows), it's
         the creation time of the file.
 
+The ``InMemoryStorage`` class
+=============================
+
+.. versionadded:: 4.2
+
+.. class:: InMemoryStorage(location=None, base_url=None, file_permissions_mode=None, directory_permissions_mode=None)
+
+    The :class:`~django.core.files.storage.InMemoryStorage` class implements
+    a memory-based file storage. It has no persistence, but can be useful for
+    speeding up tests by avoiding disk access.
+
+    .. attribute:: location
+
+        Absolute path to the directory name assigned to files. Defaults to the
+        value of your :setting:`MEDIA_ROOT` setting.
+
+    .. attribute:: base_url
+
+        URL that serves the files stored at this location.
+        Defaults to the value of your :setting:`MEDIA_URL` setting.
+
+    .. attribute:: file_permissions_mode
+
+        The file system permissions assigned to files, provided for
+        compatibility with ``FileSystemStorage``. Defaults to
+        :setting:`FILE_UPLOAD_PERMISSIONS`.
+
+    .. attribute:: directory_permissions_mode
+
+        The file system permissions assigned to directories, provided for
+        compatibility with ``FileSystemStorage``. Defaults to
+        :setting:`FILE_UPLOAD_DIRECTORY_PERMISSIONS`.
+
 The ``Storage`` class
 =====================
 
@@ -88,7 +137,7 @@ The ``Storage`` class
 
         Deletes the file referenced by ``name``. If deletion is not supported
         on the target storage system this will raise ``NotImplementedError``
-        instead
+        instead.
 
     .. method:: exists(name)
 
@@ -105,6 +154,12 @@ The ``Storage`` class
         If :setting:`USE_TZ` is ``True``, returns an aware ``datetime``,
         otherwise returns a naive ``datetime`` in the local timezone.
 
+    .. method:: get_alternative_name(file_root, file_ext)
+
+        Returns an alternative filename based on the ``file_root`` and
+        ``file_ext`` parameters, an underscore plus a random 7 character
+        alphanumeric string is appended to the filename before the extension.
+
     .. method:: get_available_name(name, max_length=None)
 
         Returns a filename based on the ``name`` parameter that's free and
@@ -116,9 +171,8 @@ The ``Storage`` class
         :exc:`SuspiciousFileOperation
         <django.core.exceptions.SuspiciousOperation>` exception will be raised.
 
-        If a file with ``name`` already exists, an underscore plus a random
-        7 character alphanumeric string is appended to the filename before
-        the extension.
+        If a file with ``name`` already exists, :meth:`get_alternative_name` is
+        called to obtain an alternative name.
 
     .. method:: get_created_time(name)
 

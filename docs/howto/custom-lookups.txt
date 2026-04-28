@@ -1,6 +1,6 @@
-==============
-Custom Lookups
-==============
+===========================
+How to write custom lookups
+===========================
 
 .. currentmodule:: django.db.models
 
@@ -9,10 +9,10 @@ filtering (for example, ``exact`` and ``icontains``). This documentation
 explains how to write custom lookups and how to alter the working of existing
 lookups. For the API references of lookups, see the :doc:`/ref/models/lookups`.
 
-A simple lookup example
-=======================
+A lookup example
+================
 
-Let's start with a simple custom lookup. We will write a custom lookup ``ne``
+Let's start with a small custom lookup. We will write a custom lookup ``ne``
 which works opposite to ``exact``. ``Author.objects.filter(name__ne='Jack')``
 will translate to the SQL:
 
@@ -24,35 +24,37 @@ This SQL is backend independent, so we don't need to worry about different
 databases.
 
 There are two steps to making this work. Firstly we need to implement the
-lookup, then we need to tell Django about it. The implementation is quite
-straightforward::
+lookup, then we need to tell Django about it::
 
   from django.db.models import Lookup
 
+
   class NotEqual(Lookup):
-      lookup_name = 'ne'
+      lookup_name = "ne"
 
       def as_sql(self, compiler, connection):
           lhs, lhs_params = self.process_lhs(compiler, connection)
           rhs, rhs_params = self.process_rhs(compiler, connection)
           params = lhs_params + rhs_params
-          return '%s <> %s' % (lhs, rhs), params
+          return "%s <> %s" % (lhs, rhs), params
 
-To register the ``NotEqual`` lookup we will just need to call
-``register_lookup`` on the field class we want the lookup to be available. In
-this case, the lookup makes sense on all ``Field`` subclasses, so we register
-it with ``Field`` directly::
+To register the ``NotEqual`` lookup we will need to call ``register_lookup`` on
+the field class we want the lookup to be available for. In this case, the lookup
+makes sense on all ``Field`` subclasses, so we register it with ``Field``
+directly::
 
-  from django.db.models.fields import Field
+  from django.db.models import Field
+
   Field.register_lookup(NotEqual)
 
 Lookup registration can also be done using a decorator pattern::
 
-    from django.db.models.fields import Field
+    from django.db.models import Field
+
 
     @Field.register_lookup
     class NotEqualLookup(Lookup):
-        # ...
+        ...
 
 We can now use ``foo__ne`` for any field ``foo``. You will need to ensure that
 this registration happens before you try to create any querysets using it. You
@@ -94,8 +96,8 @@ Finally we combine the parts into an SQL expression with ``<>``, and supply all
 the parameters for the query. We then return a tuple containing the generated
 SQL string and the parameters.
 
-A simple transformer example
-============================
+A transformer example
+=====================
 
 The custom lookup above is great, but in some cases you may want to be able to
 chain lookups together. For example, let's suppose we are building an
@@ -116,13 +118,15 @@ function ``ABS()`` to transform the value before comparison::
 
   from django.db.models import Transform
 
+
   class AbsoluteValue(Transform):
-      lookup_name = 'abs'
-      function = 'ABS'
+      lookup_name = "abs"
+      function = "ABS"
 
 Next, let's register it for ``IntegerField``::
 
   from django.db.models import IntegerField
+
   IntegerField.register_lookup(AbsoluteValue)
 
 We can now run the queries we had before.
@@ -133,7 +137,7 @@ We can now run the queries we had before.
     SELECT ... WHERE ABS("experiments"."change") = 27
 
 By using ``Transform`` instead of ``Lookup`` it means we are able to chain
-further lookups afterwards. So
+further lookups afterward. So
 ``Experiment.objects.filter(change__abs__lt=27)`` will generate the following
 SQL:
 
@@ -168,9 +172,10 @@ be done by adding an ``output_field`` attribute to the transform::
 
     from django.db.models import FloatField, Transform
 
+
     class AbsoluteValue(Transform):
-        lookup_name = 'abs'
-        function = 'ABS'
+        lookup_name = "abs"
+        function = "ABS"
 
         @property
         def output_field(self):
@@ -198,14 +203,16 @@ The implementation is::
 
   from django.db.models import Lookup
 
+
   class AbsoluteValueLessThan(Lookup):
-      lookup_name = 'lt'
+      lookup_name = "lt"
 
       def as_sql(self, compiler, connection):
           lhs, lhs_params = compiler.compile(self.lhs.lhs)
           rhs, rhs_params = self.process_rhs(compiler, connection)
           params = lhs_params + rhs_params + lhs_params + rhs_params
-          return '%s < %s AND %s > -%s' % (lhs, rhs, lhs, rhs), params
+          return "%s < %s AND %s > -%s" % (lhs, rhs, lhs, rhs), params
+
 
   AbsoluteValue.register_lookup(AbsoluteValueLessThan)
 
@@ -241,10 +248,10 @@ want the transformation to be applied to both the left-hand side and the
 right-hand side. For instance, if you want to filter a queryset based on the
 equality of the left and right-hand side insensitively to some SQL function.
 
-Let's examine the simple example of case-insensitive transformation here. This
-transformation isn't very useful in practice as Django already comes with a bunch
-of built-in case-insensitive lookups, but it will be a nice demonstration of
-bilateral transformations in a database-agnostic way.
+Let's examine case-insensitive transformations here. This transformation isn't
+very useful in practice as Django already comes with a bunch of built-in
+case-insensitive lookups, but it will be a nice demonstration of bilateral
+transformations in a database-agnostic way.
 
 We define an ``UpperCase`` transformer which uses the SQL function ``UPPER()`` to
 transform the values before comparison. We define
@@ -253,14 +260,16 @@ this transformation should apply to both ``lhs`` and ``rhs``::
 
   from django.db.models import Transform
 
+
   class UpperCase(Transform):
-      lookup_name = 'upper'
-      function = 'UPPER'
+      lookup_name = "upper"
+      function = "UPPER"
       bilateral = True
 
 Next, let's register it::
 
   from django.db.models import CharField, TextField
+
   CharField.register_lookup(UpperCase)
   TextField.register_lookup(UpperCase)
 
@@ -288,7 +297,8 @@ We can change the behavior on a specific backend by creating a subclass of
           lhs, lhs_params = self.process_lhs(compiler, connection)
           rhs, rhs_params = self.process_rhs(compiler, connection)
           params = lhs_params + rhs_params
-          return '%s != %s' % (lhs, rhs), params
+          return "%s != %s" % (lhs, rhs), params
+
 
   Field.register_lookup(MySQLNotEqual)
 
@@ -311,9 +321,9 @@ would override ``get_lookup`` with something like::
 
     class CoordinatesField(Field):
         def get_lookup(self, lookup_name):
-            if lookup_name.startswith('x'):
+            if lookup_name.startswith("x"):
                 try:
-                    dimension = int(lookup_name[1:])
+                    dimension = int(lookup_name.removeprefix("x"))
                 except ValueError:
                     pass
                 else:
