@@ -18,7 +18,9 @@ Example
 
 Give :class:`~django.core.paginator.Paginator` a list of objects, plus the
 number of items you'd like to have on each page, and it gives you methods for
-accessing the items for each page::
+accessing the items for each page:
+
+.. code-block:: pycon
 
     >>> from django.core.paginator import Paginator
     >>> objects = ['john', 'paul', 'george', 'ringo']
@@ -78,6 +80,8 @@ accessing the items for each page::
     objects such as Django's ``QuerySet`` to use a more efficient ``count()``
     method when available.
 
+.. _paginating-a-list-view:
+
 Paginating a ``ListView``
 =========================
 
@@ -90,7 +94,7 @@ your view class, for example::
 
     from myapp.models import Contact
 
-    class ContactList(ListView):
+    class ContactListView(ListView):
         paginate_by = 2
         model = Contact
 

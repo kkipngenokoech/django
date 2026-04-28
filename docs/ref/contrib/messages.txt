@@ -180,7 +180,9 @@ Displaying messages
 -------------------
 .. function:: get_messages(request)
 
-**In your template**, use something like::
+**In your template**, use something like:
+
+.. code-block:: html+django
 
     {% if messages %}
     <ul class="messages">
@@ -199,7 +201,9 @@ Even if you know there is only one message, you should still iterate over the
 cleared for the next request.
 
 The context processor also provides a ``DEFAULT_MESSAGE_LEVELS`` variable which
-is a mapping of the message level names to their numeric value::
+is a mapping of the message level names to their numeric value:
+
+.. code-block:: html+django
 
     {% if messages %}
     <ul class="messages">
@@ -365,7 +369,7 @@ Adding messages in class-based views
     from django.views.generic.edit import CreateView
     from myapp.models import Author
 
-    class AuthorCreate(SuccessMessageMixin, CreateView):
+    class AuthorCreateView(SuccessMessageMixin, CreateView):
         model = Author
         success_url = '/success/'
         success_message = "%(name)s was created successfully"
@@ -382,7 +386,7 @@ method.
     from django.views.generic.edit import CreateView
     from myapp.models import ComplicatedModel
 
-    class ComplicatedCreate(SuccessMessageMixin, CreateView):
+    class ComplicatedCreateView(SuccessMessageMixin, CreateView):
         model = ComplicatedModel
         success_url = '/success/'
         success_message = "%(calculated_field)s was created successfully"

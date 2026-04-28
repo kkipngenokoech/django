@@ -57,7 +57,7 @@ Attributes
 Methods
 -------
 
-.. method:: SimpleTemplateResponse.__init__(template, context=None, content_type=None, status=None, charset=None, using=None)
+.. method:: SimpleTemplateResponse.__init__(template, context=None, content_type=None, status=None, charset=None, using=None, headers=None)
 
     Instantiates a :class:`~django.template.response.SimpleTemplateResponse`
     object with the given template, context, content type, HTTP status, and
@@ -89,6 +89,9 @@ Methods
     ``using``
         The :setting:`NAME <TEMPLATES-NAME>` of a template engine to use for
         loading the template.
+
+    ``headers``
+        A :class:`dict` of HTTP headers to add to the response.
 
 .. method:: SimpleTemplateResponse.resolve_context(context)
 
@@ -149,7 +152,7 @@ Methods
 Methods
 -------
 
-.. method:: TemplateResponse.__init__(request, template, context=None, content_type=None, status=None, charset=None, using=None)
+.. method:: TemplateResponse.__init__(request, template, context=None, content_type=None, status=None, charset=None, using=None, headers=None)
 
     Instantiates a :class:`~django.template.response.TemplateResponse` object
     with the given request, template, context, content type, HTTP status, and
@@ -185,6 +188,9 @@ Methods
         The :setting:`NAME <TEMPLATES-NAME>` of a template engine to use for
         loading the template.
 
+    ``headers``
+        A :class:`dict` of HTTP headers to add to the response.
+
 The rendering process
 =====================
 
@@ -211,8 +217,10 @@ subsequent rendering calls do not change the response content.
 
 However, when ``response.content`` is explicitly assigned, the
 change is always applied. If you want to force the content to be
-re-rendered, you can re-evaluate the rendered content, and assign
-the content of the response manually::
+re-rendered, you can reevaluate the rendered content, and assign
+the content of the response manually:
+
+.. code-block:: pycon
 
     # Set up a rendered TemplateResponse
     >>> from django.template.response import TemplateResponse

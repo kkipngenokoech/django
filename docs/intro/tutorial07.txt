@@ -3,7 +3,7 @@ Writing your first Django app, part 7
 =====================================
 
 This tutorial begins where :doc:`Tutorial 6 </intro/tutorial06>` left off. We're
-continuing the Web-poll application and will focus on customizing Django's
+continuing the web-poll application and will focus on customizing Django's
 automatically-generated admin site that we first explored in :doc:`Tutorial 2
 </intro/tutorial02>`.
 
@@ -24,7 +24,7 @@ Let's see how this works by reordering the fields on the edit form. Replace
 the ``admin.site.register(Question)`` line with:
 
 .. code-block:: python
-    :caption: polls/admin.py
+    :caption: ``polls/admin.py``
 
     from django.contrib import admin
 
@@ -53,7 +53,7 @@ And speaking of forms with dozens of fields, you might want to split the form
 up into fieldsets:
 
 .. code-block:: python
-    :caption: polls/admin.py
+    :caption: ``polls/admin.py``
 
     from django.contrib import admin
 
@@ -87,7 +87,7 @@ There are two ways to solve this problem. The first is to register ``Choice``
 with the admin just as we did with ``Question``:
 
 .. code-block:: python
-    :caption: polls/admin.py
+    :caption: ``polls/admin.py``
 
     from django.contrib import admin
 
@@ -106,12 +106,12 @@ database. Django knows that a :class:`~django.db.models.ForeignKey` should be
 represented in the admin as a ``<select>`` box. In our case, only one question
 exists at this point.
 
-Also note the "Add Another" link next to "Question." Every object with a
-``ForeignKey`` relationship to another gets this for free. When you click "Add
-Another", you'll get a popup window with the "Add question" form. If you add a question
-in that window and click "Save", Django will save the question to the database and
-dynamically add it as the selected choice on the "Add choice" form you're
-looking at.
+Also note the "Add another question" link next to "Question." Every object with
+a ``ForeignKey`` relationship to another gets this for free. When you click
+"Add another question", you'll get a popup window with the "Add question" form.
+If you add a question in that window and click "Save", Django will save the
+question to the database and dynamically add it as the selected choice on the
+"Add choice" form you're looking at.
 
 But, really, this is an inefficient way of adding ``Choice`` objects to the system.
 It'd be better if you could add a bunch of Choices directly when you create the
@@ -121,7 +121,7 @@ Remove the ``register()`` call for the ``Choice`` model. Then, edit the ``Questi
 registration code to read:
 
 .. code-block:: python
-    :caption: polls/admin.py
+    :caption: ``polls/admin.py``
 
     from django.contrib import admin
 
@@ -156,8 +156,8 @@ already-created object, you get another three extra slots.
 
 At the end of the three current slots you will find an "Add another Choice"
 link.  If you click on it, a new slot will be added. If you want to remove the
-added slot, you can click on the X to the top right of the added slot. Note
-that you can't remove the original three slots. This image shows an added slot:
+added slot, you can click on the X to the top right of the added slot. This
+image shows an added slot:
 
 .. image:: _images/admin14t.png
    :alt: Additional slot added dynamically
@@ -168,7 +168,7 @@ tabular way of displaying inline related objects. To use it, change the
 ``ChoiceInline`` declaration to read:
 
 .. code-block:: python
-    :caption: polls/admin.py
+    :caption: ``polls/admin.py``
 
     class ChoiceInline(admin.TabularInline):
         #...
@@ -180,7 +180,7 @@ related objects are displayed in a more compact, table-based format:
    :alt: Add question page now has more compact choices
 
 Note that there is an extra "Delete?" column that allows removing rows added
-using the "Add Another Choice" button and rows that have already been saved.
+using the "Add another Choice" button and rows that have already been saved.
 
 Customize the admin change list
 ===============================
@@ -200,21 +200,21 @@ tuple of field names to display, as columns, on the change list page for the
 object:
 
 .. code-block:: python
-    :caption: polls/admin.py
+    :caption: ``polls/admin.py``
 
     class QuestionAdmin(admin.ModelAdmin):
         # ...
-        list_display = ('question_text', 'pub_date')
+        list_display = ['question_text', 'pub_date']
 
 For good measure, let's also include the ``was_published_recently()`` method
 from :doc:`Tutorial 2 </intro/tutorial02>`:
 
 .. code-block:: python
-    :caption: polls/admin.py
+    :caption: ``polls/admin.py``
 
     class QuestionAdmin(admin.ModelAdmin):
         # ...
-        list_display = ('question_text', 'pub_date', 'was_published_recently')
+        list_display = ['question_text', 'pub_date', 'was_published_recently']
 
 Now the question change list page looks like this:
 
@@ -228,22 +228,26 @@ of an arbitrary method is not supported. Also note that the column header for
 underscores replaced with spaces), and that each line contains the string
 representation of the output.
 
-You can improve that by giving that method (in :file:`polls/models.py`) a few
-attributes, as follows:
+You can improve that by using the :func:`~django.contrib.admin.display`
+decorator on that method (in :file:`polls/models.py`), as follows:
 
 .. code-block:: python
-    :caption: polls/models.py
+    :caption: ``polls/models.py``
+
+    from django.contrib import admin
 
     class Question(models.Model):
         # ...
+        @admin.display(
+            boolean=True,
+            ordering='pub_date',
+            description='Published recently?',
+        )
         def was_published_recently(self):
             now = timezone.now()
             return now - datetime.timedelta(days=1) <= self.pub_date <= now
-        was_published_recently.admin_order_field = 'pub_date'
-        was_published_recently.boolean = True
-        was_published_recently.short_description = 'Published recently?'
 
-For more information on these method properties, see
+For more information on the properties configurable via the decorator, see
 :attr:`~django.contrib.admin.ModelAdmin.list_display`.
 
 Edit your :file:`polls/admin.py` file again and add an improvement to the
@@ -306,7 +310,7 @@ Open your settings file (:file:`mysite/settings.py`, remember) and add a
 :setting:`DIRS <TEMPLATES-DIRS>` option in the :setting:`TEMPLATES` setting:
 
 .. code-block:: python
-    :caption: mysite/settings.py
+    :caption: ``mysite/settings.py``
 
     TEMPLATES = [
         {
@@ -339,7 +343,7 @@ when loading Django templates; it's a search path.
 Now create a directory called ``admin`` inside ``templates``, and copy the
 template ``admin/base_site.html`` from within the default Django admin
 template directory in the source code of Django itself
-(``django/contrib/admin/templates``) into that directory.
+(:source:`django/contrib/admin/templates`) into that directory.
 
 .. admonition:: Where are the Django source files?
 
@@ -414,12 +418,5 @@ uses a template variable called ``app_list``. That variable contains every
 installed Django app. Instead of using that, you can hard-code links to
 object-specific admin pages in whatever way you think is best.
 
-What's next?
-============
-
-The beginner tutorial ends here. In the meantime, you might want to check out
-some pointers on :doc:`where to go from here </intro/whatsnext>`.
-
-If you are familiar with Python packaging and interested in learning how to
-turn polls into a "reusable app", check out :doc:`Advanced tutorial: How to
-write reusable apps</intro/reusable-apps>`.
+When you're comfortable with the admin, read :doc:`part 8 of this
+tutorial </intro/tutorial08>` to learn how to use third-party packages.
