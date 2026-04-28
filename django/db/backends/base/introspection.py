@@ -4,7 +4,11 @@ from collections import namedtuple
 TableInfo = namedtuple('TableInfo', ['name', 'type'])
 
 # Structure returned by the DB-API cursor.description interface (PEP 249)
-FieldInfo = namedtuple('FieldInfo', 'name type_code display_size internal_size precision scale null_ok default')
+FieldInfo = namedtuple(
+    'FieldInfo',
+    'name type_code display_size internal_size precision scale null_ok '
+    'default collation'
+)
 
 
 class BaseDatabaseIntrospection:
@@ -53,6 +57,16 @@ class BaseDatabaseIntrospection:
         views that exist in the database.
         """
         raise NotImplementedError('subclasses of BaseDatabaseIntrospection may require a get_table_list() method')
+
+    def get_table_description(self, cursor, table_name):
+        """
+        Return a description of the table with the DB-API cursor.description
+        interface.
+        """
+        raise NotImplementedError(
+            'subclasses of BaseDatabaseIntrospection may require a '
+            'get_table_description() method.'
+        )
 
     def get_migratable_models(self):
         from django.apps import apps
@@ -130,13 +144,15 @@ class BaseDatabaseIntrospection:
         """
         raise NotImplementedError('subclasses of BaseDatabaseIntrospection may require a get_sequences() method')
 
-    def get_key_columns(self, cursor, table_name):
+    def get_relations(self, cursor, table_name):
         """
-        Backends can override this to return a list of:
-            (column_name, referenced_table_name, referenced_column_name)
-        for all key columns in given table.
+        Return a dictionary of {field_name: (field_name_other_table, other_table)}
+        representing all foreign keys in the given table.
         """
-        raise NotImplementedError('subclasses of BaseDatabaseIntrospection may require a get_key_columns() method')
+        raise NotImplementedError(
+            'subclasses of BaseDatabaseIntrospection may require a '
+            'get_relations() method.'
+        )
 
     def get_primary_key_column(self, cursor, table_name):
         """

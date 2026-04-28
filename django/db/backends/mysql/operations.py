@@ -2,8 +2,10 @@ import uuid
 
 from django.conf import settings
 from django.db.backends.base.operations import BaseDatabaseOperations
+from django.db.backends.utils import split_tzname_delta
+from django.db.models import Exists, ExpressionWrapper, Lookup
+from django.db.models.constants import OnConflict
 from django.utils import timezone
-from django.utils.duration import duration_microseconds
 from django.utils.encoding import force_str
 
 
@@ -30,6 +32,7 @@ class DatabaseOperations(BaseDatabaseOperations):
         'PositiveBigIntegerField': 'unsigned integer',
         'PositiveIntegerField': 'unsigned integer',
         'PositiveSmallIntegerField': 'unsigned integer',
+        'DurationField': 'signed integer',
     }
     cast_char_field_without_max_length = 'char'
     explain_prefix = 'EXPLAIN'
@@ -55,7 +58,8 @@ class DatabaseOperations(BaseDatabaseOperations):
             # EXTRACT returns 1-53 based on ISO-8601 for the week number.
             return "EXTRACT(%s FROM %s)" % (lookup_type.upper(), field_name)
 
-    def date_trunc_sql(self, lookup_type, field_name):
+    def date_trunc_sql(self, lookup_type, field_name, tzname=None):
+        field_name = self._convert_field_to_tz(field_name, tzname)
         fields = {
             'year': '%%Y-01-01',
             'month': '%%Y-%%m-01',
@@ -75,14 +79,11 @@ class DatabaseOperations(BaseDatabaseOperations):
             return "DATE(%s)" % (field_name)
 
     def _prepare_tzname_delta(self, tzname):
-        if '+' in tzname:
-            return tzname[tzname.find('+'):]
-        elif '-' in tzname:
-            return tzname[tzname.find('-'):]
-        return tzname
+        tzname, sign, offset = split_tzname_delta(tzname)
+        return f'{sign}{offset}' if offset else tzname
 
     def _convert_field_to_tz(self, field_name, tzname):
-        if settings.USE_TZ and self.connection.timezone_name != tzname:
+        if tzname and settings.USE_TZ and self.connection.timezone_name != tzname:
             field_name = "CONVERT_TZ(%s, '%s', '%s')" % (
                 field_name,
                 self.connection.timezone_name,
@@ -128,7 +129,8 @@ class DatabaseOperations(BaseDatabaseOperations):
             sql = "CAST(DATE_FORMAT(%s, '%s') AS DATETIME)" % (field_name, format_str)
         return sql
 
-    def time_trunc_sql(self, lookup_type, field_name):
+    def time_trunc_sql(self, lookup_type, field_name, tzname=None):
+        field_name = self._convert_field_to_tz(field_name, tzname)
         fields = {
             'hour': '%%H:00:00',
             'minute': '%%H:%%i:00',
@@ -140,8 +142,12 @@ class DatabaseOperations(BaseDatabaseOperations):
         else:
             return "TIME(%s)" % (field_name)
 
-    def date_interval_sql(self, timedelta):
-        return 'INTERVAL %s MICROSECOND' % duration_microseconds(timedelta)
+    def fetch_returned_insert_rows(self, cursor):
+        """
+        Given a cursor object that has just performed an INSERT...RETURNING
+        statement into a table, return the tuple of returned data.
+        """
+        return cursor.fetchall()
 
     def format_for_duration_arithmetic(self, sql):
         return 'INTERVAL %s MICROSECOND' % sql
@@ -153,6 +159,9 @@ class DatabaseOperations(BaseDatabaseOperations):
         implicit sorting going on.
         """
         return [(None, ("NULL", [], False))]
+
+    def adapt_decimalfield_value(self, value, max_digits=None, decimal_places=None):
+        return value
 
     def last_executed_query(self, cursor, sql, params):
         # With MySQLdb, cursor objects have an (undocumented) "_executed"
@@ -170,31 +179,63 @@ class DatabaseOperations(BaseDatabaseOperations):
             return name  # Quoting once is enough.
         return "`%s`" % name
 
-    def random_function_sql(self):
-        return 'RAND()'
+    def return_insert_columns(self, fields):
+        # MySQL and MariaDB < 10.5.0 don't support an INSERT...RETURNING
+        # statement.
+        if not fields:
+            return '', ()
+        columns = [
+            '%s.%s' % (
+                self.quote_name(field.model._meta.db_table),
+                self.quote_name(field.column),
+            ) for field in fields
+        ]
+        return 'RETURNING %s' % ', '.join(columns), ()
 
-    def sql_flush(self, style, tables, sequences, allow_cascade=False):
-        # NB: The generated SQL below is specific to MySQL
-        # 'TRUNCATE x;', 'TRUNCATE y;', 'TRUNCATE z;'... style SQL statements
-        # to clear all tables of all data
-        if tables:
-            sql = ['SET FOREIGN_KEY_CHECKS = 0;']
-            for table in tables:
-                sql.append('%s %s;' % (
-                    style.SQL_KEYWORD('TRUNCATE'),
-                    style.SQL_FIELD(self.quote_name(table)),
-                ))
-            sql.append('SET FOREIGN_KEY_CHECKS = 1;')
-            sql.extend(self.sequence_reset_by_name_sql(style, sequences))
-            return sql
-        else:
+    def sql_flush(self, style, tables, *, reset_sequences=False, allow_cascade=False):
+        if not tables:
             return []
 
+        sql = ['SET FOREIGN_KEY_CHECKS = 0;']
+        if reset_sequences:
+            # It's faster to TRUNCATE tables that require a sequence reset
+            # since ALTER TABLE AUTO_INCREMENT is slower than TRUNCATE.
+            sql.extend(
+                '%s %s;' % (
+                    style.SQL_KEYWORD('TRUNCATE'),
+                    style.SQL_FIELD(self.quote_name(table_name)),
+                ) for table_name in tables
+            )
+        else:
+            # Otherwise issue a simple DELETE since it's faster than TRUNCATE
+            # and preserves sequences.
+            sql.extend(
+                '%s %s %s;' % (
+                    style.SQL_KEYWORD('DELETE'),
+                    style.SQL_KEYWORD('FROM'),
+                    style.SQL_FIELD(self.quote_name(table_name)),
+                ) for table_name in tables
+            )
+        sql.append('SET FOREIGN_KEY_CHECKS = 1;')
+        return sql
+
+    def sequence_reset_by_name_sql(self, style, sequences):
+        return [
+            '%s %s %s %s = 1;' % (
+                style.SQL_KEYWORD('ALTER'),
+                style.SQL_KEYWORD('TABLE'),
+                style.SQL_FIELD(self.quote_name(sequence_info['table'])),
+                style.SQL_FIELD('AUTO_INCREMENT'),
+            ) for sequence_info in sequences
+        ]
+
     def validate_autopk_value(self, value):
-        # MySQLism: zero in AUTO_INCREMENT field does not work. Refs #17653.
-        if value == 0:
-            raise ValueError('The database backend does not accept 0 as a '
-                             'value for AutoField.')
+        # Zero in AUTO_INCREMENT field does not work without the
+        # NO_AUTO_VALUE_ON_ZERO SQL mode.
+        if value == 0 and not self.connection.features.allows_auto_pk_0:
+            raise ValueError(
+                'The database backend does not accept 0 as a value for AutoField.'
+            )
         return value
 
     def adapt_datetimefield_value(self, value):
@@ -225,10 +266,13 @@ class DatabaseOperations(BaseDatabaseOperations):
         if timezone.is_aware(value):
             raise ValueError("MySQL backend does not support timezone-aware times.")
 
-        return str(value)
+        return value.isoformat(timespec='microseconds')
 
     def max_name_length(self):
         return 64
+
+    def pk_default_value(self):
+        return 'NULL'
 
     def bulk_insert_sql(self, fields, placeholder_rows):
         placeholder_rows_sql = (", ".join(row) for row in placeholder_rows)
@@ -240,7 +284,8 @@ class DatabaseOperations(BaseDatabaseOperations):
             return 'POW(%s)' % ','.join(sub_expressions)
         # Convert the result to a signed integer since MySQL's binary operators
         # return an unsigned integer.
-        elif connector in ('&', '|', '<<'):
+        elif connector in ('&', '|', '<<', '#'):
+            connector = '^' if connector == '#' else connector
             return 'CONVERT(%s, SIGNED)' % connector.join(sub_expressions)
         elif connector == '>>':
             lhs, rhs = sub_expressions
@@ -250,7 +295,7 @@ class DatabaseOperations(BaseDatabaseOperations):
     def get_db_converters(self, expression):
         converters = super().get_db_converters(expression)
         internal_type = expression.output_field.get_internal_type()
-        if internal_type in ['BooleanField', 'NullBooleanField']:
+        if internal_type == 'BooleanField':
             converters.append(self.convert_booleanfield_value)
         elif internal_type == 'DateTimeField':
             if settings.USE_TZ:
@@ -309,14 +354,11 @@ class DatabaseOperations(BaseDatabaseOperations):
         if format and not (analyze and not self.connection.mysql_is_mariadb):
             # Only MariaDB supports the analyze option with formats.
             prefix += ' FORMAT=%s' % format
-        if self.connection.features.needs_explain_extended and not analyze and format is None:
-            # ANALYZE, EXTENDED, and FORMAT are mutually exclusive options.
-            prefix += ' EXTENDED'
         return prefix
 
     def regex_lookup(self, lookup_type):
         # REGEXP BINARY doesn't work correctly in MySQL 8+ and REGEXP_LIKE
-        # doesn't exist in MySQL 5.6 or in MariaDB.
+        # doesn't exist in MySQL 5.x or in MariaDB.
         if self.connection.mysql_version < (8, 0, 0) or self.connection.mysql_is_mariadb:
             if lookup_type == 'regex':
                 return '%s REGEXP BINARY %s'
@@ -325,5 +367,52 @@ class DatabaseOperations(BaseDatabaseOperations):
         match_option = 'c' if lookup_type == 'regex' else 'i'
         return "REGEXP_LIKE(%%s, %%s, '%s')" % match_option
 
-    def insert_statement(self, ignore_conflicts=False):
-        return 'INSERT IGNORE INTO' if ignore_conflicts else super().insert_statement(ignore_conflicts)
+    def insert_statement(self, on_conflict=None):
+        if on_conflict == OnConflict.IGNORE:
+            return 'INSERT IGNORE INTO'
+        return super().insert_statement(on_conflict=on_conflict)
+
+    def lookup_cast(self, lookup_type, internal_type=None):
+        lookup = '%s'
+        if internal_type == 'JSONField':
+            if self.connection.mysql_is_mariadb or lookup_type in (
+                'iexact', 'contains', 'icontains', 'startswith', 'istartswith',
+                'endswith', 'iendswith', 'regex', 'iregex',
+            ):
+                lookup = 'JSON_UNQUOTE(%s)'
+        return lookup
+
+    def conditional_expression_supported_in_where_clause(self, expression):
+        # MySQL ignores indexes with boolean fields unless they're compared
+        # directly to a boolean value.
+        if isinstance(expression, (Exists, Lookup)):
+            return True
+        if isinstance(expression, ExpressionWrapper) and expression.conditional:
+            return self.conditional_expression_supported_in_where_clause(expression.expression)
+        if getattr(expression, 'conditional', False):
+            return False
+        return super().conditional_expression_supported_in_where_clause(expression)
+
+    def on_conflict_suffix_sql(self, fields, on_conflict, update_fields, unique_fields):
+        if on_conflict == OnConflict.UPDATE:
+            conflict_suffix_sql = 'ON DUPLICATE KEY UPDATE %(fields)s'
+            field_sql = '%(field)s = VALUES(%(field)s)'
+            # The use of VALUES() is deprecated in MySQL 8.0.20+. Instead, use
+            # aliases for the new row and its columns available in MySQL
+            # 8.0.19+.
+            if not self.connection.mysql_is_mariadb:
+                if self.connection.mysql_version >= (8, 0, 19):
+                    conflict_suffix_sql = f'AS new {conflict_suffix_sql}'
+                    field_sql = '%(field)s = new.%(field)s'
+            # VALUES() was renamed to VALUE() in MariaDB 10.3.3+.
+            elif self.connection.mysql_version >= (10, 3, 3):
+                field_sql = '%(field)s = VALUE(%(field)s)'
+
+            fields = ', '.join([
+                field_sql % {'field': field}
+                for field in map(self.quote_name, update_fields)
+            ])
+            return conflict_suffix_sql % {'fields': fields}
+        return super().on_conflict_suffix_sql(
+            fields, on_conflict, update_fields, unique_fields,
+        )

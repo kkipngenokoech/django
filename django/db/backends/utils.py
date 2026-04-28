@@ -1,12 +1,13 @@
 import datetime
 import decimal
 import functools
-import hashlib
 import logging
 import time
 from contextlib import contextmanager
 
 from django.db import NotSupportedError
+from django.utils.crypto import md5
+from django.utils.dateparse import parse_time
 
 logger = logging.getLogger('django.db.backends')
 
@@ -121,12 +122,25 @@ class CursorDebugWrapper(CursorWrapper):
                 'time': '%.3f' % duration,
             })
             logger.debug(
-                '(%.3f) %s; args=%s',
+                '(%.3f) %s; args=%s; alias=%s',
                 duration,
                 sql,
                 params,
-                extra={'duration': duration, 'sql': sql, 'params': params},
+                self.db.alias,
+                extra={'duration': duration, 'sql': sql, 'params': params, 'alias': self.db.alias},
             )
+
+
+def split_tzname_delta(tzname):
+    """
+    Split a time zone name into a 3-tuple of (name, sign, offset).
+    """
+    for sign in ['+', '-']:
+        if sign in tzname:
+            name, offset = tzname.rsplit(sign, 1)
+            if offset and parse_time(offset):
+                return name, sign, offset
+    return tzname, None, None
 
 
 ###############################################
@@ -181,7 +195,7 @@ def typecast_timestamp(s):  # does NOT store time zone information
 
 def split_identifier(identifier):
     """
-    Split a SQL identifier into a two element tuple of (namespace, name).
+    Split an SQL identifier into a two element tuple of (namespace, name).
 
     The identifier could be a table, column, or sequence name might be prefixed
     by a namespace.
@@ -195,7 +209,7 @@ def split_identifier(identifier):
 
 def truncate_name(identifier, length=None, hash_len=4):
     """
-    Shorten a SQL identifier to a repeatable mangled version with the given
+    Shorten an SQL identifier to a repeatable mangled version with the given
     length.
 
     If a quote stripped name contains a namespace, e.g. USERNAME"."TABLE,
@@ -215,7 +229,7 @@ def names_digest(*args, length):
     Generate a 32-bit digest of a set of arguments that can be used to shorten
     identifying names.
     """
-    h = hashlib.md5()
+    h = md5(usedforsecurity=False)
     for arg in args:
         h.update(arg.encode())
     return h.hexdigest()[:length]

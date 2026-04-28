@@ -69,11 +69,13 @@ class HumanizeTests(SimpleTestCase):
             100, 1000, 10123, 10311, 1000000, 1234567.25, '100', '1000',
             '10123', '10311', '1000000', '1234567.1234567',
             Decimal('1234567.1234567'), None,
+            '１２３４５６７', '１２３４５６７.１２',
         )
         result_list = (
             '100', '1,000', '10,123', '10,311', '1,000,000', '1,234,567.25',
             '100', '1,000', '10,123', '10,311', '1,000,000', '1,234,567.1234567',
             '1,234,567.1234567', None,
+            '1,234,567', '１,２３４,５６７.１２',
         )
         with translation.override('en'):
             self.humanize_tester(test_list, result_list, 'intcomma')
@@ -83,57 +85,75 @@ class HumanizeTests(SimpleTestCase):
             100, 1000, 10123, 10311, 1000000, 1234567.25, '100', '1000',
             '10123', '10311', '1000000', '1234567.1234567',
             Decimal('1234567.1234567'), None,
+            '１２３４５６７', '１２３４５６７.１２',
         )
         result_list = (
             '100', '1,000', '10,123', '10,311', '1,000,000', '1,234,567.25',
             '100', '1,000', '10,123', '10,311', '1,000,000', '1,234,567.1234567',
             '1,234,567.1234567', None,
+            '1,234,567', '１,２３４,５６７.１２',
         )
-        with self.settings(USE_L10N=True, USE_THOUSAND_SEPARATOR=False):
+        with self.settings(USE_THOUSAND_SEPARATOR=False):
             with translation.override('en'):
                 self.humanize_tester(test_list, result_list, 'intcomma')
 
     def test_intcomma_without_number_grouping(self):
         # Regression for #17414
-        with translation.override('ja'), self.settings(USE_L10N=True):
+        with translation.override('ja'):
             self.humanize_tester([100], ['100'], 'intcomma')
 
     def test_intword(self):
-        test_list = (
+        # Positive integers.
+        test_list_positive = (
             '100', '1000000', '1200000', '1290000', '1000000000', '2000000000',
             '6000000000000', '1300000000000000', '3500000000000000000000',
-            '8100000000000000000000000000000000', None, ('1' + '0' * 100),
+            '8100000000000000000000000000000000', ('1' + '0' * 100),
             ('1' + '0' * 104),
         )
-        result_list = (
+        result_list_positive = (
             '100', '1.0 million', '1.2 million', '1.3 million', '1.0 billion',
             '2.0 billion', '6.0 trillion', '1.3 quadrillion', '3.5 sextillion',
-            '8.1 decillion', None, '1.0 googol', ('1' + '0' * 104),
+            '8.1 decillion', '1.0 googol', ('1' + '0' * 104),
         )
+        # Negative integers.
+        test_list_negative = ('-' + test for test in test_list_positive)
+        result_list_negative = ('-' + result for result in result_list_positive)
         with translation.override('en'):
-            self.humanize_tester(test_list, result_list, 'intword')
+            self.humanize_tester(
+                (*test_list_positive, *test_list_negative, None),
+                (*result_list_positive, *result_list_negative, None),
+                'intword',
+            )
 
     def test_i18n_intcomma(self):
         test_list = (100, 1000, 10123, 10311, 1000000, 1234567.25,
                      '100', '1000', '10123', '10311', '1000000', None)
         result_list = ('100', '1.000', '10.123', '10.311', '1.000.000', '1.234.567,25',
                        '100', '1.000', '10.123', '10.311', '1.000.000', None)
-        with self.settings(USE_L10N=True, USE_THOUSAND_SEPARATOR=True):
+        with self.settings(USE_THOUSAND_SEPARATOR=True):
             with translation.override('de'):
                 self.humanize_tester(test_list, result_list, 'intcomma')
 
     def test_i18n_intword(self):
-        test_list = (
+        # Positive integers.
+        test_list_positive = (
             '100', '1000000', '1200000', '1290000', '1000000000', '2000000000',
             '6000000000000',
         )
-        result_list = (
+        result_list_positive = (
             '100', '1,0 Million', '1,2 Millionen', '1,3 Millionen',
             '1,0 Milliarde', '2,0 Milliarden', '6,0 Billionen',
         )
-        with self.settings(USE_L10N=True, USE_THOUSAND_SEPARATOR=True):
+        # Negative integers.
+        test_list_negative = ('-' + test for test in test_list_positive)
+        result_list_negative = ('-' + result for result in result_list_positive)
+        with self.settings(USE_THOUSAND_SEPARATOR=True):
             with translation.override('de'):
-                self.humanize_tester(test_list, result_list, 'intword')
+                self.humanize_tester(
+                    (*test_list_positive, *test_list_negative),
+                    (*result_list_positive, *result_list_negative),
+                    'intword',
+                )
 
     def test_apnumber(self):
         test_list = [str(x) for x in range(1, 11)]
@@ -339,7 +359,7 @@ class HumanizeTests(SimpleTestCase):
         orig_humanize_datetime, humanize.datetime = humanize.datetime, MockDateTime
         try:
             # Choose a language with different naturaltime-past/naturaltime-future translations
-            with translation.override('cs'), self.settings(USE_L10N=True):
+            with translation.override('cs'):
                 self.humanize_tester(test_list, result_list, 'naturaltime')
         finally:
             humanize.datetime = orig_humanize_datetime

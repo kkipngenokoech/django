@@ -1,6 +1,5 @@
-import operator
 from collections import Counter, defaultdict
-from functools import partial, reduce
+from functools import partial
 from itertools import chain
 from operator import attrgetter
 
@@ -77,8 +76,10 @@ def get_candidate_relations_to_delete(opts):
 
 
 class Collector:
-    def __init__(self, using):
+    def __init__(self, using, origin=None):
         self.using = using
+        # A Model or QuerySet object.
+        self.origin = origin
         # Initially, {model: {instances}}, later values become lists.
         self.data = defaultdict(set)
         # {model: {(field, value): {instances}}}
@@ -305,7 +306,7 @@ class Collector:
                     model.__name__,
                     ', '.join(protected_objects),
                 ),
-                chain.from_iterable(protected_objects.values()),
+                set(chain.from_iterable(protected_objects.values())),
             )
         for related_model, related_fields in model_fast_deletes.items():
             batches = self.get_del_batches(new_objs, related_fields)
@@ -340,17 +341,20 @@ class Collector:
                             model.__name__,
                             ', '.join(restricted_objects),
                         ),
-                        chain.from_iterable(restricted_objects.values()),
+                        set(chain.from_iterable(restricted_objects.values())),
                     )
 
     def related_objects(self, related_model, related_fields, objs):
         """
         Get a QuerySet of the related model to objs via related fields.
         """
-        predicate = reduce(operator.or_, (
-            query_utils.Q(**{'%s__in' % related_field.name: objs})
-            for related_field in related_fields
-        ))
+        predicate = query_utils.Q(
+            *(
+                (f'{related_field.name}__in', objs)
+                for related_field in related_fields
+            ),
+            _connector=query_utils.Q.OR,
+        )
         return related_model._base_manager.using(self.using).filter(predicate)
 
     def instances_with_model(self):
@@ -392,7 +396,7 @@ class Collector:
         if len(self.data) == 1 and len(instances) == 1:
             instance = list(instances)[0]
             if self.can_fast_delete(instance):
-                with transaction.mark_for_rollback_on_error():
+                with transaction.mark_for_rollback_on_error(self.using):
                     count = sql.DeleteQuery(model).delete_batch([instance.pk], self.using)
                 setattr(instance, model._meta.pk.attname, None)
                 return count, {model._meta.label: count}
@@ -402,13 +406,15 @@ class Collector:
             for model, obj in self.instances_with_model():
                 if not model._meta.auto_created:
                     signals.pre_delete.send(
-                        sender=model, instance=obj, using=self.using
+                        sender=model, instance=obj, using=self.using,
+                        origin=self.origin,
                     )
 
             # fast deletes
             for qs in self.fast_deletes:
                 count = qs._raw_delete(using=self.using)
-                deleted_counter[qs.model._meta.label] += count
+                if count:
+                    deleted_counter[qs.model._meta.label] += count
 
             # update fields
             for model, instances_for_fieldvalues in self.field_updates.items():
@@ -426,12 +432,14 @@ class Collector:
                 query = sql.DeleteQuery(model)
                 pk_list = [obj.pk for obj in instances]
                 count = query.delete_batch(pk_list, self.using)
-                deleted_counter[model._meta.label] += count
+                if count:
+                    deleted_counter[model._meta.label] += count
 
                 if not model._meta.auto_created:
                     for obj in instances:
                         signals.post_delete.send(
-                            sender=model, instance=obj, using=self.using
+                            sender=model, instance=obj, using=self.using,
+                            origin=self.origin,
                         )
 
         # update collected instances

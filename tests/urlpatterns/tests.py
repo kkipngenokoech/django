@@ -1,9 +1,13 @@
+import string
 import uuid
 
 from django.core.exceptions import ImproperlyConfigured
 from django.test import SimpleTestCase
 from django.test.utils import override_settings
-from django.urls import NoReverseMatch, Resolver404, path, resolve, reverse
+from django.urls import (
+    NoReverseMatch, Resolver404, path, re_path, resolve, reverse,
+)
+from django.views import View
 
 from .converters import DynamicConverter
 from .views import empty_view
@@ -135,15 +139,57 @@ class SimplifiedURLTests(SimpleTestCase):
         url = reverse('inner-extra', kwargs={'extra': 'something'})
         self.assertEqual(url, '/included_urls/extra/something/')
 
+    def test_invalid_kwargs(self):
+        msg = 'kwargs argument must be a dict, but got str.'
+        with self.assertRaisesMessage(TypeError, msg):
+            path('hello/', empty_view, 'name')
+        with self.assertRaisesMessage(TypeError, msg):
+            re_path('^hello/$', empty_view, 'name')
+
     def test_invalid_converter(self):
         msg = "URL route 'foo/<nonexistent:var>/' uses invalid converter 'nonexistent'."
         with self.assertRaisesMessage(ImproperlyConfigured, msg):
             path('foo/<nonexistent:var>/', empty_view)
 
-    def test_space_in_route(self):
-        msg = "URL route 'space/<int: num>' cannot contain whitespace."
-        with self.assertRaisesMessage(ImproperlyConfigured, msg):
-            path('space/<int: num>', empty_view)
+    def test_invalid_view(self):
+        msg = 'view must be a callable or a list/tuple in the case of include().'
+        with self.assertRaisesMessage(TypeError, msg):
+            path('articles/', 'invalid_view')
+
+    def test_invalid_view_instance(self):
+        class EmptyCBV(View):
+            pass
+
+        msg = 'view must be a callable, pass EmptyCBV.as_view(), not EmptyCBV().'
+        with self.assertRaisesMessage(TypeError, msg):
+            path('foo', EmptyCBV())
+
+    def test_whitespace_in_route(self):
+        msg = (
+            "URL route 'space/<int:num>/extra/<str:%stest>' cannot contain "
+            "whitespace in angle brackets <…>"
+        )
+        for whitespace in string.whitespace:
+            with self.subTest(repr(whitespace)):
+                with self.assertRaisesMessage(ImproperlyConfigured, msg % whitespace):
+                    path('space/<int:num>/extra/<str:%stest>' % whitespace, empty_view)
+        # Whitespaces are valid in paths.
+        p = path('space%s/<int:num>/' % string.whitespace, empty_view)
+        match = p.resolve('space%s/1/' % string.whitespace)
+        self.assertEqual(match.kwargs, {'num': 1})
+
+    def test_path_trailing_newlines(self):
+        tests = [
+            '/articles/2003/\n',
+            '/articles/2010/\n',
+            '/en/foo/\n',
+            '/included_urls/extra/\n',
+            '/regex/1/\n',
+            '/users/1/\n',
+        ]
+        for url in tests:
+            with self.subTest(url=url), self.assertRaises(Resolver404):
+                resolve(url)
 
 
 @override_settings(ROOT_URLCONF='urlpatterns.converter_urls')
@@ -249,13 +295,21 @@ class SameNameTests(SimpleTestCase):
 
 
 class ParameterRestrictionTests(SimpleTestCase):
-    def test_non_identifier_parameter_name_causes_exception(self):
+    def test_integer_parameter_name_causes_exception(self):
         msg = (
             "URL route 'hello/<int:1>/' uses parameter name '1' which isn't "
             "a valid Python identifier."
         )
         with self.assertRaisesMessage(ImproperlyConfigured, msg):
             path(r'hello/<int:1>/', lambda r: None)
+
+    def test_non_identifier_parameter_name_causes_exception(self):
+        msg = (
+            "URL route 'b/<int:book.id>/' uses parameter name 'book.id' which "
+            "isn't a valid Python identifier."
+        )
+        with self.assertRaisesMessage(ImproperlyConfigured, msg):
+            path(r'b/<int:book.id>/', lambda r: None)
 
     def test_allows_non_ascii_but_valid_identifiers(self):
         # \u0394 is "GREEK CAPITAL LETTER DELTA", a valid identifier.

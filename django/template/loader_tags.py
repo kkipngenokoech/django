@@ -18,6 +18,9 @@ class BlockContext:
         # Dictionary of FIFO queues.
         self.blocks = defaultdict(list)
 
+    def __repr__(self):
+        return f'<{self.__class__.__qualname__}: blocks={self.blocks!r}>'
+
     def add_blocks(self, blocks):
         for name, block in blocks.items():
             self.blocks[name].insert(0, block)
@@ -159,6 +162,9 @@ class IncludeNode(Node):
         self.isolated_context = isolated_context
         super().__init__(*args, **kwargs)
 
+    def __repr__(self):
+        return f'<{self.__class__.__qualname__}: template={self.template!r}>'
+
     def render(self, context):
         """
         Render the specified template and context. Cache the template object
@@ -171,7 +177,10 @@ class IncludeNode(Node):
             # If not, try the cache and select_template().
             template_name = template or ()
             if isinstance(template_name, str):
-                template_name = (template_name,)
+                template_name = (construct_relative_path(
+                    self.origin.template_name,
+                    template_name,
+                ),)
             else:
                 template_name = tuple(template_name)
             cache = context.render_context.dicts[0].setdefault(self, {})
@@ -226,7 +235,8 @@ def construct_relative_path(current_template_name, relative_name):
     Convert a relative path (starting with './' or '../') to the full template
     name based on the current_template_name.
     """
-    if not relative_name.startswith(("'./", "'../", '"./', '"../')):
+    new_name = relative_name.strip('\'"')
+    if not new_name.startswith(('./', '../')):
         # relative_name is a variable or a literal that doesn't contain a
         # relative path.
         return relative_name
@@ -234,7 +244,7 @@ def construct_relative_path(current_template_name, relative_name):
     new_name = posixpath.normpath(
         posixpath.join(
             posixpath.dirname(current_template_name.lstrip('/')),
-            relative_name.strip('\'"')
+            new_name,
         )
     )
     if new_name.startswith('../'):
@@ -248,7 +258,11 @@ def construct_relative_path(current_template_name, relative_name):
             "same template in which the tag appears."
             % (relative_name, current_template_name)
         )
-    return '"%s"' % new_name
+    has_quotes = (
+        relative_name.startswith(('"', "'")) and
+        relative_name[0] == relative_name[-1]
+    )
+    return f'"{new_name}"' if has_quotes else new_name
 
 
 @register.tag('extends')
@@ -301,13 +315,15 @@ def do_include(parser, token):
     while remaining_bits:
         option = remaining_bits.pop(0)
         if option in options:
-            raise TemplateSyntaxError('The %r option was specified more '
-                                      'than once.' % option)
+            raise TemplateSyntaxError(
+                'The %r option was specified more than once.' % option
+            )
         if option == 'with':
             value = token_kwargs(remaining_bits, parser, support_legacy=False)
             if not value:
-                raise TemplateSyntaxError('"with" in %r tag needs at least '
-                                          'one keyword argument.' % bits[0])
+                raise TemplateSyntaxError(
+                    '"with" in %r tag needs at least one keyword argument.' % bits[0]
+                )
         elif option == 'only':
             value = True
         else:

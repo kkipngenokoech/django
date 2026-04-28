@@ -37,7 +37,7 @@ def _multi_decorate(decorators, method):
         # 'self' argument, but it's a closure over self so it can call
         # 'func'. Also, wrap method.__get__() in a function because new
         # attributes can't be set on bound method objects, only on functions.
-        bound_method = partial(method.__get__(self, type(self)))
+        bound_method = wraps(method)(partial(method.__get__(self, type(self))))
         for dec in decorators:
             bound_method = dec(bound_method)
         return bound_method(*args, **kwargs)
@@ -150,3 +150,30 @@ def make_middleware_decorator(middleware_class):
             return _wrapped_view
         return _decorator
     return _make_decorator
+
+
+def sync_and_async_middleware(func):
+    """
+    Mark a middleware factory as returning a hybrid middleware supporting both
+    types of request.
+    """
+    func.sync_capable = True
+    func.async_capable = True
+    return func
+
+
+def sync_only_middleware(func):
+    """
+    Mark a middleware factory as returning a sync middleware.
+    This is the default.
+    """
+    func.sync_capable = True
+    func.async_capable = False
+    return func
+
+
+def async_only_middleware(func):
+    """Mark a middleware factory as returning an async middleware."""
+    func.sync_capable = False
+    func.async_capable = True
+    return func

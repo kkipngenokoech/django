@@ -1,6 +1,6 @@
-===================================
-Upgrading Django to a newer version
-===================================
+========================================
+How to upgrade Django to a newer version
+========================================
 
 While it can be a complex process at times, upgrading to the latest Django
 version has several benefits:
@@ -21,7 +21,7 @@ Required Reading
 If it's your first time doing an upgrade, it is useful to read the :doc:`guide
 on the different release processes </internals/release-process>`.
 
-Afterwards, you should familiarize yourself with the changes that were made in
+Afterward, you should familiarize yourself with the changes that were made in
 the new Django version(s):
 
 * Read the :doc:`release notes </releases/index>` for each 'final' release from
@@ -87,8 +87,9 @@ Installation
 ============
 
 Once you're ready, it is time to :doc:`install the new Django version
-</topics/install>`. If you are using virtualenv_ and it is a major upgrade, you
-might want to set up a new environment with all the dependencies first.
+</topics/install>`. If you are using a :mod:`virtual environment <venv>` and it
+is a major upgrade, you might want to set up a new environment with all the
+dependencies first.
 
 If you installed Django with pip_, you can use the ``--upgrade`` or ``-U`` flag:
 
@@ -97,7 +98,6 @@ If you installed Django with pip_, you can use the ``--upgrade`` or ``-U`` flag:
    $ python -m pip install -U Django
 
 .. _pip: https://pip.pypa.io/
-.. _virtualenv: https://virtualenv.pypa.io/
 
 Testing
 =======

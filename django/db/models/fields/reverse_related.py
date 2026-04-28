@@ -11,6 +11,7 @@ they're the closest concept currently available.
 
 from django.core import exceptions
 from django.utils.functional import cached_property
+from django.utils.hashable import make_hashable
 
 from . import BLANK_CHOICE_DASH
 from .mixins import FieldCacheMixin
@@ -33,6 +34,7 @@ class ForeignObjectRel(FieldCacheMixin):
     # Reverse relations are always nullable (Django can't enforce that a
     # foreign key on the related model points to this model).
     null = True
+    empty_strings_allowed = False
 
     def __init__(self, field, to, related_name=None, related_query_name=None,
                  limit_choices_to=None, parent_link=False, on_delete=None):
@@ -69,7 +71,7 @@ class ForeignObjectRel(FieldCacheMixin):
         When filtering against this relation, return the field on the remote
         model against which the filtering should happen.
         """
-        target_fields = self.get_path_info()[-1].target_fields
+        target_fields = self.path_infos[-1].target_fields
         if len(target_fields) > 1:
             raise exceptions.FieldError("Can't use target_field for multicolumn relations.")
         return target_fields[0]
@@ -114,6 +116,40 @@ class ForeignObjectRel(FieldCacheMixin):
             self.related_model._meta.model_name,
         )
 
+    @property
+    def identity(self):
+        return (
+            self.field,
+            self.model,
+            self.related_name,
+            self.related_query_name,
+            make_hashable(self.limit_choices_to),
+            self.parent_link,
+            self.on_delete,
+            self.symmetrical,
+            self.multiple,
+        )
+
+    def __eq__(self, other):
+        if not isinstance(other, self.__class__):
+            return NotImplemented
+        return self.identity == other.identity
+
+    def __hash__(self):
+        return hash(self.identity)
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # Delete the path_infos cached property because it can be recalculated
+        # at first invocation after deserialization. The attribute must be
+        # removed because subclasses like ManyToOneRel may have a PathInfo
+        # which contains an intermediate M2M table that's been dynamically
+        # created and doesn't exist in the .models module.
+        # This is a reverse relation, so there is no reverse_path_infos to
+        # delete.
+        state.pop('path_infos', None)
+        return state
+
     def get_choices(
         self, include_blank=True, blank_choice=BLANK_CHOICE_DASH,
         limit_choices_to=None, ordering=(),
@@ -140,8 +176,8 @@ class ForeignObjectRel(FieldCacheMixin):
     def get_joining_columns(self):
         return self.field.get_reverse_joining_columns()
 
-    def get_extra_restriction(self, where_class, alias, related_alias):
-        return self.field.get_extra_restriction(where_class, related_alias, alias)
+    def get_extra_restriction(self, alias, related_alias):
+        return self.field.get_extra_restriction(related_alias, alias)
 
     def set_field_name(self):
         """
@@ -171,7 +207,14 @@ class ForeignObjectRel(FieldCacheMixin):
         return opts.model_name + ('_set' if self.multiple else '')
 
     def get_path_info(self, filtered_relation=None):
-        return self.field.get_reverse_path_info(filtered_relation)
+        if filtered_relation:
+            return self.field.get_reverse_path_info(filtered_relation)
+        else:
+            return self.field.reverse_path_infos
+
+    @cached_property
+    def path_infos(self):
+        return self.get_path_info()
 
     def get_cache_name(self):
         """
@@ -210,9 +253,13 @@ class ManyToOneRel(ForeignObjectRel):
         self.field_name = field_name
 
     def __getstate__(self):
-        state = self.__dict__.copy()
+        state = super().__getstate__()
         state.pop('related_model', None)
         return state
+
+    @property
+    def identity(self):
+        return super().identity + (self.field_name,)
 
     def get_related_field(self):
         """
@@ -277,6 +324,14 @@ class ManyToManyRel(ForeignObjectRel):
 
         self.symmetrical = symmetrical
         self.db_constraint = db_constraint
+
+    @property
+    def identity(self):
+        return super().identity + (
+            self.through,
+            make_hashable(self.through_fields),
+            self.db_constraint,
+        )
 
     def get_related_field(self):
         """

@@ -1,10 +1,9 @@
-import asyncio
 import logging
 import sys
 import tempfile
 import traceback
 
-from asgiref.sync import sync_to_async
+from asgiref.sync import ThreadSensitiveContext, sync_to_async
 
 from django.conf import settings
 from django.core import signals
@@ -132,7 +131,7 @@ class ASGIHandler(base.BaseHandler):
 
     def __init__(self):
         super().__init__()
-        self.load_middleware()
+        self.load_middleware(is_async=True)
 
     async def __call__(self, scope, receive, send):
         """
@@ -145,6 +144,14 @@ class ASGIHandler(base.BaseHandler):
                 'Django can only handle ASGI/HTTP connections, not %s.'
                 % scope['type']
             )
+
+        async with ThreadSensitiveContext():
+            await self.handle(scope, receive, send)
+
+    async def handle(self, scope, receive, send):
+        """
+        Handles the ASGI request. Called via the __call__ method.
+        """
         # Receive the HTTP request body as a stream object.
         try:
             body_file = await self.read_body(receive)
@@ -152,18 +159,14 @@ class ASGIHandler(base.BaseHandler):
             return
         # Request is complete and can be served.
         set_script_prefix(self.get_script_prefix(scope))
-        await sync_to_async(signals.request_started.send)(sender=self.__class__, scope=scope)
+        await sync_to_async(signals.request_started.send, thread_sensitive=True)(sender=self.__class__, scope=scope)
         # Get the request and check for basic issues.
         request, error_response = self.create_request(scope, body_file)
         if request is None:
             await self.send_response(error_response, send)
             return
-        # Get the response, using a threadpool via sync_to_async, if needed.
-        if asyncio.iscoroutinefunction(self.get_response):
-            response = await self.get_response(request)
-        else:
-            # If get_response is synchronous, run it non-blocking.
-            response = await sync_to_async(self.get_response)(request)
+        # Get the response, using the async mode of BaseHandler.
+        response = await self.get_response_async(request)
         response._handler_class = self.__class__
         # Increase chunk size on file responses (ASGI servers handles low-level
         # chunking).
@@ -173,7 +176,7 @@ class ASGIHandler(base.BaseHandler):
         await self.send_response(response, send)
 
     async def read_body(self, receive):
-        """Reads a HTTP body from an ASGI connection."""
+        """Reads an HTTP body from an ASGI connection."""
         # Use the tempfile that auto rolls-over to a disk file as it fills up.
         body_file = tempfile.SpooledTemporaryFile(max_size=settings.FILE_UPLOAD_MAX_MEMORY_SIZE, mode='w+b')
         while True:
@@ -264,7 +267,7 @@ class ASGIHandler(base.BaseHandler):
                     'body': chunk,
                     'more_body': not last,
                 })
-        response.close()
+        await sync_to_async(response.close, thread_sensitive=True)()
 
     @classmethod
     def chunk_bytes(cls, data):

@@ -3,11 +3,14 @@ import uuid
 
 from django.core.checks import Error, Warning as DjangoWarning
 from django.db import connection, models
-from django.test import SimpleTestCase, TestCase, skipIfDBFeature
+from django.test import (
+    SimpleTestCase, TestCase, skipIfDBFeature, skipUnlessDBFeature,
+)
 from django.test.utils import isolate_apps, override_settings
 from django.utils.functional import lazy
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
+from django.utils.version import get_docs_version
 
 
 @isolate_apps('invalid_models_tests')
@@ -83,7 +86,7 @@ class BinaryFieldTests(SimpleTestCase):
 
 
 @isolate_apps('invalid_models_tests')
-class CharFieldTests(SimpleTestCase):
+class CharFieldTests(TestCase):
 
     def test_valid_field(self):
         class Model(models.Model):
@@ -372,12 +375,41 @@ class CharFieldTests(SimpleTestCase):
         field = Model._meta.get_field('field')
         validator = DatabaseValidation(connection=connection)
         self.assertEqual(validator.check_field(field), [
-            Error(
-                'MySQL does not allow unique CharFields to have a max_length > 255.',
+            DjangoWarning(
+                '%s may not allow unique CharFields to have a max_length > '
+                '255.' % connection.display_name,
+                hint=(
+                    'See: https://docs.djangoproject.com/en/%s/ref/databases/'
+                    '#mysql-character-fields' % get_docs_version()
+                ),
                 obj=field,
-                id='mysql.E001',
+                id='mysql.W003',
             )
         ])
+
+    def test_db_collation(self):
+        class Model(models.Model):
+            field = models.CharField(max_length=100, db_collation='anything')
+
+        field = Model._meta.get_field('field')
+        error = Error(
+            '%s does not support a database collation on CharFields.'
+            % connection.display_name,
+            id='fields.E190',
+            obj=field,
+        )
+        expected = [] if connection.features.supports_collation_on_charfield else [error]
+        self.assertEqual(field.check(databases=self.databases), expected)
+
+    def test_db_collation_required_db_features(self):
+        class Model(models.Model):
+            field = models.CharField(max_length=100, db_collation='anything')
+
+            class Meta:
+                required_db_features = {'supports_collation_on_charfield'}
+
+        field = Model._meta.get_field('field')
+        self.assertEqual(field.check(databases=self.databases), [])
 
 
 @isolate_apps('invalid_models_tests')
@@ -715,14 +747,16 @@ class TimeFieldTests(SimpleTestCase):
         class Model(models.Model):
             field_dt = models.TimeField(default=now())
             field_t = models.TimeField(default=now().time())
+            # Timezone-aware time object (when USE_TZ=True).
+            field_tz = models.TimeField(default=now().timetz())
             field_now = models.DateField(default=now)
 
-        field_dt = Model._meta.get_field('field_dt')
-        field_t = Model._meta.get_field('field_t')
-        field_now = Model._meta.get_field('field_now')
-        errors = field_dt.check()
-        errors.extend(field_t.check())
-        errors.extend(field_now.check())  # doesn't raise a warning
+        names = ['field_dt', 'field_t', 'field_tz', 'field_now']
+        fields = [Model._meta.get_field(name) for name in names]
+        errors = []
+        for field in fields:
+            errors.extend(field.check())
+
         self.assertEqual(errors, [
             DjangoWarning(
                 'Fixed default value provided.',
@@ -730,7 +764,7 @@ class TimeFieldTests(SimpleTestCase):
                      'value as default for this field. This may not be '
                      'what you want. If you want to have the current date '
                      'as default, use `django.utils.timezone.now`',
-                obj=field_dt,
+                obj=fields[0],
                 id='fields.W161',
             ),
             DjangoWarning(
@@ -739,9 +773,21 @@ class TimeFieldTests(SimpleTestCase):
                      'value as default for this field. This may not be '
                      'what you want. If you want to have the current date '
                      'as default, use `django.utils.timezone.now`',
-                obj=field_t,
+                obj=fields[1],
                 id='fields.W161',
-            )
+            ),
+            DjangoWarning(
+                'Fixed default value provided.',
+                hint=(
+                    'It seems you set a fixed date / time / datetime value as '
+                    'default for this field. This may not be what you want. '
+                    'If you want to have the current date as default, use '
+                    '`django.utils.timezone.now`'
+                ),
+                obj=fields[2],
+                id='fields.W161',
+            ),
+            # field_now doesn't raise a warning.
         ])
 
     @override_settings(USE_TZ=True)
@@ -771,6 +817,30 @@ class TextFieldTests(TestCase):
             )
         ])
 
+    def test_db_collation(self):
+        class Model(models.Model):
+            field = models.TextField(db_collation='anything')
+
+        field = Model._meta.get_field('field')
+        error = Error(
+            '%s does not support a database collation on TextFields.'
+            % connection.display_name,
+            id='fields.E190',
+            obj=field,
+        )
+        expected = [] if connection.features.supports_collation_on_textfield else [error]
+        self.assertEqual(field.check(databases=self.databases), expected)
+
+    def test_db_collation_required_db_features(self):
+        class Model(models.Model):
+            field = models.TextField(db_collation='anything')
+
+            class Meta:
+                required_db_features = {'supports_collation_on_textfield'}
+
+        field = Model._meta.get_field('field')
+        self.assertEqual(field.check(databases=self.databases), [])
+
 
 @isolate_apps('invalid_models_tests')
 class UUIDFieldTests(TestCase):
@@ -785,5 +855,49 @@ class UUIDFieldTests(TestCase):
                     [uuid.UUID('25d405be-4895-4d50-9b2e-d6695359ce47'), 'Other'],
                 ],
             )
+
+        self.assertEqual(Model._meta.get_field('field').check(), [])
+
+
+@isolate_apps('invalid_models_tests')
+@skipUnlessDBFeature('supports_json_field')
+class JSONFieldTests(TestCase):
+    def test_invalid_default(self):
+        class Model(models.Model):
+            field = models.JSONField(default={})
+
+        self.assertEqual(Model._meta.get_field('field').check(), [
+            DjangoWarning(
+                msg=(
+                    "JSONField default should be a callable instead of an "
+                    "instance so that it's not shared between all field "
+                    "instances."
+                ),
+                hint=(
+                    'Use a callable instead, e.g., use `dict` instead of `{}`.'
+                ),
+                obj=Model._meta.get_field('field'),
+                id='fields.E010',
+            )
+        ])
+
+    def test_valid_default(self):
+        class Model(models.Model):
+            field = models.JSONField(default=dict)
+
+        self.assertEqual(Model._meta.get_field('field').check(), [])
+
+    def test_valid_default_none(self):
+        class Model(models.Model):
+            field = models.JSONField(default=None)
+
+        self.assertEqual(Model._meta.get_field('field').check(), [])
+
+    def test_valid_callable_default(self):
+        def callable_default():
+            return {'it': 'works'}
+
+        class Model(models.Model):
+            field = models.JSONField(default=callable_default)
 
         self.assertEqual(Model._meta.get_field('field').check(), [])

@@ -1,3 +1,4 @@
+import sys
 import time
 from importlib import import_module
 
@@ -19,7 +20,7 @@ from django.utils.text import Truncator
 
 class Command(BaseCommand):
     help = "Updates database schema. Manages both apps with migrations and those without."
-    requires_system_checks = False
+    requires_system_checks = []
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -61,6 +62,14 @@ class Command(BaseCommand):
         parser.add_argument(
             '--run-syncdb', action='store_true',
             help='Creates tables for apps without migrations.',
+        )
+        parser.add_argument(
+            '--check', action='store_true', dest='check_unapplied',
+            help='Exits with a non-zero status if unapplied migrations exist.',
+        )
+        parser.add_argument(
+            '--prune', action='store_true', dest='prune',
+            help='Delete nonexistent migrations from the django_migrations table.',
         )
 
     @no_translations
@@ -135,14 +144,70 @@ class Command(BaseCommand):
                 except KeyError:
                     raise CommandError("Cannot find a migration matching '%s' from app '%s'." % (
                         migration_name, app_label))
-                targets = [(app_label, migration.name)]
+                target = (app_label, migration.name)
+                # Partially applied squashed migrations are not included in the
+                # graph, use the last replacement instead.
+                if (
+                    target not in executor.loader.graph.nodes and
+                    target in executor.loader.replacements
+                ):
+                    incomplete_migration = executor.loader.replacements[target]
+                    target = incomplete_migration.replaces[-1]
+                targets = [target]
             target_app_labels_only = False
         elif options['app_label']:
             targets = [key for key in executor.loader.graph.leaf_nodes() if key[0] == app_label]
         else:
             targets = executor.loader.graph.leaf_nodes()
 
+        if options['prune']:
+            if not options['app_label']:
+                raise CommandError(
+                    'Migrations can be pruned only when an app is specified.'
+                )
+            if self.verbosity > 0:
+                self.stdout.write('Pruning migrations:', self.style.MIGRATE_HEADING)
+            to_prune = set(executor.loader.applied_migrations) - set(executor.loader.disk_migrations)
+            squashed_migrations_with_deleted_replaced_migrations = [
+                migration_key
+                for migration_key, migration_obj in executor.loader.replacements.items()
+                if any(replaced in to_prune for replaced in migration_obj.replaces)
+            ]
+            if squashed_migrations_with_deleted_replaced_migrations:
+                self.stdout.write(self.style.NOTICE(
+                    "  Cannot use --prune because the following squashed "
+                    "migrations have their 'replaces' attributes and may not "
+                    "be recorded as applied:"
+                ))
+                for migration in squashed_migrations_with_deleted_replaced_migrations:
+                    app, name = migration
+                    self.stdout.write(f'    {app}.{name}')
+                self.stdout.write(self.style.NOTICE(
+                    "  Re-run 'manage.py migrate' if they are not marked as "
+                    "applied, and remove 'replaces' attributes in their "
+                    "Migration classes."
+                ))
+            else:
+                to_prune = sorted(
+                    migration
+                    for migration in to_prune
+                    if migration[0] == app_label
+                )
+                if to_prune:
+                    for migration in to_prune:
+                        app, name = migration
+                        if self.verbosity > 0:
+                            self.stdout.write(self.style.MIGRATE_LABEL(
+                                f'  Pruning {app}.{name}'
+                            ), ending='')
+                        executor.recorder.record_unapplied(app, name)
+                        if self.verbosity > 0:
+                            self.stdout.write(self.style.SUCCESS(' OK'))
+                elif self.verbosity > 0:
+                    self.stdout.write('  No migrations to prune.')
+
         plan = executor.migration_plan(targets)
+        exit_dry = plan and options['check_unapplied']
 
         if options['plan']:
             self.stdout.write('Planned operations:', self.style.MIGRATE_LABEL)
@@ -154,6 +219,12 @@ class Command(BaseCommand):
                     message, is_error = self.describe_operation(operation, backwards)
                     style = self.style.WARNING if is_error else None
                     self.stdout.write('    ' + message, style)
+            if exit_dry:
+                sys.exit(1)
+            return
+        if exit_dry:
+            sys.exit(1)
+        if options['prune']:
             return
 
         # At this point, ignore run_syncdb if there aren't any apps to sync.
@@ -178,8 +249,9 @@ class Command(BaseCommand):
                 )
             else:
                 if targets[0][1] is None:
-                    self.stdout.write(self.style.MIGRATE_LABEL(
-                        "  Unapply all migrations: ") + "%s" % (targets[0][0],)
+                    self.stdout.write(
+                        self.style.MIGRATE_LABEL('  Unapply all migrations: ') +
+                        str(targets[0][0])
                     )
                 else:
                     self.stdout.write(self.style.MIGRATE_LABEL(
@@ -190,7 +262,7 @@ class Command(BaseCommand):
         pre_migrate_state = executor._create_project_state(with_applied_migrations=True)
         pre_migrate_apps = pre_migrate_state.apps
         emit_pre_migrate_signal(
-            self.verbosity, self.interactive, connection.alias, apps=pre_migrate_apps, plan=plan,
+            self.verbosity, self.interactive, connection.alias, stdout=self.stdout, apps=pre_migrate_apps, plan=plan,
         )
 
         # Run the syncdb phase.
@@ -216,8 +288,9 @@ class Command(BaseCommand):
                 changes = autodetector.changes(graph=executor.loader.graph)
                 if changes:
                     self.stdout.write(self.style.NOTICE(
-                        "  Your models have changes that are not yet reflected "
-                        "in a migration, and so won't be applied."
+                        "  Your models in app(s): %s have changes that are not "
+                        "yet reflected in a migration, and so won't be "
+                        "applied." % ", ".join(repr(app) for app in sorted(changes))
                     ))
                     self.stdout.write(self.style.NOTICE(
                         "  Run 'manage.py makemigrations' to make new "
@@ -254,7 +327,7 @@ class Command(BaseCommand):
         # Send the post_migrate signal, so individual apps can do whatever they need
         # to do at this point.
         emit_post_migrate_signal(
-            self.verbosity, self.interactive, connection.alias, apps=post_migrate_apps, plan=plan,
+            self.verbosity, self.interactive, connection.alias, stdout=self.stdout, apps=post_migrate_apps, plan=plan,
         )
 
     def migration_progress_callback(self, action, migration=None, fake=False):
@@ -321,7 +394,7 @@ class Command(BaseCommand):
 
         # Create the tables for each model
         if self.verbosity >= 1:
-            self.stdout.write("  Creating tables...\n")
+            self.stdout.write('  Creating tables...')
         with connection.schema_editor() as editor:
             for app_name, model_list in manifest.items():
                 for model in model_list:
@@ -330,15 +403,15 @@ class Command(BaseCommand):
                         continue
                     if self.verbosity >= 3:
                         self.stdout.write(
-                            "    Processing %s.%s model\n" % (app_name, model._meta.object_name)
+                            '    Processing %s.%s model' % (app_name, model._meta.object_name)
                         )
                     if self.verbosity >= 1:
-                        self.stdout.write("    Creating table %s\n" % model._meta.db_table)
+                        self.stdout.write('    Creating table %s' % model._meta.db_table)
                     editor.create_model(model)
 
             # Deferred SQL is executed when exiting the editor's context.
             if self.verbosity >= 1:
-                self.stdout.write("    Running deferred SQL...\n")
+                self.stdout.write('    Running deferred SQL...')
 
     @staticmethod
     def describe_operation(operation, backwards):

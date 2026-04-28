@@ -7,6 +7,7 @@ import secrets
 
 from django.conf import settings
 from django.utils.encoding import force_bytes
+from django.utils.inspect import func_supports_parameter
 
 
 class InvalidAlgorithm(ValueError):
@@ -18,7 +19,7 @@ def salted_hmac(key_salt, value, secret=None, *, algorithm='sha1'):
     """
     Return the HMAC of 'value', using a key generated from key_salt and a
     secret (which defaults to settings.SECRET_KEY). Default algorithm is SHA1,
-    but any algorithm name supported by hashlib.new() can be passed.
+    but any algorithm name supported by hashlib can be passed.
 
     A different key_salt should be passed in for every application of HMAC.
     """
@@ -44,14 +45,19 @@ def salted_hmac(key_salt, value, secret=None, *, algorithm='sha1'):
     return hmac.new(key, msg=force_bytes(value), digestmod=hasher)
 
 
-def get_random_string(length=12,
-                      allowed_chars='abcdefghijklmnopqrstuvwxyz'
-                                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'):
+RANDOM_STRING_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+
+
+def get_random_string(length, allowed_chars=RANDOM_STRING_CHARS):
     """
     Return a securely generated random string.
 
-    The default length of 12 with the a-z, A-Z, 0-9 character set returns
-    a 71-bit value. log_2((26+26+10)^12) =~ 71 bits
+    The bit length of the returned value can be calculated with the formula:
+        log_2(len(allowed_chars)^length)
+
+    For example, with default `allowed_chars` (26+26+10), this gives:
+      * length: 12, bit length =~ 71 bits
+      * length: 22, bit length =~ 131 bits
     """
     return ''.join(secrets.choice(allowed_chars) for i in range(length))
 
@@ -69,3 +75,18 @@ def pbkdf2(password, salt, iterations, dklen=0, digest=None):
     password = force_bytes(password)
     salt = force_bytes(salt)
     return hashlib.pbkdf2_hmac(digest().name, password, salt, iterations, dklen)
+
+
+# TODO: Remove when dropping support for PY38. inspect.signature() is used to
+# detect whether the usedforsecurity argument is available as this fix may also
+# have been applied by downstream package maintainers to other versions in
+# their repositories.
+if func_supports_parameter(hashlib.md5, 'usedforsecurity'):
+    md5 = hashlib.md5
+    new_hash = hashlib.new
+else:
+    def md5(data=b'', *, usedforsecurity=True):
+        return hashlib.md5(data)
+
+    def new_hash(hash_algorithm, *, usedforsecurity=True):
+        return hashlib.new(hash_algorithm)

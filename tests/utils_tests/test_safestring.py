@@ -2,13 +2,13 @@ from django.template import Context, Template
 from django.test import SimpleTestCase
 from django.utils import html
 from django.utils.functional import lazy, lazystr
-from django.utils.safestring import SafeData, mark_safe
+from django.utils.safestring import SafeData, SafeString, mark_safe
 
 
 class customescape(str):
     def __html__(self):
-        # implement specific and obviously wrong escaping
-        # in order to be able to tell for sure when it runs
+        # Implement specific and wrong escaping in order to be able to detect
+        # when it runs.
         return self.replace('<', '<<').replace('>', '>>')
 
 
@@ -98,3 +98,15 @@ class SafeStringTest(SimpleTestCase):
 
         lazy_str = lazy(html_str, str)()
         self.assertEqual(mark_safe(lazy_str), html_str())
+
+    def test_default_additional_attrs(self):
+        s = SafeString('a&b')
+        msg = "object has no attribute 'dynamic_attr'"
+        with self.assertRaisesMessage(AttributeError, msg):
+            s.dynamic_attr = True
+
+    def test_default_safe_data_additional_attrs(self):
+        s = SafeData()
+        msg = "object has no attribute 'dynamic_attr'"
+        with self.assertRaisesMessage(AttributeError, msg):
+            s.dynamic_attr = True

@@ -5,6 +5,7 @@ from psycopg2.extras import DateRange, DateTimeTZRange, NumericRange, Range
 
 from django.contrib.postgres import forms, lookups
 from django.db import models
+from django.db.models.lookups import PostgresOperatorLookup
 
 from .utils import AttributeSetter
 
@@ -43,6 +44,10 @@ class RangeField(models.Field):
     empty_strings_allowed = False
 
     def __init__(self, *args, **kwargs):
+        if 'default_bounds' in kwargs:
+            raise TypeError(
+                f"Cannot use 'default_bounds' with {self.__class__.__name__}."
+            )
         # Initializing base_field here ensures that its model matches the model for self.
         if hasattr(self, 'base_field'):
             self.base_field = self.base_field()
@@ -111,6 +116,37 @@ class RangeField(models.Field):
         return super().formfield(**kwargs)
 
 
+CANONICAL_RANGE_BOUNDS = '[)'
+
+
+class ContinuousRangeField(RangeField):
+    """
+    Continuous range field. It allows specifying default bounds for list and
+    tuple inputs.
+    """
+
+    def __init__(self, *args, default_bounds=CANONICAL_RANGE_BOUNDS, **kwargs):
+        if default_bounds not in ('[)', '(]', '()', '[]'):
+            raise ValueError("default_bounds must be one of '[)', '(]', '()', or '[]'.")
+        self.default_bounds = default_bounds
+        super().__init__(*args, **kwargs)
+
+    def get_prep_value(self, value):
+        if isinstance(value, (list, tuple)):
+            return self.range_type(value[0], value[1], self.default_bounds)
+        return super().get_prep_value(value)
+
+    def formfield(self, **kwargs):
+        kwargs.setdefault('default_bounds', self.default_bounds)
+        return super().formfield(**kwargs)
+
+    def deconstruct(self):
+        name, path, args, kwargs = super().deconstruct()
+        if self.default_bounds and self.default_bounds != CANONICAL_RANGE_BOUNDS:
+            kwargs['default_bounds'] = self.default_bounds
+        return name, path, args, kwargs
+
+
 class IntegerRangeField(RangeField):
     base_field = models.IntegerField
     range_type = NumericRange
@@ -129,7 +165,7 @@ class BigIntegerRangeField(RangeField):
         return 'int8range'
 
 
-class DecimalRangeField(RangeField):
+class DecimalRangeField(ContinuousRangeField):
     base_field = models.DecimalField
     range_type = NumericRange
     form_field = forms.DecimalRangeField
@@ -138,7 +174,7 @@ class DecimalRangeField(RangeField):
         return 'numrange'
 
 
-class DateTimeRangeField(RangeField):
+class DateTimeRangeField(ContinuousRangeField):
     base_field = models.DateTimeField
     range_type = DateTimeTZRange
     form_field = forms.DateTimeRangeField
@@ -161,24 +197,23 @@ RangeField.register_lookup(lookups.ContainedBy)
 RangeField.register_lookup(lookups.Overlap)
 
 
-class DateTimeRangeContains(lookups.PostgresSimpleLookup):
+class DateTimeRangeContains(PostgresOperatorLookup):
     """
     Lookup for Date/DateTimeRange containment to cast the rhs to the correct
     type.
     """
     lookup_name = 'contains'
-    operator = RangeOperators.CONTAINS
+    postgres_operator = RangeOperators.CONTAINS
 
     def process_rhs(self, compiler, connection):
         # Transform rhs value for db lookup.
         if isinstance(self.rhs, datetime.date):
-            output_field = models.DateTimeField() if isinstance(self.rhs, datetime.datetime) else models.DateField()
-            value = models.Value(self.rhs, output_field=output_field)
+            value = models.Value(self.rhs)
             self.rhs = value.resolve_expression(compiler.query)
         return super().process_rhs(compiler, connection)
 
-    def as_sql(self, compiler, connection):
-        sql, params = super().as_sql(compiler, connection)
+    def as_postgresql(self, compiler, connection):
+        sql, params = super().as_postgresql(compiler, connection)
         # Cast the rhs if needed.
         cast_sql = ''
         if (
@@ -196,7 +231,7 @@ DateRangeField.register_lookup(DateTimeRangeContains)
 DateTimeRangeField.register_lookup(DateTimeRangeContains)
 
 
-class RangeContainedBy(lookups.PostgresSimpleLookup):
+class RangeContainedBy(PostgresOperatorLookup):
     lookup_name = 'contained_by'
     type_mapping = {
         'smallint': 'int4range',
@@ -207,7 +242,7 @@ class RangeContainedBy(lookups.PostgresSimpleLookup):
         'date': 'daterange',
         'timestamp with time zone': 'tstzrange',
     }
-    operator = RangeOperators.CONTAINED_BY
+    postgres_operator = RangeOperators.CONTAINED_BY
 
     def process_rhs(self, compiler, connection):
         rhs, rhs_params = super().process_rhs(compiler, connection)
@@ -236,33 +271,33 @@ models.DecimalField.register_lookup(RangeContainedBy)
 
 
 @RangeField.register_lookup
-class FullyLessThan(lookups.PostgresSimpleLookup):
+class FullyLessThan(PostgresOperatorLookup):
     lookup_name = 'fully_lt'
-    operator = RangeOperators.FULLY_LT
+    postgres_operator = RangeOperators.FULLY_LT
 
 
 @RangeField.register_lookup
-class FullGreaterThan(lookups.PostgresSimpleLookup):
+class FullGreaterThan(PostgresOperatorLookup):
     lookup_name = 'fully_gt'
-    operator = RangeOperators.FULLY_GT
+    postgres_operator = RangeOperators.FULLY_GT
 
 
 @RangeField.register_lookup
-class NotLessThan(lookups.PostgresSimpleLookup):
+class NotLessThan(PostgresOperatorLookup):
     lookup_name = 'not_lt'
-    operator = RangeOperators.NOT_LT
+    postgres_operator = RangeOperators.NOT_LT
 
 
 @RangeField.register_lookup
-class NotGreaterThan(lookups.PostgresSimpleLookup):
+class NotGreaterThan(PostgresOperatorLookup):
     lookup_name = 'not_gt'
-    operator = RangeOperators.NOT_GT
+    postgres_operator = RangeOperators.NOT_GT
 
 
 @RangeField.register_lookup
-class AdjacentToLookup(lookups.PostgresSimpleLookup):
+class AdjacentToLookup(PostgresOperatorLookup):
     lookup_name = 'adjacent_to'
-    operator = RangeOperators.ADJACENT_TO
+    postgres_operator = RangeOperators.ADJACENT_TO
 
 
 @RangeField.register_lookup

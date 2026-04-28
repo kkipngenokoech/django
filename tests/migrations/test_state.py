@@ -121,10 +121,10 @@ class StateTests(SimpleTestCase):
 
         self.assertEqual(author_state.app_label, "migrations")
         self.assertEqual(author_state.name, "Author")
-        self.assertEqual([x for x, y in author_state.fields], ["id", "name", "bio", "age"])
-        self.assertEqual(author_state.fields[1][1].max_length, 255)
-        self.assertIs(author_state.fields[2][1].null, False)
-        self.assertIs(author_state.fields[3][1].null, True)
+        self.assertEqual(list(author_state.fields), ["id", "name", "bio", "age"])
+        self.assertEqual(author_state.fields['name'].max_length, 255)
+        self.assertIs(author_state.fields['bio'].null, False)
+        self.assertIs(author_state.fields['age'].null, True)
         self.assertEqual(
             author_state.options,
             {
@@ -138,10 +138,10 @@ class StateTests(SimpleTestCase):
 
         self.assertEqual(book_state.app_label, "migrations")
         self.assertEqual(book_state.name, "Book")
-        self.assertEqual([x for x, y in book_state.fields], ["id", "title", "author", "contributors"])
-        self.assertEqual(book_state.fields[1][1].max_length, 1000)
-        self.assertIs(book_state.fields[2][1].null, False)
-        self.assertEqual(book_state.fields[3][1].__class__.__name__, "ManyToManyField")
+        self.assertEqual(list(book_state.fields), ["id", "title", "author", "contributors"])
+        self.assertEqual(book_state.fields['title'].max_length, 1000)
+        self.assertIs(book_state.fields['author'].null, False)
+        self.assertEqual(book_state.fields['contributors'].__class__.__name__, 'ManyToManyField')
         self.assertEqual(
             book_state.options,
             {"verbose_name": "tome", "db_table": "test_tome", "indexes": [book_index], "constraints": []},
@@ -150,7 +150,7 @@ class StateTests(SimpleTestCase):
 
         self.assertEqual(author_proxy_state.app_label, "migrations")
         self.assertEqual(author_proxy_state.name, "AuthorProxy")
-        self.assertEqual(author_proxy_state.fields, [])
+        self.assertEqual(author_proxy_state.fields, {})
         self.assertEqual(
             author_proxy_state.options,
             {"proxy": True, "ordering": ["name"], "indexes": [], "constraints": []},
@@ -310,7 +310,7 @@ class StateTests(SimpleTestCase):
     def test_apps_bulk_update(self):
         """
         StateApps.bulk_update() should update apps.ready to False and reset
-        the value afterwards.
+        the value afterward.
         """
         project_state = ProjectState()
         apps = project_state.apps
@@ -531,6 +531,61 @@ class StateTests(SimpleTestCase):
         project_state.add_model(ModelState.from_model(A))
         project_state.add_model(ModelState.from_model(B))
         self.assertEqual(len(project_state.apps.get_models()), 2)
+
+    def test_reload_related_model_on_non_relational_fields(self):
+        """
+        The model is reloaded even on changes that are not involved in
+        relations. Other models pointing to or from it are also reloaded.
+        """
+        project_state = ProjectState()
+        project_state.apps  # Render project state.
+        project_state.add_model(ModelState('migrations', 'A', []))
+        project_state.add_model(ModelState('migrations', 'B', [
+            ('a', models.ForeignKey('A', models.CASCADE)),
+        ]))
+        project_state.add_model(ModelState('migrations', 'C', [
+            ('b', models.ForeignKey('B', models.CASCADE)),
+            ('name', models.TextField()),
+        ]))
+        project_state.add_model(ModelState('migrations', 'D', [
+            ('a', models.ForeignKey('A', models.CASCADE)),
+        ]))
+        operation = AlterField(
+            model_name='C',
+            name='name',
+            field=models.TextField(blank=True),
+        )
+        operation.state_forwards('migrations', project_state)
+        project_state.reload_model('migrations', 'a', delay=True)
+        A = project_state.apps.get_model('migrations.A')
+        B = project_state.apps.get_model('migrations.B')
+        D = project_state.apps.get_model('migrations.D')
+        self.assertIs(B._meta.get_field('a').related_model, A)
+        self.assertIs(D._meta.get_field('a').related_model, A)
+
+    def test_reload_model_relationship_consistency(self):
+        project_state = ProjectState()
+        project_state.add_model(ModelState('migrations', 'A', []))
+        project_state.add_model(ModelState('migrations', 'B', [
+            ('a', models.ForeignKey('A', models.CASCADE)),
+        ]))
+        project_state.add_model(ModelState('migrations', 'C', [
+            ('b', models.ForeignKey('B', models.CASCADE)),
+        ]))
+        A = project_state.apps.get_model('migrations.A')
+        B = project_state.apps.get_model('migrations.B')
+        C = project_state.apps.get_model('migrations.C')
+        self.assertEqual([r.related_model for r in A._meta.related_objects], [B])
+        self.assertEqual([r.related_model for r in B._meta.related_objects], [C])
+        self.assertEqual([r.related_model for r in C._meta.related_objects], [])
+
+        project_state.reload_model('migrations', 'a', delay=True)
+        A = project_state.apps.get_model('migrations.A')
+        B = project_state.apps.get_model('migrations.B')
+        C = project_state.apps.get_model('migrations.C')
+        self.assertEqual([r.related_model for r in A._meta.related_objects], [B])
+        self.assertEqual([r.related_model for r in B._meta.related_objects], [C])
+        self.assertEqual([r.related_model for r in C._meta.related_objects], [])
 
     def test_add_relations(self):
         """
@@ -812,6 +867,34 @@ class StateTests(SimpleTestCase):
         with self.assertRaisesMessage(ValueError, msg):
             project_state.apps
 
+    def test_reference_mixed_case_app_label(self):
+        new_apps = Apps()
+
+        class Author(models.Model):
+            class Meta:
+                app_label = 'MiXedCase_migrations'
+                apps = new_apps
+
+        class Book(models.Model):
+            author = models.ForeignKey(Author, models.CASCADE)
+
+            class Meta:
+                app_label = 'MiXedCase_migrations'
+                apps = new_apps
+
+        class Magazine(models.Model):
+            authors = models.ManyToManyField(Author)
+
+            class Meta:
+                app_label = 'MiXedCase_migrations'
+                apps = new_apps
+
+        project_state = ProjectState()
+        project_state.add_model(ModelState.from_model(Author))
+        project_state.add_model(ModelState.from_model(Book))
+        project_state.add_model(ModelState.from_model(Magazine))
+        self.assertEqual(len(project_state.apps.get_models()), 3)
+
     def test_real_apps(self):
         """
         Including real apps can resolve dangling FK errors.
@@ -833,13 +916,17 @@ class StateTests(SimpleTestCase):
             project_state.apps
 
         # If we include the real app it should succeed
-        project_state = ProjectState(real_apps=["contenttypes"])
+        project_state = ProjectState(real_apps={'contenttypes'})
         project_state.add_model(ModelState.from_model(TestModel))
         rendered_state = project_state.apps
         self.assertEqual(
             len([x for x in rendered_state.get_models() if x._meta.app_label == "migrations"]),
             1,
         )
+
+    def test_real_apps_non_set(self):
+        with self.assertRaises(AssertionError):
+            ProjectState(real_apps=['contenttypes'])
 
     def test_ignore_order_wrt(self):
         """
@@ -868,9 +955,47 @@ class StateTests(SimpleTestCase):
         project_state.add_model(ModelState.from_model(Author))
         project_state.add_model(ModelState.from_model(Book))
         self.assertEqual(
-            [name for name, field in project_state.models["migrations", "book"].fields],
+            list(project_state.models['migrations', 'book'].fields),
             ["id", "author"],
         )
+
+    def test_modelstate_get_field_order_wrt(self):
+        new_apps = Apps()
+
+        class Author(models.Model):
+            name = models.TextField()
+
+            class Meta:
+                app_label = 'migrations'
+                apps = new_apps
+
+        class Book(models.Model):
+            author = models.ForeignKey(Author, models.CASCADE)
+
+            class Meta:
+                app_label = 'migrations'
+                apps = new_apps
+                order_with_respect_to = 'author'
+
+        model_state = ModelState.from_model(Book)
+        order_wrt_field = model_state.get_field('_order')
+        self.assertIsInstance(order_wrt_field, models.ForeignKey)
+        self.assertEqual(order_wrt_field.related_model, 'migrations.author')
+
+    def test_modelstate_get_field_no_order_wrt_order_field(self):
+        new_apps = Apps()
+
+        class HistoricalRecord(models.Model):
+            _order = models.PositiveSmallIntegerField()
+
+            class Meta:
+                app_label = 'migrations'
+                apps = new_apps
+
+        model_state = ModelState.from_model(HistoricalRecord)
+        order_field = model_state.get_field('_order')
+        self.assertIsNone(order_field.related_model)
+        self.assertIsInstance(order_field, models.PositiveSmallIntegerField)
 
     def test_manager_refer_correct_model_version(self):
         """
@@ -930,6 +1055,402 @@ class StateTests(SimpleTestCase):
         self.assertEqual(list(choices_field.choices), choices)
 
 
+class StateRelationsTests(SimpleTestCase):
+    def get_base_project_state(self):
+        new_apps = Apps()
+
+        class User(models.Model):
+            class Meta:
+                app_label = 'tests'
+                apps = new_apps
+
+        class Comment(models.Model):
+            text = models.TextField()
+            user = models.ForeignKey(User, models.CASCADE)
+            comments = models.ManyToManyField('self')
+
+            class Meta:
+                app_label = 'tests'
+                apps = new_apps
+
+        class Post(models.Model):
+            text = models.TextField()
+            authors = models.ManyToManyField(User)
+
+            class Meta:
+                app_label = 'tests'
+                apps = new_apps
+
+        project_state = ProjectState()
+        project_state.add_model(ModelState.from_model(User))
+        project_state.add_model(ModelState.from_model(Comment))
+        project_state.add_model(ModelState.from_model(Post))
+        return project_state
+
+    def test_relations_population(self):
+        tests = [
+            ('add_model', [
+                ModelState(
+                    app_label='migrations',
+                    name='Tag',
+                    fields=[('id', models.AutoField(primary_key=True))],
+                ),
+            ]),
+            ('remove_model', ['tests', 'comment']),
+            ('rename_model', ['tests', 'comment', 'opinion']),
+            ('add_field', [
+                'tests',
+                'post',
+                'next_post',
+                models.ForeignKey('self', models.CASCADE),
+                True,
+            ]),
+            ('remove_field', ['tests', 'post', 'text']),
+            ('rename_field', ['tests', 'comment', 'user', 'author']),
+            ('alter_field', [
+                'tests',
+                'comment',
+                'user',
+                models.IntegerField(),
+                True,
+            ]),
+        ]
+        for method, args in tests:
+            with self.subTest(method=method):
+                project_state = self.get_base_project_state()
+                getattr(project_state, method)(*args)
+                # ProjectState's `_relations` are populated on `relations` access.
+                self.assertIsNone(project_state._relations)
+                self.assertEqual(project_state.relations, project_state._relations)
+                self.assertIsNotNone(project_state._relations)
+
+    def test_add_model(self):
+        project_state = self.get_base_project_state()
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post')],
+        )
+        self.assertEqual(
+            list(project_state.relations['tests', 'comment']),
+            [('tests', 'comment')],
+        )
+        self.assertNotIn(('tests', 'post'), project_state.relations)
+
+    def test_add_model_no_relations(self):
+        project_state = ProjectState()
+        project_state.add_model(ModelState(
+            app_label='migrations',
+            name='Tag',
+            fields=[('id', models.AutoField(primary_key=True))],
+        ))
+        self.assertEqual(project_state.relations, {})
+
+    def test_add_model_other_app(self):
+        project_state = self.get_base_project_state()
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post')],
+        )
+        project_state.add_model(ModelState(
+            app_label='tests_other',
+            name='comment',
+            fields=[
+                ('id', models.AutoField(primary_key=True)),
+                ('user', models.ForeignKey('tests.user', models.CASCADE)),
+            ],
+        ))
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post'), ('tests_other', 'comment')],
+        )
+
+    def test_remove_model(self):
+        project_state = self.get_base_project_state()
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post')],
+        )
+        self.assertEqual(
+            list(project_state.relations['tests', 'comment']),
+            [('tests', 'comment')],
+        )
+
+        project_state.remove_model('tests', 'comment')
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'post')],
+        )
+        self.assertNotIn(('tests', 'comment'), project_state.relations)
+        project_state.remove_model('tests', 'post')
+        self.assertEqual(project_state.relations, {})
+        project_state.remove_model('tests', 'user')
+        self.assertEqual(project_state.relations, {})
+
+    def test_rename_model(self):
+        project_state = self.get_base_project_state()
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post')],
+        )
+        self.assertEqual(
+            list(project_state.relations['tests', 'comment']),
+            [('tests', 'comment')],
+        )
+
+        related_field = project_state.relations['tests', 'user']['tests', 'comment']
+        project_state.rename_model('tests', 'comment', 'opinion')
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'post'), ('tests', 'opinion')],
+        )
+        self.assertEqual(
+            list(project_state.relations['tests', 'opinion']),
+            [('tests', 'opinion')],
+        )
+        self.assertNotIn(('tests', 'comment'), project_state.relations)
+        self.assertEqual(
+            project_state.relations['tests', 'user']['tests', 'opinion'],
+            related_field,
+        )
+
+        project_state.rename_model('tests', 'user', 'author')
+        self.assertEqual(
+            list(project_state.relations['tests', 'author']),
+            [('tests', 'post'), ('tests', 'opinion')],
+        )
+        self.assertNotIn(('tests', 'user'), project_state.relations)
+
+    def test_rename_model_no_relations(self):
+        project_state = self.get_base_project_state()
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post')],
+        )
+        related_field = project_state.relations['tests', 'user']['tests', 'post']
+        self.assertNotIn(('tests', 'post'), project_state.relations)
+        # Rename a model without relations.
+        project_state.rename_model('tests', 'post', 'blog')
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'blog')],
+        )
+        self.assertNotIn(('tests', 'blog'), project_state.relations)
+        self.assertEqual(
+            related_field,
+            project_state.relations['tests', 'user']['tests', 'blog'],
+        )
+
+    def test_add_field(self):
+        project_state = self.get_base_project_state()
+        self.assertNotIn(('tests', 'post'), project_state.relations)
+        # Add a self-referential foreign key.
+        new_field = models.ForeignKey('self', models.CASCADE)
+        project_state.add_field(
+            'tests', 'post', 'next_post', new_field, preserve_default=True,
+        )
+        self.assertEqual(
+            list(project_state.relations['tests', 'post']),
+            [('tests', 'post')],
+        )
+        self.assertEqual(
+            project_state.relations['tests', 'post']['tests', 'post'],
+            {'next_post': new_field},
+        )
+        # Add a foreign key.
+        new_field = models.ForeignKey('tests.post', models.CASCADE)
+        project_state.add_field(
+            'tests', 'comment', 'post', new_field, preserve_default=True,
+        )
+        self.assertEqual(
+            list(project_state.relations['tests', 'post']),
+            [('tests', 'post'), ('tests', 'comment')],
+        )
+        self.assertEqual(
+            project_state.relations['tests', 'post']['tests', 'comment'],
+            {'post': new_field},
+        )
+
+    def test_add_field_m2m_with_through(self):
+        project_state = self.get_base_project_state()
+        project_state.add_model(ModelState(
+            app_label='tests',
+            name='Tag',
+            fields=[('id', models.AutoField(primary_key=True))],
+        ))
+        project_state.add_model(ModelState(
+            app_label='tests',
+            name='PostTag',
+            fields=[
+                ('id', models.AutoField(primary_key=True)),
+                ('post', models.ForeignKey('tests.post', models.CASCADE)),
+                ('tag', models.ForeignKey('tests.tag', models.CASCADE)),
+            ],
+        ))
+        self.assertEqual(
+            list(project_state.relations['tests', 'post']),
+            [('tests', 'posttag')],
+        )
+        self.assertEqual(
+            list(project_state.relations['tests', 'tag']),
+            [('tests', 'posttag')],
+        )
+        # Add a many-to-many field with the through model.
+        new_field = models.ManyToManyField('tests.tag', through='tests.posttag')
+        project_state.add_field(
+            'tests', 'post', 'tags', new_field, preserve_default=True,
+        )
+        self.assertEqual(
+            list(project_state.relations['tests', 'post']),
+            [('tests', 'posttag')],
+        )
+        self.assertEqual(
+            list(project_state.relations['tests', 'tag']),
+            [('tests', 'posttag'), ('tests', 'post')],
+        )
+        self.assertEqual(
+            project_state.relations['tests', 'tag']['tests', 'post'],
+            {'tags': new_field},
+        )
+
+    def test_remove_field(self):
+        project_state = self.get_base_project_state()
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post')],
+        )
+        # Remove a many-to-many field.
+        project_state.remove_field('tests', 'post', 'authors')
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment')],
+        )
+        # Remove a foreign key.
+        project_state.remove_field('tests', 'comment', 'user')
+        self.assertEqual(project_state.relations['tests', 'user'], {})
+
+    def test_remove_field_no_relations(self):
+        project_state = self.get_base_project_state()
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post')],
+        )
+        # Remove a non-relation field.
+        project_state.remove_field('tests', 'post', 'text')
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post')],
+        )
+
+    def test_rename_field(self):
+        project_state = self.get_base_project_state()
+        field = project_state.models['tests', 'comment'].fields['user']
+        self.assertEqual(
+            project_state.relations['tests', 'user']['tests', 'comment'],
+            {'user': field},
+        )
+
+        project_state.rename_field('tests', 'comment', 'user', 'author')
+        renamed_field = project_state.models['tests', 'comment'].fields['author']
+        self.assertEqual(
+            project_state.relations['tests', 'user']['tests', 'comment'],
+            {'author': renamed_field},
+        )
+        self.assertEqual(field, renamed_field)
+
+    def test_rename_field_no_relations(self):
+        project_state = self.get_base_project_state()
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post')],
+        )
+        # Rename a non-relation field.
+        project_state.rename_field('tests', 'post', 'text', 'description')
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post')],
+        )
+
+    def test_alter_field(self):
+        project_state = self.get_base_project_state()
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post')],
+        )
+        # Alter a foreign key to a non-relation field.
+        project_state.alter_field(
+            'tests', 'comment', 'user', models.IntegerField(), preserve_default=True,
+        )
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'post')],
+        )
+        # Alter a non-relation field to a many-to-many field.
+        m2m_field = models.ManyToManyField('tests.user')
+        project_state.alter_field(
+            'tests', 'comment', 'user', m2m_field, preserve_default=True,
+        )
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'post'), ('tests', 'comment')],
+        )
+        self.assertEqual(
+            project_state.relations['tests', 'user']['tests', 'comment'],
+            {'user': m2m_field},
+        )
+
+    def test_alter_field_m2m_to_fk(self):
+        project_state = self.get_base_project_state()
+        project_state.add_model(ModelState(
+            app_label='tests_other',
+            name='user_other',
+            fields=[('id', models.AutoField(primary_key=True))],
+        ))
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post')],
+        )
+        self.assertNotIn(('tests_other', 'user_other'), project_state.relations)
+        # Alter a many-to-many field to a foreign key.
+        foreign_key = models.ForeignKey('tests_other.user_other', models.CASCADE)
+        project_state.alter_field(
+            'tests', 'post', 'authors', foreign_key, preserve_default=True,
+        )
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment')],
+        )
+        self.assertEqual(
+            list(project_state.relations['tests_other', 'user_other']),
+            [('tests', 'post')],
+        )
+        self.assertEqual(
+            project_state.relations['tests_other', 'user_other']['tests', 'post'],
+            {'authors': foreign_key},
+        )
+
+    def test_many_relations_to_same_model(self):
+        project_state = self.get_base_project_state()
+        new_field = models.ForeignKey('tests.user', models.CASCADE)
+        project_state.add_field(
+            'tests', 'comment', 'reviewer', new_field, preserve_default=True,
+        )
+        self.assertEqual(
+            list(project_state.relations['tests', 'user']),
+            [('tests', 'comment'), ('tests', 'post')],
+        )
+        comment_rels = project_state.relations['tests', 'user']['tests', 'comment']
+        # Two foreign keys to the same model.
+        self.assertEqual(len(comment_rels), 2)
+        self.assertEqual(comment_rels['reviewer'], new_field)
+        # Rename the second foreign key.
+        project_state.rename_field('tests', 'comment', 'reviewer', 'supervisor')
+        self.assertEqual(len(comment_rels), 2)
+        self.assertEqual(comment_rels['supervisor'], new_field)
+        # Remove the first foreign key.
+        project_state.remove_field('tests', 'comment', 'user')
+        self.assertEqual(comment_rels, {'supervisor': new_field})
+
+
 class ModelStateTests(SimpleTestCase):
     def test_custom_model_base(self):
         state = ModelState.from_model(ModelWithCustomBase)
@@ -963,7 +1484,10 @@ class ModelStateTests(SimpleTestCase):
     def test_sanity_index_name(self):
         field = models.IntegerField()
         options = {'indexes': [models.Index(fields=['field'])]}
-        msg = "Indexes passed to ModelState require a name attribute. <Index: fields='field'> doesn't have one."
+        msg = (
+            "Indexes passed to ModelState require a name attribute. <Index: "
+            "fields=['field']> doesn't have one."
+        )
         with self.assertRaisesMessage(ValueError, msg):
             ModelState('app', 'Model', [('field', field)], options=options)
 
@@ -987,6 +1511,28 @@ class ModelStateTests(SimpleTestCase):
         with self.assertRaisesMessage(InvalidBasesError, "Cannot resolve bases for [<ModelState: 'app.Model'>]"):
             project_state.apps
 
+    def test_fields_ordering_equality(self):
+        state = ModelState(
+            'migrations',
+            'Tag',
+            [
+                ('id', models.AutoField(primary_key=True)),
+                ('name', models.CharField(max_length=100)),
+                ('hidden', models.BooleanField()),
+            ],
+        )
+        reordered_state = ModelState(
+            'migrations',
+            'Tag',
+            [
+                ('id', models.AutoField(primary_key=True)),
+                # Purposely re-ordered.
+                ('hidden', models.BooleanField()),
+                ('name', models.CharField(max_length=100)),
+            ],
+        )
+        self.assertEqual(state, reordered_state)
+
     @override_settings(TEST_SWAPPABLE_MODEL='migrations.SomeFakeModel')
     def test_create_swappable(self):
         """
@@ -1007,10 +1553,10 @@ class ModelStateTests(SimpleTestCase):
         author_state = ModelState.from_model(Author)
         self.assertEqual(author_state.app_label, 'migrations')
         self.assertEqual(author_state.name, 'Author')
-        self.assertEqual([x for x, y in author_state.fields], ['id', 'name', 'bio', 'age'])
-        self.assertEqual(author_state.fields[1][1].max_length, 255)
-        self.assertIs(author_state.fields[2][1].null, False)
-        self.assertIs(author_state.fields[3][1].null, True)
+        self.assertEqual(list(author_state.fields), ['id', 'name', 'bio', 'age'])
+        self.assertEqual(author_state.fields['name'].max_length, 255)
+        self.assertIs(author_state.fields['bio'].null, False)
+        self.assertIs(author_state.fields['age'].null, True)
         self.assertEqual(author_state.options, {'swappable': 'TEST_SWAPPABLE_MODEL', 'indexes': [], "constraints": []})
         self.assertEqual(author_state.bases, (models.Model,))
         self.assertEqual(author_state.managers, [])
@@ -1049,11 +1595,11 @@ class ModelStateTests(SimpleTestCase):
         self.assertEqual(station_state.app_label, 'migrations')
         self.assertEqual(station_state.name, 'BusStation')
         self.assertEqual(
-            [x for x, y in station_state.fields],
+            list(station_state.fields),
             ['searchablelocation_ptr', 'name', 'bus_routes', 'inbound']
         )
-        self.assertEqual(station_state.fields[1][1].max_length, 128)
-        self.assertIs(station_state.fields[2][1].null, False)
+        self.assertEqual(station_state.fields['name'].max_length, 128)
+        self.assertIs(station_state.fields['bus_routes'].null, False)
         self.assertEqual(
             station_state.options,
             {'abstract': False, 'swappable': 'TEST_SWAPPABLE_MODEL', 'indexes': [], 'constraints': []}

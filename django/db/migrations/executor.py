@@ -40,6 +40,15 @@ class MigrationExecutor:
             # If the migration is already applied, do backwards mode,
             # otherwise do forwards mode.
             elif target in applied:
+                # If the target is missing, it's likely a replaced migration.
+                # Reload the graph without replacements.
+                if (
+                    self.loader.replace_migrations and
+                    target not in self.loader.graph.node_map
+                ):
+                    self.loader.replace_migrations = False
+                    self.loader.build_graph()
+                    return self.migration_plan(targets, clean_start=clean_start)
                 # Don't migrate backwards all the way to the target node (that
                 # may roll back dependencies in other apps that don't need to
                 # be rolled back); instead roll back through target's immediate
@@ -66,7 +75,7 @@ class MigrationExecutor:
         Create a project state including all the applications without
         migrations and applied migrations if with_applied_migrations=True.
         """
-        state = ProjectState(real_apps=list(self.loader.unmigrated_apps))
+        state = ProjectState(real_apps=self.loader.unmigrated_apps)
         if with_applied_migrations:
             # Create the forwards plan Django would follow on an empty database
             full_plan = self.migration_plan(self.loader.graph.leaf_nodes(), clean_start=True)
@@ -87,8 +96,12 @@ class MigrationExecutor:
         (un)applied and in a second step run all the database operations.
         """
         # The django_migrations table must be present to record applied
-        # migrations.
-        self.recorder.ensure_schema()
+        # migrations, but don't create it if there are no migrations to apply.
+        if plan == []:
+            if not self.recorder.has_table():
+                return self._create_project_state(with_applied_migrations=False)
+        else:
+            self.recorder.ensure_schema()
 
         if plan is None:
             plan = self.migration_plan(targets)
@@ -210,24 +223,6 @@ class MigrationExecutor:
 
         return state
 
-    def collect_sql(self, plan):
-        """
-        Take a migration plan and return a list of collected SQL statements
-        that represent the best-efforts version of that plan.
-        """
-        statements = []
-        state = None
-        for migration, backwards in plan:
-            with self.connection.schema_editor(collect_sql=True, atomic=migration.atomic) as schema_editor:
-                if state is None:
-                    state = self.loader.project_state((migration.app_label, migration.name), at_end=False)
-                if not backwards:
-                    state = migration.apply(state, schema_editor, collect_sql=True)
-                else:
-                    state = migration.unapply(state, schema_editor, collect_sql=True)
-            statements.extend(schema_editor.collected_sql)
-        return statements
-
     def apply_migration(self, state, migration, fake=False, fake_initial=False):
         """Run a migration forwards."""
         migration_recorded = False
@@ -243,8 +238,9 @@ class MigrationExecutor:
                 # Alright, do it normally
                 with self.connection.schema_editor(atomic=migration.atomic) as schema_editor:
                     state = migration.apply(state, schema_editor)
-                    self.record_migration(migration)
-                    migration_recorded = True
+                    if not schema_editor.deferred_sql:
+                        self.record_migration(migration)
+                        migration_recorded = True
         if not migration_recorded:
             self.record_migration(migration)
         # Report progress
@@ -267,12 +263,11 @@ class MigrationExecutor:
         if not fake:
             with self.connection.schema_editor(atomic=migration.atomic) as schema_editor:
                 state = migration.unapply(state, schema_editor)
-        # For replacement migrations, record individual statuses
+        # For replacement migrations, also record individual statuses.
         if migration.replaces:
             for app_label, name in migration.replaces:
                 self.recorder.record_unapplied(app_label, name)
-        else:
-            self.recorder.record_unapplied(migration.app_label, migration.name)
+        self.recorder.record_unapplied(migration.app_label, migration.name)
         # Report progress
         if self.progress_callback:
             self.progress_callback("unapply_success", migration, fake)
