@@ -398,6 +398,10 @@ def display_for_field(value, field, empty_value_display):
         return formats.number_format(value)
     elif isinstance(field, models.FileField) and value:
         return format_html('<a href="{}">{}</a>', value.url, value)
+    elif hasattr(field, 'get_prep_value') and field.__class__.__name__ == 'JSONField':
+        # Handle JSONField by using the field's prepare_value method
+        # This ensures proper JSON formatting instead of Python dict representation
+        return field.prepare_value(value)
     else:
         return display_for_value(value, empty_value_display)
 
