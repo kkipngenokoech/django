@@ -182,6 +182,16 @@ class ValidationError(Exception):
     def __repr__(self):
         return 'ValidationError(%s)' % self
 
+    def __eq__(self, other):
+        if not isinstance(other, ValidationError):
+            return False
+        
+        # Compare messages in a normalized way (order-independent)
+        self_messages = sorted(self.messages)
+        other_messages = sorted(other.messages)
+        
+        return self_messages == other_messages
+
 
 class EmptyResultSet(Exception):
     """A database query predicate is impossible."""

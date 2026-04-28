@@ -44,7 +44,9 @@ from django.utils.decorators import method_decorator
 from django.utils.html import format_html
 from django.utils.http import urlencode
 from django.utils.safestring import mark_safe
-from django.utils.text import capfirst, format_lazy, get_text_list
+from django.utils.text import (
+    capfirst, format_lazy, get_text_list, smart_split, unescape_string_literal,
+)
 from django.utils.translation import gettext as _, ngettext
 from django.views.decorators.csrf import csrf_protect
 from django.views.generic import RedirectView
@@ -642,9 +644,9 @@ class ModelAdmin(BaseModelAdmin):
             'jquery.init.js',
             'core.js',
             'admin/RelatedObjectLookups.js',
-            'actions%s.js' % extra,
+            'actions.js',
             'urlify.js',
-            'prepopulate%s.js' % extra,
+            'prepopulate.js',
             'vendor/xregexp/xregexp%s.js' % extra,
         ]
         return forms.Media(js=['admin/js/%s' % url for url in js])
@@ -1022,7 +1024,9 @@ class ModelAdmin(BaseModelAdmin):
         if search_fields and search_term:
             orm_lookups = [construct_search(str(search_field))
                            for search_field in search_fields]
-            for bit in search_term.split():
+            for bit in smart_split(search_term):
+                if bit.startswith(('"', "'")):
+                    bit = unescape_string_literal(bit)
                 or_queries = [models.Q(**{orm_lookup: bit})
                               for orm_lookup in orm_lookups]
                 queryset = queryset.filter(reduce(operator.or_, or_queries))
@@ -2024,12 +2028,11 @@ class InlineModelAdmin(BaseModelAdmin):
     @property
     def media(self):
         extra = '' if settings.DEBUG else '.min'
-        js = ['vendor/jquery/jquery%s.js' % extra, 'jquery.init.js',
-              'inlines%s.js' % extra]
+        js = ['vendor/jquery/jquery%s.js' % extra, 'jquery.init.js', 'inlines.js']
         if self.filter_vertical or self.filter_horizontal:
             js.extend(['SelectBox.js', 'SelectFilter2.js'])
         if self.classes and 'collapse' in self.classes:
-            js.append('collapse%s.js' % extra)
+            js.append('collapse.js')
         return forms.Media(js=['admin/js/%s' % url for url in js])
 
     def get_extra(self, request, obj=None, **kwargs):
