@@ -11,8 +11,14 @@ class PasswordResetTokenGenerator:
     reset mechanism.
     """
     key_salt = "django.contrib.auth.tokens.PasswordResetTokenGenerator"
-    algorithm = 'sha256'
-    secret = settings.SECRET_KEY
+    algorithm = None
+    secret = None
+
+    def __init__(self):
+        self.secret = self.secret or settings.SECRET_KEY
+        # RemovedInDjango40Warning: when the deprecation ends, replace with:
+        # self.algorithm = self.algorithm or 'sha256'
+        self.algorithm = self.algorithm or settings.DEFAULT_HASHING_ALGORITHM
 
     def make_token(self, user):
         """
@@ -67,7 +73,7 @@ class PasswordResetTokenGenerator:
             # legacy argument and replace with:
             #   algorithm=self.algorithm,
             algorithm='sha1' if legacy else self.algorithm,
-        ).hexdigest()[::2]  # Limit to 20 characters to shorten the URL.
+        ).hexdigest()[::2]  # Limit to shorten the URL.
         return "%s-%s" % (ts_b36, hash_string)
 
     def _make_hash_value(self, user, timestamp):

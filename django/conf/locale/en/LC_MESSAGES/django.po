@@ -4,7 +4,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Django\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2020-05-11 20:56+0200\n"
+"POT-Creation-Date: 2020-05-19 20:23+0200\n"
 "PO-Revision-Date: 2010-05-13 15:35+0200\n"
 "Last-Translator: Django team\n"
 "Language-Team: English <en@li.org>\n"
@@ -191,6 +191,10 @@ msgid "Indonesian"
 msgstr ""
 
 #: conf/global_settings.py:96
+msgid "Igbo"
+msgstr ""
+
+#: conf/global_settings.py:96
 msgid "Ido"
 msgstr ""
 
@@ -228,6 +232,10 @@ msgstr ""
 
 #: conf/global_settings.py:105
 msgid "Korean"
+msgstr ""
+
+#: conf/global_settings.py:106
+msgid "Kyrgyz"
 msgstr ""
 
 #: conf/global_settings.py:106
@@ -342,8 +350,16 @@ msgstr ""
 msgid "Telugu"
 msgstr ""
 
+#: conf/global_settings.py:133
+msgid "Tajik"
+msgstr ""
+
 #: conf/global_settings.py:134
 msgid "Thai"
+msgstr ""
+
+#: conf/global_settings.py:135
+msgid "Turkmen"
 msgstr ""
 
 #: conf/global_settings.py:135
