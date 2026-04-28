@@ -8,6 +8,7 @@ from django.conf import settings
 from django.contrib.sessions.exceptions import SuspiciousSession
 from django.core import signing
 from django.core.exceptions import SuspiciousOperation
+from django.core.signing import BadSignature
 from django.utils import timezone
 from django.utils.crypto import (
     constant_time_compare, get_random_string, salted_hmac,
@@ -108,6 +109,9 @@ class SessionBase:
 
     def encode(self, session_dict):
         "Return the given session dictionary serialized and encoded as a string."
+        # RemovedInDjango40Warning: DEFAULT_HASHING_ALGORITHM will be removed.
+        if settings.DEFAULT_HASHING_ALGORITHM == 'sha1':
+            return self._legacy_encode(session_dict)
         return signing.dumps(
             session_dict, salt=self.key_salt, serializer=self.serializer,
             compress=True,
@@ -116,10 +120,20 @@ class SessionBase:
     def decode(self, session_data):
         try:
             return signing.loads(session_data, salt=self.key_salt, serializer=self.serializer)
+        except BadSignature as e:
+            logger = logging.getLogger('django.security.BadSignature')
+            logger.warning('Invalid session data encountered: %s', str(e))
+            return {}
         # RemovedInDjango40Warning: when the deprecation ends, handle here
         # exceptions similar to what _legacy_decode() does now.
         except Exception:
             return self._legacy_decode(session_data)
+
+    def _legacy_encode(self, session_dict):
+        # RemovedInDjango40Warning.
+        serialized = self.serializer().dumps(session_dict)
+        hash = self._hash(serialized)
+        return base64.b64encode(hash.encode() + b':' + serialized).decode('ascii')
 
     def _legacy_decode(self, session_data):
         # RemovedInDjango40Warning: pre-Django 3.1 format will be invalid.
@@ -217,7 +231,12 @@ class SessionBase:
             if self.session_key is None or no_load:
                 self._session_cache = {}
             else:
-                self._session_cache = self.load()
+                loaded_session = self.load()
+                # If we got an empty dict from load() due to invalid session data,
+                # mark the session as modified so it gets regenerated
+                if not loaded_session and self.session_key:
+                    self.modified = True
+                self._session_cache = loaded_session
         return self._session_cache
 
     _session = property(_get_session)
