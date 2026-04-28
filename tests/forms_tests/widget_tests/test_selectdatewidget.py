@@ -477,12 +477,33 @@ class SelectDateWidgetTest(WidgetTest):
             w.value_from_datadict({'date_year': '1899', 'date_month': '8', 'date_day': '13'}, {}, 'date'),
             '13-08-1899',
         )
-        # And years before 1000 (demonstrating the need for datetime_safe).
+        # And years before 1000 (demonstrating the need for
+        # sanitize_strftime_format).
         w = SelectDateWidget(years=('0001',))
         self.assertEqual(
             w.value_from_datadict({'date_year': '0001', 'date_month': '8', 'date_day': '13'}, {}, 'date'),
             '13-08-0001',
         )
+
+    @override_settings(USE_L10N=False, DATE_INPUT_FORMATS=['%d.%m.%Y'])
+    def test_custom_input_format(self):
+        w = SelectDateWidget(years=('0001', '1899', '2009', '2010'))
+        for values, expected_value in (
+            (('0001', '8', '13'), '13.08.0001'),
+            (('1899', '7', '11'), '11.07.1899'),
+            (('2009', '3', '7'), '07.03.2009'),
+        ):
+            with self.subTest(values=values):
+                data = {
+                    'field_%s' % field: value
+                    for field, value in zip(('year', 'month', 'day'), values)
+                }
+                self.assertEqual(w.value_from_datadict(data, {}, 'field'), expected_value)
+                expected_dict = {
+                    field: int(value)
+                    for field, value in zip(('year', 'month', 'day'), values)
+                }
+                self.assertEqual(w.format_value(expected_value), expected_dict)
 
     def test_format_value(self):
         valid_formats = [
@@ -505,7 +526,7 @@ class SelectDateWidgetTest(WidgetTest):
 
     def test_value_from_datadict(self):
         tests = [
-            (('2000', '12', '1'), '2000-12-1'),
+            (('2000', '12', '1'), '2000-12-01'),
             (('', '12', '1'), '0-12-1'),
             (('2000', '', '1'), '2000-0-1'),
             (('2000', '12', ''), '2000-12-0'),

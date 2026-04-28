@@ -1,4 +1,5 @@
 import os
+import pathlib
 from datetime import datetime
 from urllib.parse import urljoin
 
@@ -6,6 +7,7 @@ from django.conf import settings
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.files import File, locks
 from django.core.files.move import file_move_safe
+from django.core.files.utils import validate_file_name
 from django.core.signals import setting_changed
 from django.utils import timezone
 from django.utils._os import safe_join
@@ -60,21 +62,31 @@ class Storage:
         """
         return get_valid_filename(name)
 
+    def get_alternative_name(self, file_root, file_ext):
+        """
+        Return an alternative filename, by adding an underscore and a random 7
+        character alphanumeric string (before the file extension, if one
+        exists) to the filename.
+        """
+        return '%s_%s%s' % (file_root, get_random_string(7), file_ext)
+
     def get_available_name(self, name, max_length=None):
         """
         Return a filename that's free on the target storage system and
         available for new content to be written to.
         """
         dir_name, file_name = os.path.split(name)
+        if '..' in pathlib.PurePath(dir_name).parts:
+            raise SuspiciousFileOperation("Detected path traversal attempt in '%s'" % dir_name)
+        validate_file_name(file_name)
         file_root, file_ext = os.path.splitext(file_name)
-        # If the filename already exists, add an underscore and a random 7
-        # character alphanumeric string (before the file extension, if one
-        # exists) to the filename until the generated filename doesn't exist.
+        # If the filename already exists, generate an alternative filename
+        # until it doesn't exist.
         # Truncate original name if required, so the new filename does not
         # exceed the max_length.
         while self.exists(name) or (max_length and len(name) > max_length):
             # file_ext includes the dot.
-            name = os.path.join(dir_name, "%s_%s%s" % (file_root, get_random_string(7), file_ext))
+            name = os.path.join(dir_name, self.get_alternative_name(file_root, file_ext))
             if max_length is None:
                 continue
             # Truncate file_root if max_length exceeded.
@@ -88,7 +100,7 @@ class Storage:
                         'Please make sure that the corresponding file field '
                         'allows sufficient "max_length".' % name
                     )
-                name = os.path.join(dir_name, "%s_%s%s" % (file_root, get_random_string(7), file_ext))
+                name = os.path.join(dir_name, self.get_alternative_name(file_root, file_ext))
         return name
 
     def generate_filename(self, filename):
@@ -98,6 +110,8 @@ class Storage:
         """
         # `filename` may include a path as returned by FileField.upload_to.
         dirname, filename = os.path.split(filename)
+        if '..' in pathlib.PurePath(dirname).parts:
+            raise SuspiciousFileOperation("Detected path traversal attempt in '%s'" % dirname)
         return os.path.normpath(os.path.join(dirname, self.get_valid_name(filename)))
 
     def path(self, name):
@@ -230,9 +244,9 @@ class FileSystemStorage(Storage):
         directory = os.path.dirname(full_path)
         try:
             if self.directory_permissions_mode is not None:
-                # os.makedirs applies the global umask, so we reset it,
-                # for consistency with file_permissions_mode behavior.
-                old_umask = os.umask(0)
+                # Set the umask because os.makedirs() doesn't apply the "mode"
+                # argument to intermediate-level directories.
+                old_umask = os.umask(0o777 & ~self.directory_permissions_mode)
                 try:
                     os.makedirs(directory, self.directory_permissions_mode, exist_ok=True)
                 finally:
@@ -284,10 +298,11 @@ class FileSystemStorage(Storage):
             os.chmod(full_path, self.file_permissions_mode)
 
         # Store filenames with forward slashes, even on Windows.
-        return name.replace('\\', '/')
+        return str(name).replace('\\', '/')
 
     def delete(self, name):
-        assert name, "The name argument is not allowed to be empty."
+        if not name:
+            raise ValueError('The name must be given to delete().')
         name = self.path(name)
         # If the file or directory exists, delete it from the filesystem.
         try:
@@ -332,11 +347,8 @@ class FileSystemStorage(Storage):
         If timezone support is enabled, make an aware datetime object in UTC;
         otherwise make a naive one in the local timezone.
         """
-        if settings.USE_TZ:
-            # Safe to use .replace() because UTC doesn't have DST
-            return datetime.utcfromtimestamp(ts).replace(tzinfo=timezone.utc)
-        else:
-            return datetime.fromtimestamp(ts)
+        tz = timezone.utc if settings.USE_TZ else None
+        return datetime.fromtimestamp(ts, tz=tz)
 
     def get_accessed_time(self, name):
         return self._datetime_from_timestamp(os.path.getatime(self.path(name)))
