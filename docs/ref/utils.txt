@@ -62,16 +62,19 @@ need to distinguish caches by the ``Accept-language`` header.
 
 .. function:: add_never_cache_headers(response)
 
-    Adds a ``Cache-Control: max-age=0, no-cache, no-store, must-revalidate``
-    header to a response to indicate that a page should never be cached.
+    Adds a ``Cache-Control: max-age=0, no-cache, no-store, must-revalidate,
+    private`` header to a response to indicate that a page should never be
+    cached.
 
 .. function:: patch_vary_headers(response, newheaders)
 
     Adds (or updates) the ``Vary`` header in the given ``HttpResponse`` object.
-    ``newheaders`` is a list of header names that should be in ``Vary``.
-    Existing headers in ``Vary`` aren't removed.
+    ``newheaders`` is a list of header names that should be in ``Vary``. If
+    headers contains an asterisk, then ``Vary`` header will consist of a single
+    asterisk ``'*'``, according to :rfc:`7231#section-7.1.4`. Otherwise,
+    existing headers in ``Vary`` aren't removed.
 
-.. function:: get_cache_key(request, key_prefix=None)
+.. function:: get_cache_key(request, key_prefix=None, method='GET', cache=None)
 
     Returns a cache key based on the request path. It can be used in the
     request phase because it pulls the list of headers to take into account
@@ -81,7 +84,7 @@ need to distinguish caches by the ``Accept-language`` header.
     If there is no headerlist stored, the page needs to be rebuilt, so this
     function returns ``None``.
 
-.. function:: learn_cache_key(request, response, cache_timeout=None, key_prefix=None)
+.. function:: learn_cache_key(request, response, cache_timeout=None, key_prefix=None, cache=None)
 
     Learns what headers to take into account for some request path from the
     response object. It stores those headers in a global path registry so that
@@ -92,8 +95,8 @@ need to distinguish caches by the ``Accept-language`` header.
 
     The list of headers to use for cache key generation is stored in the same
     cache as the pages themselves. If the cache ages some data out of the
-    cache, this just means that we have to build the response once to get at
-    the Vary header and so at the list of headers to use for the cache key.
+    cache, this means that we have to build the response once to get at the
+    Vary header and so at the list of headers to use for the cache key.
 
 ``django.utils.dateparse``
 ==========================
@@ -130,18 +133,14 @@ The functions defined in this module share the following properties:
     UTC offsets are supported; if ``value`` describes one, the result's
     ``tzinfo`` attribute is a :class:`datetime.timezone` instance.
 
-    .. versionchanged:: 2.2
-
-        In older versions, the ``tzinfo`` attribute is a
-        :class:`~django.utils.timezone.FixedOffset` instance.
-
 .. function:: parse_duration(value)
 
     Parses a string and returns a :class:`datetime.timedelta`.
 
-    Expects data in the format ``"DD HH:MM:SS.uuuuuu"`` or as specified by ISO
-    8601 (e.g. ``P4DT1H15M20S`` which is equivalent to ``4 1:15:20``) or
-    PostgreSQL's day-time interval format (e.g. ``3 days 04:05:06``).
+    Expects data in the format ``"DD HH:MM:SS.uuuuuu"``,
+    ``"DD HH:MM:SS,uuuuuu"``,  or as specified by ISO 8601 (e.g.
+    ``P4DT1H15M20S`` which is equivalent to ``4 1:15:20``) or PostgreSQL's
+    day-time interval format (e.g. ``3 days 04:05:06``).
 
 ``django.utils.decorators``
 ===========================
@@ -184,6 +183,25 @@ The functions defined in this module share the following properties:
          @cache_page(3600)
          def my_view(request):
              pass
+
+.. function:: sync_only_middleware(middleware)
+
+    Marks a middleware as :ref:`synchronous-only <async-middleware>`. (The
+    default in Django, but this allows you to future-proof if the default ever
+    changes in a future release.)
+
+.. function:: async_only_middleware(middleware)
+
+    Marks a middleware as :ref:`asynchronous-only <async-middleware>`. Django
+    will wrap it in an asynchronous event loop when it is called from the WSGI
+    request path.
+
+.. function:: sync_and_async_middleware(middleware)
+
+    Marks a middleware as :ref:`sync and async compatible <async-middleware>`,
+    this allows to avoid converting requests. You must implement detection of
+    the current request type to use this decorator. See :ref:`asynchronous
+    middleware documentation <async-middleware>` for details.
 
 ``django.utils.encoding``
 =========================
@@ -230,20 +248,6 @@ The functions defined in this module share the following properties:
     If ``strings_only`` is ``True``, don't convert (some) non-string-like
     objects.
 
-.. function:: smart_text(s, encoding='utf-8', strings_only=False, errors='strict')
-
-    .. deprecated:: 3.0
-
-    Alias of :func:`force_str` for backwards compatibility, especially in code
-    that supports Python 2.
-
-.. function:: force_text(s, encoding='utf-8', strings_only=False, errors='strict')
-
-    .. deprecated:: 3.0
-
-    Alias of :func:`force_str` for backwards compatibility, especially in code
-    that supports Python 2.
-
 .. function:: iri_to_uri(iri)
 
     Convert an Internationalized Resource Identifier (IRI) portion to a URI
@@ -269,7 +273,8 @@ The functions defined in this module share the following properties:
 .. function:: filepath_to_uri(path)
 
     Convert a file system path to a URI portion that is suitable for inclusion
-    in a URL. The path is assumed to be either UTF-8 bytes or string.
+    in a URL. The path is assumed to be either UTF-8 bytes, string, or a
+    :class:`~pathlib.Path`.
 
     This method will encode certain characters that would normally be
     recognized as special characters for URIs.  Note that this method does not
@@ -295,7 +300,7 @@ Sample usage::
     >>> feed = feedgenerator.Rss201rev2Feed(
     ...     title="Poynter E-Media Tidbits",
     ...     link="http://www.poynter.org/column.asp?id=31",
-    ...     description="A group Weblog by the sharpest minds in online media/journalism/publishing.",
+    ...     description="A group blog by the sharpest minds in online media/journalism/publishing.",
     ...     language="en",
     ... )
     >>> feed.add_item(
@@ -409,7 +414,7 @@ https://web.archive.org/web/20110718035220/http://diveintomark.org/archives/2004
 
 .. class:: Atom1Feed(SyndicationFeed)
 
-    Spec: https://tools.ietf.org/html/rfc4287
+    Spec: :rfc:`4287`
 
 ``django.utils.functional``
 ===========================
@@ -473,25 +478,22 @@ https://web.archive.org/web/20110718035220/http://diveintomark.org/archives/2004
         # set a value manually, that will persist on the instance until cleared
         person.friends = ["Huckleberry Finn", "Tom Sawyer"]
 
+    Because of the way the :py:ref:`descriptor protocol
+    <descriptor-invocation>` works, using ``del`` (or ``delattr``) on a
+    ``cached_property`` that hasn't been accessed raises ``AttributeError``.
+
     As well as offering potential performance advantages, ``@cached_property``
     can ensure that an attribute's value does not change unexpectedly over the
     life of an instance. This could occur with a method whose computation is
-    based on ``datetime.now()``, or simply if a change were saved to the
-    database by some other process in the brief interval between subsequent
-    invocations of a method on the same instance.
+    based on ``datetime.now()``, or if a change were saved to the database by
+    some other process in the brief interval between subsequent invocations of
+    a method on the same instance.
 
     You can make cached properties of methods. For example, if you had an
     expensive ``get_friends()`` method and wanted to allow calling it without
     retrieving the cached value, you could write::
 
-        friends = cached_property(get_friends, name='friends')
-
-    You only need the ``name`` argument for Python < 3.6 support.
-
-    .. versionchanged:: 2.2
-
-        Older versions of Django require the ``name`` argument for all versions
-        of Python.
+        friends = cached_property(get_friends)
 
     While ``person.get_friends()`` will recompute the friends on each call, the
     value of the cached property will persist until you delete it as described
@@ -501,6 +503,12 @@ https://web.archive.org/web/20110718035220/http://diveintomark.org/archives/2004
         y = person.get_friends()   # calls again
         z = person.friends         # does not call
         x is z                     # is True
+
+.. class:: classproperty(method=None)
+
+    Similar to :py:func:`@classmethod <classmethod>`, the ``@classproperty``
+    decorator converts the result of a method with a single ``cls`` argument
+    into a property that can be accessed directly from the class.
 
 .. function:: keep_lazy(func, *resultclasses)
 
@@ -536,9 +544,9 @@ https://web.archive.org/web/20110718035220/http://diveintomark.org/archives/2004
 
     The ``keep_lazy()`` decorator takes a number of extra arguments (``*args``)
     specifying the type(s) that the original function can return. A common
-    use case is to have functions that return text. For these, you can just
-    pass the ``str`` type to ``keep_lazy`` (or even simpler, use the
-    :func:`keep_lazy_text` decorator described in the next section).
+    use case is to have functions that return text. For these, you can pass the
+    ``str`` type to ``keep_lazy`` (or use the :func:`keep_lazy_text` decorator
+    described in the next section).
 
     Using this decorator means you can write your function and assume that the
     input is a proper string, then add support for lazy translation objects at
@@ -549,7 +557,8 @@ https://web.archive.org/web/20110718035220/http://diveintomark.org/archives/2004
     A shortcut for ``keep_lazy(str)(func)``.
 
     If you have a function that returns text and you want to be able to take
-    lazy arguments while delaying their evaluation, simply use this decorator::
+    lazy arguments while delaying their evaluation, you can use this
+    decorator::
 
         from django.utils.functional import keep_lazy, keep_lazy_text
 
@@ -678,8 +687,8 @@ escaping HTML.
 
 .. function:: http_date(epoch_seconds=None)
 
-    Formats the time to match the :rfc:`1123` date format as specified by HTTP
-    :rfc:`7231#section-7.1.1.1`.
+    Formats the time to match the :rfc:`1123#section-5.2.14` date format as
+    specified by HTTP :rfc:`7231#section-7.1.1.1`.
 
     Accepts a floating point number expressed in seconds since the epoch in
     UTC--such as that outputted by ``time.time()``. If set to ``None``,
@@ -700,18 +709,10 @@ escaping HTML.
     Encodes a bytestring to a base64 string for use in URLs, stripping any
     trailing equal signs.
 
-    .. versionchanged:: 2.2
-
-        In older versions, it returns a bytestring instead of a string.
-
 .. function::  urlsafe_base64_decode(s)
 
     Decodes a base64 encoded string, adding back any trailing equal signs that
     might have been stripped.
-
-    .. versionchanged:: 2.2
-
-        In older versions, ``s`` may be a bytestring.
 
 ``django.utils.module_loading``
 ===============================
@@ -803,11 +804,11 @@ appropriate entities.
     Converts a string to a URL slug by:
 
     #. Converting to ASCII if ``allow_unicode`` is ``False`` (the default).
+    #. Converting to lowercase.
     #. Removing characters that aren't alphanumerics, underscores, hyphens, or
        whitespace.
-    #. Removing leading and trailing whitespace.
-    #. Converting to lowercase.
     #. Replacing any whitespace or repeated dashes with single dashes.
+    #. Removing leading and trailing whitespace, dashes, and underscores.
 
     For example::
 
@@ -820,6 +821,11 @@ appropriate entities.
         >>> slugify('你好 World', allow_unicode=True)
         '你好-world'
 
+    .. versionchanged:: 3.2
+
+        In older versions, leading and trailing dashes and underscores are not
+        removed.
+
 .. _time-zone-selection-functions:
 
 ``django.utils.timezone``
@@ -831,15 +837,6 @@ appropriate entities.
 .. data:: utc
 
     :class:`~datetime.tzinfo` instance that represents UTC.
-
-.. class:: FixedOffset(offset=None, name=None)
-
-    A :class:`~datetime.tzinfo` subclass modeling a fixed offset from UTC.
-    ``offset`` is an integer number of minutes east of UTC.
-
-    .. deprecated:: 2.2
-
-        Use :class:`datetime.timezone` instead.
 
 .. function:: get_fixed_timezone(offset)
 
@@ -944,18 +941,30 @@ appropriate entities.
     :class:`~datetime.datetime`. If ``timezone`` is set to ``None``, it
     defaults to the :ref:`current time zone <default-current-time-zone>`.
 
-    The ``pytz.AmbiguousTimeError`` exception is raised if you try to make
-    ``value`` aware during a DST transition where the same time occurs twice
-    (when reverting from DST). Setting ``is_dst`` to ``True`` or ``False`` will
-    avoid the exception by choosing if the time is pre-transition or
-    post-transition respectively.
+    .. deprecated:: 4.0
 
-    The ``pytz.NonExistentTimeError`` exception is raised if you try to make
-    ``value`` aware during a DST transition such that the time never occurred
-    (when entering into DST). Setting ``is_dst`` to ``True`` or ``False`` will
-    avoid the exception by moving the hour backwards or forwards by 1
-    respectively. For example, ``is_dst=True`` would change a nonexistent
-    time of 2:30 to 1:30 and ``is_dst=False`` would change the time to 3:30.
+        When using ``pytz``, the ``pytz.AmbiguousTimeError`` exception is
+        raised if you try to make ``value`` aware during a DST transition where
+        the same time occurs twice (when reverting from DST). Setting
+        ``is_dst`` to ``True`` or ``False`` will avoid the exception by
+        choosing if the time is pre-transition or post-transition respectively.
+
+        When using ``pytz``, the ``pytz.NonExistentTimeError`` exception is
+        raised if you try to make ``value`` aware during a DST transition such
+        that the time never occurred. For example, if the 2:00 hour is skipped
+        during a DST transition, trying to make 2:30 aware in that time zone
+        will raise an exception. To avoid that you can use ``is_dst`` to
+        specify how ``make_aware()`` should interpret such a nonexistent time.
+        If ``is_dst=True`` then the above time would be interpreted as 2:30 DST
+        time (equivalent to 1:30 local time). Conversely, if ``is_dst=False``
+        the time would be interpreted as 2:30 standard time (equivalent to 3:30
+        local time).
+
+        The ``is_dst`` parameter has no effect when using non-``pytz`` timezone
+        implementations.
+
+        The ``is_dst`` parameter is deprecated and will be removed in Django
+        5.0.
 
 .. function:: make_naive(value, timezone=None)
 
@@ -972,10 +981,6 @@ appropriate entities.
 
 For a complete discussion on the usage of the following see the
 :doc:`translation documentation </topics/i18n/translation>`.
-
-The ``u`` prefix on the functions below comes from a difference in Python 2
-between unicode and bytestrings. If your code doesn't support Python 2, use the
-functions without the ``u``.
 
 .. function:: gettext(message)
 
@@ -1040,7 +1045,7 @@ functions without the ``u``.
     :func:`django.utils.translation.activate` to fetch the translation object
     for a given language, activates it as the translation object for the
     current thread and reactivates the previous active language on exit.
-    Optionally, it can simply deactivate the temporary translation on exit with
+    Optionally, it can deactivate the temporary translation on exit with
     :func:`django.utils.translation.deactivate` if the ``deactivate`` argument
     is ``True``. If you pass ``None`` as the language argument, a
     ``NullTranslations()`` instance is activated within the context.
@@ -1101,13 +1106,3 @@ functions without the ``u``.
     Turns a Django template into something that is understood by ``xgettext``.
     It does so by translating the Django translation tags into standard
     ``gettext`` function invocations.
-
-.. data:: LANGUAGE_SESSION_KEY
-
-    Session key under which the active language for the current session is
-    stored.
-
-    .. deprecated:: 3.0
-
-        The language won't be stored in the session in Django 4.0. Use the
-        :setting:`LANGUAGE_COOKIE_NAME` cookie instead.
