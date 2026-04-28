@@ -1,4 +1,3 @@
-from django.apps import apps
 from django.core.management.base import BaseCommand, CommandError
 from django.db import DEFAULT_DB_ALIAS, connections
 from django.db.migrations.executor import MigrationExecutor
@@ -7,8 +6,6 @@ from django.db.migrations.loader import AmbiguityError
 
 class Command(BaseCommand):
     help = "Prints the SQL statements for the named migration."
-
-    output_transaction = True
 
     def add_arguments(self, parser):
         parser.add_argument('app_label', help='App label of the application containing the migration.')
@@ -23,43 +20,40 @@ class Command(BaseCommand):
         )
 
     def execute(self, *args, **options):
-        # sqlmigrate doesn't support coloring its output but we need to force
-        # no_color=True so that the BEGIN/COMMIT statements added by
-        # output_transaction don't get colored either.
-        options['no_color'] = True
         return super().execute(*args, **options)
 
     def handle(self, *args, **options):
         # Get the database we're operating from
         connection = connections[options['database']]
 
-        # Load up an executor to get all the migration data
-        executor = MigrationExecutor(connection)
-
-        # Resolve command-line arguments into a migration
+        # Hook for backends needing any database preparation
+        connection.prepare_database()
+        executor = MigrationExecutor(connection, self.migration_progress_callback)
         app_label, migration_name = options['app_label'], options['migration_name']
-        # Validate app_label
-        try:
-            apps.get_app_config(app_label)
-        except LookupError as err:
-            raise CommandError(str(err))
-        if app_label not in executor.loader.migrated_apps:
-            raise CommandError("App '%s' does not have migrations" % app_label)
+        # Resolve the migration
         try:
             migration = executor.loader.get_migration_by_prefix(app_label, migration_name)
-        except AmbiguityError:
-            raise CommandError("More than one migration matches '%s' in app '%s'. Please be more specific." % (
-                migration_name, app_label))
-        except KeyError:
-            raise CommandError("Cannot find a migration matching '%s' from app '%s'. Is it in INSTALLED_APPS?" % (
-                migration_name, app_label))
+        except AmbiguityError as err:
+            raise CommandError(
+                "More than one migration matches '%s' in app '%s'. Please be more specific." %
+                (migration_name, app_label)
+            ) from err
+        except KeyError as err:
+            raise CommandError("Cannot find a migration matching '%s' from app '%s'." % (
+                migration_name, app_label)) from err
+
         targets = [(app_label, migration.name)]
 
-        # Show begin/end around output only for atomic migrations
-        self.output_transaction = migration.atomic
+        # Show begin/end around output only for atomic migrations on databases that support transactional DDL
+        self.output_transaction = migration.atomic and connection.features.can_rollback_ddl
 
         # Make a plan that represents just the requested migrations and show SQL
         # for it
         plan = [(executor.loader.graph.nodes[targets[0]], options['backwards'])]
         sql_statements = executor.collect_sql(plan)
+        if not sql_statements and options['verbosity'] >= 1:
+            self.stderr.write('No operations found.')
         return '\n'.join(sql_statements)
+
+    def migration_progress_callback(self, action, migration=None, fake=False):
+        pass
