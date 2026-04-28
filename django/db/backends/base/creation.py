@@ -97,6 +97,11 @@ class BaseDatabaseCreation:
         Designed only for test runner usage; will not handle large
         amounts of data.
         """
+        # If migrations are disabled, return empty string since there's no
+        # meaningful database state to serialize when migrations are skipped
+        if not self.connection.settings_dict['TEST'].get('MIGRATE', True):
+            return ''
+            
         # Iteratively return every object for all models to serialize.
         def get_objects():
             from django.db.migrations.loader import MigrationLoader
