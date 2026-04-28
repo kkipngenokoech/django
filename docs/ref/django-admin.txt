@@ -160,7 +160,7 @@ are excluded.
 
 .. django-admin-option:: --use-fuzzy, -f
 
-Includes fuzzy translations into compiled files.
+Includes `fuzzy translations`_ into compiled files.
 
 Example usage::
 
@@ -172,6 +172,8 @@ Example usage::
     django-admin compilemessages --exclude=pt_BR --exclude=fr
     django-admin compilemessages -x pt_BR
     django-admin compilemessages -x pt_BR -x fr
+
+.. _fuzzy translations: https://www.gnu.org/software/gettext/manual/html_node/Fuzzy-Entries.html
 
 .. django-admin-option:: --ignore PATTERN, -i PATTERN
 
@@ -599,13 +601,14 @@ The :djadmin:`dumpdata` command can be used to generate input for ``loaddata``.
 Compressed fixtures
 ~~~~~~~~~~~~~~~~~~~
 
-Fixtures may be compressed in ``zip``, ``gz``, or ``bz2`` format. For example::
+Fixtures may be compressed in ``zip``, ``gz``, ``bz2``, ``lzma``, or ``xz``
+format. For example::
 
     django-admin loaddata mydata.json
 
-would look for any of ``mydata.json``, ``mydata.json.zip``,
-``mydata.json.gz``, or ``mydata.json.bz2``. The first file contained within a
-zip-compressed archive is used.
+would look for any of ``mydata.json``, ``mydata.json.zip``, ``mydata.json.gz``,
+``mydata.json.bz2``, ``mydata.json.lzma``, or ``mydata.json.xz``. The first
+file contained within a compressed archive is used.
 
 Note that if two fixtures with the same name but different
 fixture type are discovered (for example, if ``mydata.json`` and
@@ -618,6 +621,10 @@ installation will be aborted, and any data installed in the call to
     The MyISAM storage engine of MySQL doesn't support transactions or
     constraints, so if you use MyISAM, you won't get validation of fixture
     data, or a rollback if multiple transaction files are found.
+
+.. versionchanged:: 3.2
+
+    Support for XZ archives (``.xz``) and LZMA archives (``.lzma``) was added.
 
 Database-specific fixtures
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -818,6 +825,12 @@ Generate migration files without Django version and timestamp header.
 
 Makes ``makemigrations`` exit with a non-zero status when model changes without
 migrations are detected.
+
+.. versionchanged:: 3.2
+
+    Support for calling ``makemigrations`` without an active database
+    connection was added. In that case, check for a consistent migration
+    history is skipped.
 
 ``migrate``
 -----------
@@ -1502,6 +1515,14 @@ installed, ``ipdb`` is used instead.
 Discards output (``stdout`` and ``stderr``) for passing tests, in the same way
 as :option:`unittest's --buffer option<unittest.-b>`.
 
+.. django-admin-option:: --no-faulthandler
+
+.. versionadded:: 3.2
+
+Django automatically calls :func:`faulthandler.enable()` when starting the
+tests, which allows it to print a traceback if the interpreter crashes. Pass
+``--no-faulthandler`` to disable this behavior.
+
 ``testserver``
 --------------
 
@@ -1815,7 +1836,7 @@ colored output to another command.
 Skips running system checks prior to running the command. This option is only
 available if the
 :attr:`~django.core.management.BaseCommand.requires_system_checks` command
-attribute is set to ``True``.
+attribute is not an empty list or tuple.
 
 Example usage::
 
