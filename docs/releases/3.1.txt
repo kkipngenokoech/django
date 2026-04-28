@@ -1,8 +1,8 @@
-============================================
-Django 3.1 release notes - UNDER DEVELOPMENT
-============================================
+========================
+Django 3.1 release notes
+========================
 
-*Expected August 2020*
+*August 4, 2020*
 
 Welcome to Django 3.1!
 
@@ -19,8 +19,8 @@ project.
 Python compatibility
 ====================
 
-Django 3.1 supports Python 3.6, 3.7, and 3.8. We **highly recommend** and only
-officially support the latest release of each series.
+Django 3.1 supports Python 3.6, 3.7, 3.8, and 3.9 (as of 3.1.3). We **highly
+recommend** and only officially support the latest release of each series.
 
 .. _whats-new-3.1:
 
@@ -41,7 +41,7 @@ To get started with async views, you need to declare a view using
 
     async def my_view(request):
         await asyncio.sleep(0.5)
-        return HttpResponse('Hello, async world!')
+        return HttpResponse("Hello, async world!")
 
 All asynchronous features are supported whether you are running under WSGI or
 ASGI mode. However, there will be performance penalties using async code in
@@ -70,14 +70,56 @@ JSONField for all supported database backends
 Django now includes :class:`.models.JSONField` and
 :class:`forms.JSONField <django.forms.JSONField>` that can be used on all
 supported database backends. Both fields support the use of custom JSON
-encoders and decoders. The model field supports the introspection, lookups, and
-transforms that were previously PostgreSQL-only.
+encoders and decoders. The model field supports the introspection,
+:ref:`lookups, and transforms <querying-jsonfield>` that were previously
+PostgreSQL-only::
+
+    from django.db import models
+
+
+    class ContactInfo(models.Model):
+        data = models.JSONField()
+
+
+    ContactInfo.objects.create(
+        data={
+            "name": "John",
+            "cities": ["London", "Cambridge"],
+            "pets": {"dogs": ["Rufus", "Meg"]},
+        }
+    )
+    ContactInfo.objects.filter(
+        data__name="John",
+        data__pets__has_key="dogs",
+        data__cities__contains="London",
+    ).delete()
 
 If your project uses ``django.contrib.postgres.fields.JSONField``, plus the
 related form field and transforms, you should adjust to use the new fields,
 and generate and apply a database migration. For now, the old fields and
 transforms are left as a reference to the new ones and are :ref:`deprecated as
 of this release <deprecated-jsonfield>`.
+
+.. _default-hashing-algorithm-usage:
+
+``DEFAULT_HASHING_ALGORITHM`` settings
+--------------------------------------
+
+The new ``DEFAULT_HASHING_ALGORITHM`` transitional setting allows specifying
+the default hashing algorithm to use for encoding cookies, password reset
+tokens in the admin site, user sessions, and signatures created by
+:class:`django.core.signing.Signer` and :meth:`django.core.signing.dumps`.
+
+Support for SHA-256 was added in Django 3.1. If you are upgrading multiple
+instances of the same project to Django 3.1, you should set
+``DEFAULT_HASHING_ALGORITHM`` to ``'sha1'`` during the transition, in order to
+allow compatibility with the older versions of Django. Note that this requires
+Django 3.1.1+. Once the transition to 3.1 is complete you can stop overriding
+``DEFAULT_HASHING_ALGORITHM``.
+
+This setting is deprecated as of this release, because support for tokens,
+cookies, sessions, and signatures that use SHA-1 algorithm will be removed in
+Django 4.0.
 
 Minor features
 --------------
@@ -95,6 +137,14 @@ Minor features
 * The admin now has a sidebar on larger screens for easier navigation. It is
   enabled by default but can be disabled by using a custom ``AdminSite`` and
   setting :attr:`.AdminSite.enable_nav_sidebar` to ``False``.
+
+  Rendering the sidebar requires access to the current request in order to set
+  CSS and ARIA role affordances. This requires using
+  ``'django.template.context_processors.request'`` in the
+  ``'context_processors'`` option of :setting:`OPTIONS <TEMPLATES-OPTIONS>`.
+
+* Initially empty ``extra`` inlines can now be removed, in the same way as
+  dynamically created ones.
 
 * ``XRegExp`` is upgraded from version 2.0.0 to 3.2.0.
 
@@ -213,7 +263,7 @@ Cache
   field names in the ``no-cache`` directive for the ``Cache-Control`` header,
   according to :rfc:`7234#section-5.2.2.2`.
 
-* :meth:`~django.core.caches.cache.delete` now returns ``True`` if the key was
+* :meth:`~django.core.cache.cache.delete` now returns ``True`` if the key was
   successfully deleted, ``False`` otherwise.
 
 CSRF
@@ -269,10 +319,14 @@ Forms
   details.
 
 * :class:`django.forms.DateTimeField` now accepts dates in a subset of ISO 8601
-  datetime formats, including optional timezone (e.g. ``2019-10-10T06:47``,
-  ``2019-10-10T06:47:23+04:00``, or ``2019-10-10T06:47:23Z``). Additionally, it
-  now uses ``DATE_INPUT_FORMATS`` in addition to ``DATETIME_INPUT_FORMATS``
-  when converting a field input to a ``datetime`` value.
+  datetime formats, including optional timezone, e.g. ``2019-10-10T06:47``,
+  ``2019-10-10T06:47:23+04:00``, or ``2019-10-10T06:47:23Z``. The timezone will
+  always be retained if provided, with timezone-aware datetimes being returned
+  even when :setting:`USE_TZ` is ``False``.
+
+  Additionally, ``DateTimeField`` now uses ``DATE_INPUT_FORMATS`` in addition
+  to ``DATETIME_INPUT_FORMATS`` when converting a field input to a ``datetime``
+  value.
 
 * :attr:`.MultiWidget.widgets` now accepts a dictionary which allows
   customizing subwidget ``name`` attributes.
@@ -287,7 +341,8 @@ Internationalization
   (string) value to explicitly state that the cookie is sent with all same-site
   and cross-site requests.
 
-* Added support and translations for the Algerian Arabic language.
+* Added support and translations for the Algerian Arabic, Igbo, Kyrgyz, Tajik,
+  and Turkmen languages.
 
 Management Commands
 ~~~~~~~~~~~~~~~~~~~
@@ -309,12 +364,6 @@ Management Commands
 
 * The :djadmin:`flush` and :djadmin:`sqlflush` commands now include SQL to
   reset sequences on SQLite.
-
-Migrations
-~~~~~~~~~~
-
-* Migrations are now loaded also from directories without ``__init__.py``
-  files.
 
 Models
 ~~~~~~
@@ -397,9 +446,10 @@ Security
   origins. If you need the previous behavior, explicitly set
   :setting:`SECURE_REFERRER_POLICY` to ``None``.
 
-* The default :class:`django.core.signing.Signer` algorithm is changed to the
-  SHA-256. Support for signatures made with the old SHA-1 algorithm remains
-  until Django 4.0.
+* The default algorithm of :class:`django.core.signing.Signer`,
+  :meth:`django.core.signing.loads`, and :meth:`django.core.signing.dumps` is
+  changed to the SHA-256. Support for signatures made with the old SHA-1
+  algorithm remains until Django 4.0.
 
   Also, the new ``algorithm`` parameter of the
   :class:`~django.core.signing.Signer` allows customizing the hashing
@@ -512,7 +562,10 @@ backends.
   ``DatabaseFeatures.supports_json_field`` to ``False``. If storing primitives
   is not supported, set ``DatabaseFeatures.supports_primitives_in_json_field``
   to ``False``. If there is a true datatype for JSON, set
-  ``DatabaseFeatures.has_native_json_field`` to ``True``.
+  ``DatabaseFeatures.has_native_json_field`` to ``True``. If
+  :lookup:`jsonfield.contains` and :lookup:`jsonfield.contained_by` are not
+  supported, set ``DatabaseFeatures.supports_json_field_contains`` to
+  ``False``.
 
 * Third party database backends must implement introspection for ``JSONField``
   or set ``can_introspect_json_field`` to ``False``.
@@ -542,6 +595,7 @@ form::
     from django import forms
     from django.contrib.auth.forms import UserChangeForm
 
+
     class MyUserChangeForm(UserChangeForm):
         first_name = forms.CharField(max_length=30, required=False)
 
@@ -551,8 +605,10 @@ If you wish to keep this restriction in the admin when editing users, set
     from django.contrib.auth.admin import UserAdmin
     from django.contrib.auth.models import User
 
+
     class MyUserAdmin(UserAdmin):
         form = MyUserChangeForm
+
 
     admin.site.unregister(User)
     admin.site.register(User, MyUserAdmin)
@@ -668,6 +724,24 @@ Miscellaneous
 * The undocumented ``django.contrib.postgres.fields.jsonb.JsonAdapter`` class
   is removed.
 
+* The :ttag:`{% localize off %} <localize>` tag and :tfilter:`unlocalize`
+  filter no longer respect :setting:`DECIMAL_SEPARATOR` setting.
+
+* The minimum supported version of ``asgiref`` is increased from 3.2 to
+  3.2.10.
+
+* The :doc:`Media </topics/forms/media>` class now renders ``<script>`` tags
+  without the ``type`` attribute to follow `WHATWG recommendations
+  <https://html.spec.whatwg.org/multipage/scripting.html#the-script-element>`_.
+
+* :class:`~django.forms.ModelChoiceIterator`, used by
+  :class:`~django.forms.ModelChoiceField` and
+  :class:`~django.forms.ModelMultipleChoiceField`, now yields 2-tuple choices
+  containing :class:`~django.forms.ModelChoiceIteratorValue` instances as the
+  first ``value`` element in each choice. In most cases this proxies
+  transparently, but if you need the ``field`` value itself, use the
+  :attr:`.ModelChoiceIteratorValue.value` attribute instead.
+
 .. _deprecated-features-3.1:
 
 Features deprecated in 3.1
@@ -742,16 +816,12 @@ Miscellaneous
 * The ``list`` message for :class:`~django.forms.ModelMultipleChoiceField` is
   deprecated in favor of ``invalid_list``.
 
-* The passing of URL kwargs directly to the context by
-  :class:`~django.views.generic.base.TemplateView` is deprecated. Reference
-  them in the template with ``view.kwargs`` instead.
-
 * Passing raw column aliases to :meth:`.QuerySet.order_by` is deprecated. The
   same result can be achieved by passing aliases in a
   :class:`~django.db.models.expressions.RawSQL` instead beforehand.
 
 * The ``NullBooleanField`` model field is deprecated in favor of
-  ``BooleanField(null=True)``.
+  ``BooleanField(null=True, blank=True)``.
 
 * ``django.conf.urls.url()`` alias of :func:`django.urls.re_path` is
   deprecated.
@@ -762,6 +832,8 @@ Miscellaneous
   module and included as a built-in tag in the :class:`'builtins'
   <django.template.backends.django.DjangoTemplates>` option in
   :setting:`OPTIONS <TEMPLATES-OPTIONS>`.
+
+* ``DEFAULT_HASHING_ALGORITHM`` transitional setting is deprecated.
 
 .. _removed-features-3.1:
 
