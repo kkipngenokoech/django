@@ -11,14 +11,8 @@ does the same thing as ``django-admin`` but also sets the
 project's ``settings.py`` file.
 
 The ``django-admin`` script should be on your system path if you installed
-Django via ``pip``. If it's not on your path, you can find it in
-``site-packages/django/bin`` within your Python installation. Consider
-symlinking it from some place on your path, such as ``/usr/local/bin``.
-
-For Windows users, who do not have symlinking functionality available, you can
-copy ``django-admin.exe`` to a location on your existing path or edit the
-``PATH`` settings (under ``Settings - Control Panel - System - Advanced -
-Environment...``) to point to its installed location.
+Django via ``pip``. If it's not in your path, ensure you have your virtual
+environment activated.
 
 Generally, when working on a single Django project, it's easier to use
 ``manage.py`` than ``django-admin``. If you need to switch between multiple
@@ -1467,6 +1461,13 @@ Runs test methods and classes matching test name patterns, in the same way as
 
 Spawns a ``pdb`` debugger at each test error or failure. If you have it
 installed, ``ipdb`` is used instead.
+
+.. django-admin-option:: --buffer, -b
+
+.. versionadded:: 3.1
+
+Discards output (``stdout`` and ``stderr``) for passing tests, in the same way
+as :option:`unittest's --buffer option<unittest.-b>`.
 
 ``testserver``
 --------------
