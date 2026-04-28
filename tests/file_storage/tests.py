@@ -28,8 +28,11 @@ from django.test import (
 from django.test.utils import requires_tz_support
 from django.urls import NoReverseMatch, reverse_lazy
 from django.utils import timezone
+from django.utils._os import symlinks_supported
 
-from .models import Storage, temp_storage, temp_storage_location
+from .models import (
+    Storage, callable_storage, temp_storage, temp_storage_location,
+)
 
 FILE_SUFFIX_REGEX = '[A-Za-z0-9]{7}'
 
@@ -295,6 +298,16 @@ class FileStorageTests(SimpleTestCase):
 
         self.storage.delete('path/to/test.file')
 
+    @unittest.skipUnless(symlinks_supported(), 'Must be able to symlink to run this test.')
+    def test_file_save_broken_symlink(self):
+        """A new path is created on save when a broken symlink is supplied."""
+        nonexistent_file_path = os.path.join(self.temp_dir, 'nonexistent.txt')
+        broken_symlink_path = os.path.join(self.temp_dir, 'symlink.txt')
+        os.symlink(nonexistent_file_path, broken_symlink_path)
+        f = ContentFile('some content')
+        f_name = self.storage.save(broken_symlink_path, f)
+        self.assertIs(os.path.exists(os.path.join(self.temp_dir, f_name)), True)
+
     def test_save_doesnt_close(self):
         with TemporaryUploadedFile('test', 'text/plain', 1, 'utf8') as file:
             file.write(b'1')
@@ -326,7 +339,7 @@ class FileStorageTests(SimpleTestCase):
 
     def test_file_url(self):
         """
-        File storage returns a url to access a given file from the Web.
+        File storage returns a url to access a given file from the web.
         """
         self.assertEqual(self.storage.url('test.file'), self.storage.base_url + 'test.file')
 
@@ -499,7 +512,10 @@ class FileStorageTests(SimpleTestCase):
         Calling delete with an empty name should not try to remove the base
         storage directory, but fail loudly (#20660).
         """
-        with self.assertRaises(AssertionError):
+        msg = 'The name must be given to delete().'
+        with self.assertRaisesMessage(ValueError, msg):
+            self.storage.delete(None)
+        with self.assertRaisesMessage(ValueError, msg):
             self.storage.delete('')
 
     def test_delete_deletes_directories(self):
@@ -912,6 +928,15 @@ class FieldCallableFileStorageTests(SimpleTestCase):
         self.assertEqual(obj.storage_callable.storage.location, temp_storage_location)
         self.assertIsInstance(obj.storage_callable_class.storage, BaseStorage)
 
+    def test_deconstruction(self):
+        """
+        Deconstructing gives the original callable, not the evaluated value.
+        """
+        obj = Storage()
+        *_, kwargs = obj._meta.get_field('storage_callable').deconstruct()
+        storage = kwargs['storage']
+        self.assertIs(storage, callable_storage)
+
 
 # Tests for a race condition on file saving (#4948).
 # This is written in such a way that it'll always pass on platforms
@@ -972,16 +997,19 @@ class FileStoragePermissions(unittest.TestCase):
     @override_settings(FILE_UPLOAD_DIRECTORY_PERMISSIONS=0o765)
     def test_file_upload_directory_permissions(self):
         self.storage = FileSystemStorage(self.storage_dir)
-        name = self.storage.save("the_directory/the_file", ContentFile("data"))
-        dir_mode = os.stat(os.path.dirname(self.storage.path(name)))[0] & 0o777
-        self.assertEqual(dir_mode, 0o765)
+        name = self.storage.save('the_directory/subdir/the_file', ContentFile('data'))
+        file_path = Path(self.storage.path(name))
+        self.assertEqual(file_path.parent.stat().st_mode & 0o777, 0o765)
+        self.assertEqual(file_path.parent.parent.stat().st_mode & 0o777, 0o765)
 
     @override_settings(FILE_UPLOAD_DIRECTORY_PERMISSIONS=None)
     def test_file_upload_directory_default_permissions(self):
         self.storage = FileSystemStorage(self.storage_dir)
-        name = self.storage.save("the_directory/the_file", ContentFile("data"))
-        dir_mode = os.stat(os.path.dirname(self.storage.path(name)))[0] & 0o777
-        self.assertEqual(dir_mode, 0o777 & ~self.umask)
+        name = self.storage.save('the_directory/subdir/the_file', ContentFile('data'))
+        file_path = Path(self.storage.path(name))
+        expected_mode = 0o777 & ~self.umask
+        self.assertEqual(file_path.parent.stat().st_mode & 0o777, expected_mode)
+        self.assertEqual(file_path.parent.parent.stat().st_mode & 0o777, expected_mode)
 
 
 class FileStoragePathParsing(SimpleTestCase):
