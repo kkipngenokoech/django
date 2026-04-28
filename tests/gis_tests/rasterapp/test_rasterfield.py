@@ -12,8 +12,8 @@ from django.db.models import Q
 from django.test import TransactionTestCase, skipUnlessDBFeature
 from django.test.utils import CaptureQueriesContext
 
-from .models import RasterModel, RasterRelatedModel
 from ..data.rasters.textrasters import JSON_RASTER
+from .models import RasterModel, RasterRelatedModel
 
 
 @skipUnlessDBFeature('supports_raster')
@@ -204,7 +204,7 @@ class RasterFieldTest(TransactionTestCase):
             qs = RasterModel.objects.filter(Q(**combos[0]) & Q(**combos[1]))
             self.assertIn(qs.count(), [0, 1])
 
-    def test_dwithin_gis_lookup_ouptut_with_rasters(self):
+    def test_dwithin_gis_lookup_output_with_rasters(self):
         """
         Check the logical functionality of the dwithin lookup for different
         input parameters.
