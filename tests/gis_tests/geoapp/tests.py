@@ -1,5 +1,4 @@
 import tempfile
-import unittest
 from io import StringIO
 
 from django.contrib.gis import gdal
@@ -12,10 +11,10 @@ from django.core.management import call_command
 from django.db import DatabaseError, NotSupportedError, connection
 from django.db.models import F, OuterRef, Subquery
 from django.test import TestCase, skipUnlessDBFeature
+from django.test.utils import CaptureQueriesContext
 
 from ..utils import (
-    mariadb, mysql, no_oracle, oracle, postgis, skipUnlessGISLookup,
-    spatialite,
+    mariadb, mysql, oracle, postgis, skipUnlessGISLookup, spatialite,
 )
 from .models import (
     City, Country, Feature, MinusOneSRID, MultiFields, NonConcreteModel,
@@ -79,7 +78,7 @@ class GeoModelTest(TestCase):
         nullstate.save()
 
         ns = State.objects.get(name='NullState')
-        self.assertEqual(ply, ns.poly)
+        self.assertEqual(connection.ops.Adapter._fix_polygon(ply), ns.poly)
 
         # Testing the `ogr` and `srs` lazy-geometry properties.
         self.assertIsInstance(ns.poly.ogr, gdal.OGRGeometry)
@@ -93,7 +92,10 @@ class GeoModelTest(TestCase):
         ply[1] = new_inner
         self.assertEqual(4326, ns.poly.srid)
         ns.save()
-        self.assertEqual(ply, State.objects.get(name='NullState').poly)
+        self.assertEqual(
+            connection.ops.Adapter._fix_polygon(ply),
+            State.objects.get(name='NullState').poly
+        )
         ns.delete()
 
     @skipUnlessDBFeature("supports_transform")
@@ -154,9 +156,6 @@ class GeoModelTest(TestCase):
         self.assertIsInstance(f_4.geom, GeometryCollection)
         self.assertEqual(f_3.geom, f_4.geom[2])
 
-    # TODO: fix on Oracle: ORA-22901: cannot compare nested table or VARRAY or
-    # LOB attributes of an object type.
-    @no_oracle
     @skipUnlessDBFeature("supports_transform")
     def test_inherited_geofields(self):
         "Database functions on inherited Geometry fields."
@@ -229,8 +228,6 @@ class GeoLookupTest(TestCase):
 
     def test_disjoint_lookup(self):
         "Testing the `disjoint` lookup type."
-        if mysql and not mariadb and connection.mysql_version < (8, 0, 0):
-            raise unittest.SkipTest('MySQL < 8 gives different results.')
         ptown = City.objects.get(name='Pueblo')
         qs1 = City.objects.filter(point__disjoint=ptown.point)
         self.assertEqual(7, qs1.count())
@@ -594,10 +591,20 @@ class GeoQuerySetTest(TestCase):
         qs = City.objects.filter(name='NotACity')
         self.assertIsNone(qs.aggregate(Union('point'))['point__union'])
 
-    @unittest.skipUnless(
-        connection.vendor == 'oracle',
-        'Oracle supports tolerance parameter.',
-    )
+    @skipUnlessDBFeature('supports_union_aggr')
+    def test_geoagg_subquery(self):
+        tx = Country.objects.get(name='Texas')
+        union = GEOSGeometry('MULTIPOINT(-96.801611 32.782057,-95.363151 29.763374)')
+        # Use distinct() to force the usage of a subquery for aggregation.
+        with CaptureQueriesContext(connection) as ctx:
+            self.assertIs(union.equals(
+                City.objects.filter(point__within=tx.mpoly).distinct().aggregate(
+                    Union('point'),
+                )['point__union'],
+            ), True)
+        self.assertIn('subquery', ctx.captured_queries[0]['sql'])
+
+    @skipUnlessDBFeature('supports_tolerance_parameter')
     def test_unionagg_tolerance(self):
         City.objects.create(
             point=fromstr('POINT(-96.467222 32.751389)', srid=4326),
@@ -620,10 +627,7 @@ class GeoQuerySetTest(TestCase):
             True,
         )
 
-    @unittest.skipUnless(
-        connection.vendor == 'oracle',
-        'Oracle supports tolerance parameter.',
-    )
+    @skipUnlessDBFeature('supports_tolerance_parameter')
     def test_unionagg_tolerance_escaping(self):
         tx = Country.objects.get(name='Texas').mpoly
         with self.assertRaises(DatabaseError):

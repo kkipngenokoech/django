@@ -19,6 +19,13 @@ def inspectdb_tables_only(table_name):
     return table_name.startswith('inspectdb_')
 
 
+def inspectdb_views_only(table_name):
+    return (
+        table_name.startswith('inspectdb_') and
+        table_name.endswith(('_materialized', '_view'))
+    )
+
+
 def special_table_only(table_name):
     return table_name.startswith('inspectdb_special')
 
@@ -105,6 +112,7 @@ class InspectDBTestCase(TestCase):
         self.assertIn('null_json_field = models.JSONField(blank=True, null=True)', output)
 
     @skipUnlessDBFeature('supports_collation_on_charfield')
+    @skipUnless(test_collation, 'Language collations are not supported.')
     def test_char_field_db_collation(self):
         out = StringIO()
         call_command('inspectdb', 'inspectdb_charfielddbcollation', stdout=out)
@@ -123,6 +131,7 @@ class InspectDBTestCase(TestCase):
             )
 
     @skipUnlessDBFeature('supports_collation_on_textfield')
+    @skipUnless(test_collation, 'Language collations are not supported.')
     def test_text_field_db_collation(self):
         out = StringIO()
         call_command('inspectdb', 'inspectdb_textfielddbcollation', stdout=out)
@@ -335,11 +344,20 @@ class InspectDBTransactionalTests(TransactionTestCase):
         view_model = 'class InspectdbPeopleView(models.Model):'
         view_managed = 'managed = False  # Created from a view.'
         try:
-            call_command('inspectdb', table_name_filter=inspectdb_tables_only, stdout=out)
+            call_command(
+                'inspectdb',
+                table_name_filter=inspectdb_views_only,
+                stdout=out,
+            )
             no_views_output = out.getvalue()
             self.assertNotIn(view_model, no_views_output)
             self.assertNotIn(view_managed, no_views_output)
-            call_command('inspectdb', table_name_filter=inspectdb_tables_only, include_views=True, stdout=out)
+            call_command(
+                'inspectdb',
+                table_name_filter=inspectdb_views_only,
+                include_views=True,
+                stdout=out,
+            )
             with_views_output = out.getvalue()
             self.assertIn(view_model, with_views_output)
             self.assertIn(view_managed, with_views_output)
@@ -359,11 +377,20 @@ class InspectDBTransactionalTests(TransactionTestCase):
         view_model = 'class InspectdbPeopleMaterialized(models.Model):'
         view_managed = 'managed = False  # Created from a view.'
         try:
-            call_command('inspectdb', table_name_filter=inspectdb_tables_only, stdout=out)
+            call_command(
+                'inspectdb',
+                table_name_filter=inspectdb_views_only,
+                stdout=out,
+            )
             no_views_output = out.getvalue()
             self.assertNotIn(view_model, no_views_output)
             self.assertNotIn(view_managed, no_views_output)
-            call_command('inspectdb', table_name_filter=inspectdb_tables_only, include_views=True, stdout=out)
+            call_command(
+                'inspectdb',
+                table_name_filter=inspectdb_views_only,
+                include_views=True,
+                stdout=out,
+            )
             with_views_output = out.getvalue()
             self.assertIn(view_model, with_views_output)
             self.assertIn(view_managed, with_views_output)
@@ -424,7 +451,11 @@ class InspectDBTransactionalTests(TransactionTestCase):
         foreign_table_model = 'class InspectdbIrisForeignTable(models.Model):'
         foreign_table_managed = 'managed = False'
         try:
-            call_command('inspectdb', stdout=out)
+            call_command(
+                'inspectdb',
+                table_name_filter=inspectdb_tables_only,
+                stdout=out,
+            )
             output = out.getvalue()
             self.assertIn(foreign_table_model, output)
             self.assertIn(foreign_table_managed, output)

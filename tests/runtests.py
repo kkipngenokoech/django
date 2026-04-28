@@ -47,6 +47,12 @@ warnings.simplefilter("error", ResourceWarning)
 warnings.simplefilter("error", RuntimeWarning)
 # Ignore known warnings in test dependencies.
 warnings.filterwarnings("ignore", "'U' mode is deprecated", DeprecationWarning, module='docutils.io')
+# RemovedInDjango41Warning: Ignore MemcachedCache deprecation warning.
+warnings.filterwarnings(
+    'ignore',
+    'MemcachedCache is deprecated',
+    category=RemovedInDjango41Warning,
+)
 
 RUNTESTS_DIR = os.path.abspath(os.path.dirname(__file__))
 
@@ -248,6 +254,10 @@ def setup(verbosity, test_labels, parallel, start_at, start_after):
 
     apps.set_installed_apps(settings.INSTALLED_APPS)
 
+    # Set an environment variable that other code may consult to see if
+    # Django's own test suite is running.
+    os.environ['RUNNING_DJANGOS_TEST_SUITE'] = 'true'
+
     return state
 
 
@@ -261,6 +271,7 @@ def teardown(state):
     # FileNotFoundError at the end of a test run (#27890).
     from multiprocessing.util import _finalizer_registry
     _finalizer_registry.pop((-100, 0), None)
+    del os.environ['RUNNING_DJANGOS_TEST_SUITE']
 
 
 def actual_test_processes(parallel):
@@ -293,13 +304,10 @@ def django_tests(verbosity, interactive, failfast, keepdb, reverse,
                  test_name_patterns, start_at, start_after, pdb, buffer,
                  timing):
     state = setup(verbosity, test_labels, parallel, start_at, start_after)
-    extra_tests = []
-
     # Run the test suite, including the extra validation tests.
     if not hasattr(settings, 'TEST_RUNNER'):
         settings.TEST_RUNNER = 'django.test.runner.DiscoverRunner'
     TestRunner = get_runner(settings)
-
     test_runner = TestRunner(
         verbosity=verbosity,
         interactive=interactive,
@@ -315,10 +323,7 @@ def django_tests(verbosity, interactive, failfast, keepdb, reverse,
         buffer=buffer,
         timing=timing,
     )
-    failures = test_runner.run_tests(
-        test_labels or get_installed(),
-        extra_tests=extra_tests,
-    )
+    failures = test_runner.run_tests(test_labels or get_installed())
     teardown(state)
     return failures
 
