@@ -14,6 +14,12 @@ from django.utils.regex_helper import _lazy_re_compile
 from django.utils.text import capfirst
 from django.utils.translation import ngettext, override as translation_override
 
+# Import JSONField for type checking
+try:
+    from django.contrib.postgres.fields import JSONField
+except ImportError:
+    JSONField = None
+
 QUOTE_MAP = {i: '_%02X' % i for i in b'":/_#?;@&=+$,"[]<>%\n\\'}
 UNQUOTE_MAP = {v: chr(k) for k, v in QUOTE_MAP.items()}
 UNQUOTE_RE = _lazy_re_compile('_(?:%s)' % '|'.join([x[1:] for x in UNQUOTE_MAP]))
@@ -388,6 +394,9 @@ def display_for_field(value, field, empty_value_display):
         return _boolean_icon(value)
     elif value is None:
         return empty_value_display
+    # Special case for JSONField to display valid JSON instead of Python dict representation
+    elif JSONField and isinstance(field, JSONField):
+        return field.prepare_value(value)
     elif isinstance(field, models.DateTimeField):
         return formats.localize(timezone.template_localtime(value))
     elif isinstance(field, (models.DateField, models.TimeField)):
