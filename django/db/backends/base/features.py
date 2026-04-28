@@ -100,7 +100,7 @@ class BaseDatabaseFeatures:
     # The database's limit on the number of query parameters.
     max_query_params = None
 
-    # Can an object have an autoincrement primary key of 0? MySQL says No.
+    # Can an object have an autoincrement primary key of 0?
     allows_auto_pk_0 = True
 
     # Do we need to NULL a ForeignKey out, or can the constraint check be
@@ -295,6 +295,9 @@ class BaseDatabaseFeatures:
     has_native_json_field = False
     # Does the backend use PostgreSQL-style JSON operators like '->'?
     has_json_operators = False
+    # Does the backend support __contains and __contained_by lookups for
+    # a JSONField?
+    supports_json_field_contains = True
 
     def __init__(self, connection):
         self.connection = connection

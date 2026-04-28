@@ -123,30 +123,80 @@ class ValidationError(Exception):
                 if not isinstance(messages, ValidationError):
                     messages = ValidationError(messages)
                 self.error_dict[field] = messages.error_list
-
         elif isinstance(message, list):
             self.error_list = []
             for message in message:
-                # Normalize plain strings to instances of ValidationError.
+                # Normalize plain strings to ValidationError instances.
                 if not isinstance(message, ValidationError):
                     message = ValidationError(message)
                 if hasattr(message, 'error_dict'):
                     self.error_list.extend(sum(message.error_dict.values(), []))
                 else:
                     self.error_list.extend(message.error_list)
-
         else:
             self.message = message
             self.code = code
             self.params = params
             self.error_list = [self]
 
+    def __eq__(self, other):
+        if not isinstance(other, ValidationError):
+            return False
+        
+        # Compare error_dict if both have it
+        if hasattr(self, 'error_dict') and hasattr(other, 'error_dict'):
+            return self.error_dict == other.error_dict
+        
+        # Compare error_list if both have it (but not error_dict)
+        if (hasattr(self, 'error_list') and hasattr(other, 'error_list') and 
+            not hasattr(self, 'error_dict') and not hasattr(other, 'error_dict')):
+            # For list comparison, we need to compare the actual error content
+            # Convert to sets for order-independent comparison
+            self_errors = set()
+            other_errors = set()
+            
+            for error in self.error_list:
+                if hasattr(error, 'message'):
+                    self_errors.add((error.message, error.code, str(error.params) if error.params else None))
+                else:
+                    self_errors.add((str(error), None, None))
+            
+            for error in other.error_list:
+                if hasattr(error, 'message'):
+                    other_errors.add((error.message, error.code, str(error.params) if error.params else None))
+                else:
+                    other_errors.add((str(error), None, None))
+            
+            return self_errors == other_errors
+        
+        # Compare single message errors
+        if (hasattr(self, 'message') and hasattr(other, 'message') and
+            not hasattr(self, 'error_dict') and not hasattr(other, 'error_dict')):
+            return (self.message == other.message and 
+                    self.code == other.code and 
+                    self.params == other.params)
+        
+        return False
+    
+    def __hash__(self):
+        if hasattr(self, 'error_dict'):
+            return hash(tuple(sorted(self.error_dict.items())))
+        elif hasattr(self, 'message'):
+            return hash((self.message, self.code, str(self.params) if self.params else None))
+        else:
+            # For error_list, create a hash based on the error content
+            error_tuples = []
+            for error in self.error_list:
+                if hasattr(error, 'message'):
+                    error_tuples.append((error.message, error.code, str(error.params) if error.params else None))
+                else:
+                    error_tuples.append((str(error), None, None))
+            return hash(tuple(sorted(error_tuples)))
+
     @property
     def message_dict(self):
-        # Trigger an AttributeError if this ValidationError
+        # Triggers an AttributeError if this ValidationError
         # doesn't have an error_dict.
-        getattr(self, 'error_dict')
-
         return dict(self)
 
     @property
@@ -166,13 +216,13 @@ class ValidationError(Exception):
     def __iter__(self):
         if hasattr(self, 'error_dict'):
             for field, errors in self.error_dict.items():
-                yield field, list(ValidationError(errors))
+                yield field, errors
         else:
             for error in self.error_list:
                 message = error.message
                 if error.params:
                     message %= error.params
-                yield str(message)
+                yield message
 
     def __str__(self):
         if hasattr(self, 'error_dict'):
@@ -181,13 +231,3 @@ class ValidationError(Exception):
 
     def __repr__(self):
         return 'ValidationError(%s)' % self
-
-
-class EmptyResultSet(Exception):
-    """A database query predicate is impossible."""
-    pass
-
-
-class SynchronousOnlyOperation(Exception):
-    """The user tried to call a sync-only function from an async context."""
-    pass
