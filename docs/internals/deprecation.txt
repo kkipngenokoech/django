@@ -7,6 +7,23 @@ in a backward incompatible way, following their deprecation, as per the
 :ref:`deprecation policy <internal-release-deprecation-policy>`. More details
 about each item can often be found in the release notes of two versions prior.
 
+.. _deprecation-removed-in-5.0:
+
+5.0
+---
+
+See the :ref:`Django 4.0 release notes <deprecated-features-4.0>` for more
+details on these changes.
+
+* The ``SERIALIZE`` test setting will be removed.
+
+* The undocumented ``django.utils.baseconv`` module will be removed.
+
+* The undocumented ``django.utils.datetime_safe`` module will be removed.
+
+* The default value of the ``USE_TZ`` setting will change from ``False`` to
+  ``True``.
+
 .. _deprecation-removed-in-4.1:
 
 4.1
@@ -14,6 +31,25 @@ about each item can often be found in the release notes of two versions prior.
 
 See the :ref:`Django 3.2 release notes <deprecated-features-3.2>` for more
 details on these changes.
+
+* Support for assigning objects which don't support creating deep copies with
+  ``copy.deepcopy()`` to class attributes in ``TestCase.setUpTestData()`` will
+  be removed.
+
+* ``BaseCommand.requires_system_checks`` won't support boolean values.
+
+* The ``whitelist`` argument and ``domain_whitelist`` attribute of
+  ``django.core.validators.EmailValidator`` will be removed.
+
+* The ``default_app_config`` module variable will be removed.
+
+* ``TransactionTestCase.assertQuerysetEqual()` will no longer automatically
+  call ``repr()`` on a queryset when compared to string values.
+
+* ``django.core.cache.backends.memcached.MemcachedCache`` will be removed.
+
+* Support for the pre-Django 3.2 format of messages used by
+  ``django.contrib.messages.storage.cookie.CookieStorage`` will be removed.
 
 .. _deprecation-removed-in-4.0:
 
@@ -42,6 +78,9 @@ details on these changes.
 
 * ``django.utils.http.is_safe_url()`` will be removed.
 
+See the :ref:`Django 3.1 release notes <deprecated-features-3.1>` for more
+details on these changes.
+
 * The ``PASSWORD_RESET_TIMEOUT_DAYS`` setting will be removed.
 
 * The undocumented usage of the :lookup:`isnull` lookup with non-boolean values
@@ -65,6 +104,10 @@ details on these changes.
 * Support for the pre-Django 3.1 ``django.core.signing.Signer`` signatures
   (encoded with the SHA-1 algorithm) will be removed.
 
+* Support for the pre-Django 3.1 ``django.core.signing.dumps()`` signatures
+  (encoded with the SHA-1 algorithm) in ``django.core.signing.loads()`` will be
+  removed.
+
 * Support for the pre-Django 3.1 user sessions (that use the SHA-1 algorithm)
   will be removed.
 
@@ -79,9 +122,6 @@ details on these changes.
   be required.
 
 * The ``list`` message for ``ModelMultipleChoiceField`` will be removed.
-
-* ``django.views.generic.TemplateView`` will no longer pass URL kwargs directly
-  to the ``context``.
 
 * Support for passing raw column aliases to ``QuerySet.order_by()`` will be
   removed.
@@ -100,8 +140,7 @@ details on these changes.
 
 * The ``{% ifequal %}`` and ``{% ifnotequal %}`` template tags will be removed.
 
-See the :ref:`Django 3.1 release notes <deprecated-features-3.1>` for more
-details on these changes.
+* The ``DEFAULT_HASHING_ALGORITHM`` transitional setting will be removed.
 
 .. _deprecation-removed-in-3.1:
 
@@ -854,8 +893,8 @@ details on these changes.
   supports base36 encoded user IDs
   (``django.contrib.auth.views.password_reset_confirm_uidb36``) will be
   removed. If your site has been running Django 1.6 for more than
-  :setting:`PASSWORD_RESET_TIMEOUT_DAYS`, this change will have no effect. If
-  not, then any password reset links generated before you upgrade to Django 1.7
+  ``PASSWORD_RESET_TIMEOUT_DAYS``, this change will have no effect. If not,
+  then any password reset links generated before you upgrade to Django 1.7
   won't work after the upgrade.
 
 * The ``django.utils.encoding.StrAndUnicode`` mix-in will be removed.
