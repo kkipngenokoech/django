@@ -4,9 +4,21 @@ import enum
 import functools
 import math
 import os
+import pathlib
 import re
+import sys
 import uuid
 from unittest import mock
+
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
+
+try:
+    import pytz
+except ImportError:
+    pytz = None
 
 import custom_migration_operations.more_operations
 import custom_migration_operations.operations
@@ -74,8 +86,7 @@ class OperationWriterTests(SimpleTestCase):
         self.assertEqual(imports, {'import custom_migration_operations.operations'})
         self.assertEqual(
             buff,
-            'custom_migration_operations.operations.TestOperation(\n'
-            '),'
+            'custom_migration_operations.operations.TestOperation(\n),',
         )
 
     def test_args_signature(self):
@@ -429,6 +440,46 @@ class WriterTests(SimpleTestCase):
             "default=uuid.UUID('5c859437-d061-4847-b3f7-e6b78852f8c8'))"
         )
 
+    def test_serialize_pathlib(self):
+        # Pure path objects work in all platforms.
+        self.assertSerializedEqual(pathlib.PurePosixPath())
+        self.assertSerializedEqual(pathlib.PureWindowsPath())
+        path = pathlib.PurePosixPath('/path/file.txt')
+        expected = ("pathlib.PurePosixPath('/path/file.txt')", {'import pathlib'})
+        self.assertSerializedResultEqual(path, expected)
+        path = pathlib.PureWindowsPath('A:\\File.txt')
+        expected = ("pathlib.PureWindowsPath('A:/File.txt')", {'import pathlib'})
+        self.assertSerializedResultEqual(path, expected)
+        # Concrete path objects work on supported platforms.
+        if sys.platform == 'win32':
+            self.assertSerializedEqual(pathlib.WindowsPath.cwd())
+            path = pathlib.WindowsPath('A:\\File.txt')
+            expected = ("pathlib.PureWindowsPath('A:/File.txt')", {'import pathlib'})
+            self.assertSerializedResultEqual(path, expected)
+        else:
+            self.assertSerializedEqual(pathlib.PosixPath.cwd())
+            path = pathlib.PosixPath('/path/file.txt')
+            expected = ("pathlib.PurePosixPath('/path/file.txt')", {'import pathlib'})
+            self.assertSerializedResultEqual(path, expected)
+
+        field = models.FilePathField(path=pathlib.PurePosixPath('/home/user'))
+        string, imports = MigrationWriter.serialize(field)
+        self.assertEqual(
+            string,
+            "models.FilePathField(path=pathlib.PurePosixPath('/home/user'))",
+        )
+        self.assertIn('import pathlib', imports)
+
+    def test_serialize_path_like(self):
+        with os.scandir(os.path.dirname(__file__)) as entries:
+            path_like = list(entries)[0]
+        expected = (repr(path_like.path), {})
+        self.assertSerializedResultEqual(path_like, expected)
+
+        field = models.FilePathField(path=path_like)
+        string = MigrationWriter.serialize(field)[0]
+        self.assertEqual(string, 'models.FilePathField(path=%r)' % path_like.path)
+
     def test_serialize_functions(self):
         with self.assertRaisesMessage(ValueError, 'Cannot serialize function: lambda'):
             self.assertSerializedEqual(lambda x: 42)
@@ -438,8 +489,8 @@ class WriterTests(SimpleTestCase):
         self.serialize_round_trip(models.SET(42))
 
     def test_serialize_datetime(self):
-        self.assertSerializedEqual(datetime.datetime.utcnow())
-        self.assertSerializedEqual(datetime.datetime.utcnow)
+        self.assertSerializedEqual(datetime.datetime.now())
+        self.assertSerializedEqual(datetime.datetime.now)
         self.assertSerializedEqual(datetime.datetime.today())
         self.assertSerializedEqual(datetime.datetime.today)
         self.assertSerializedEqual(datetime.date.today())
@@ -451,13 +502,31 @@ class WriterTests(SimpleTestCase):
             datetime.datetime(2014, 1, 1, 1, 1),
             ("datetime.datetime(2014, 1, 1, 1, 1)", {'import datetime'})
         )
+        for tzinfo in (utc, datetime.timezone.utc):
+            with self.subTest(tzinfo=tzinfo):
+                self.assertSerializedResultEqual(
+                    datetime.datetime(2012, 1, 1, 1, 1, tzinfo=tzinfo),
+                    (
+                        "datetime.datetime(2012, 1, 1, 1, 1, tzinfo=utc)",
+                        {'import datetime', 'from django.utils.timezone import utc'},
+                    )
+                )
+
         self.assertSerializedResultEqual(
-            datetime.datetime(2012, 1, 1, 1, 1, tzinfo=utc),
+            datetime.datetime(2012, 1, 1, 2, 1, tzinfo=zoneinfo.ZoneInfo('Europe/Paris')),
             (
                 "datetime.datetime(2012, 1, 1, 1, 1, tzinfo=utc)",
                 {'import datetime', 'from django.utils.timezone import utc'},
             )
         )
+        if pytz:
+            self.assertSerializedResultEqual(
+                pytz.timezone('Europe/Paris').localize(datetime.datetime(2012, 1, 1, 2, 1)),
+                (
+                    "datetime.datetime(2012, 1, 1, 1, 1, tzinfo=utc)",
+                    {'import datetime', 'from django.utils.timezone import utc'},
+                )
+            )
 
     def test_serialize_fields(self):
         self.assertSerializedFieldEqual(models.CharField(max_length=255))
@@ -537,6 +606,33 @@ class WriterTests(SimpleTestCase):
         with self.assertRaisesMessage(ValueError, "Could not find object EmailValidator2 in django.core.validators."):
             MigrationWriter.serialize(validator)
 
+    def test_serialize_complex_func_index(self):
+        index = models.Index(
+            models.Func('rating', function='ABS'),
+            models.Case(
+                models.When(name='special', then=models.Value('X')),
+                default=models.Value('other'),
+            ),
+            models.ExpressionWrapper(
+                models.F('pages'),
+                output_field=models.IntegerField(),
+            ),
+            models.OrderBy(models.F('name').desc()),
+            name='complex_func_index',
+        )
+        string, imports = MigrationWriter.serialize(index)
+        self.assertEqual(
+            string,
+            "models.Index(models.Func('rating', function='ABS'), "
+            "models.Case(models.When(name='special', then=models.Value('X')), "
+            "default=models.Value('other')), "
+            "models.ExpressionWrapper("
+            "models.F('pages'), output_field=models.IntegerField()), "
+            "models.OrderBy(models.OrderBy(models.F('name'), descending=True)), "
+            "name='complex_func_index')"
+        )
+        self.assertEqual(imports, {'from django.db import models'})
+
     def test_serialize_empty_nonempty_tuple(self):
         """
         Ticket #22679: makemigrations generates invalid code for (an empty
@@ -614,13 +710,20 @@ class WriterTests(SimpleTestCase):
     def test_serialize_type_none(self):
         self.assertSerializedEqual(type(None))
 
+    def test_serialize_type_model(self):
+        self.assertSerializedEqual(models.Model)
+        self.assertSerializedResultEqual(
+            MigrationWriter.serialize(models.Model),
+            ("('models.Model', {'from django.db import models'})", set()),
+        )
+
     def test_simple_migration(self):
         """
         Tests serializing a simple migration.
         """
         fields = {
-            'charfield': models.DateTimeField(default=datetime.datetime.utcnow),
-            'datetimefield': models.DateTimeField(default=datetime.datetime.utcnow),
+            'charfield': models.DateTimeField(default=datetime.datetime.now),
+            'datetimefield': models.DateTimeField(default=datetime.datetime.now),
         }
 
         options = {

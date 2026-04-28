@@ -2,11 +2,14 @@ import datetime
 import decimal
 import logging
 import sys
+from pathlib import Path
 
-from django.core.exceptions import PermissionDenied, SuspiciousOperation
+from django.core.exceptions import (
+    BadRequest, PermissionDenied, SuspiciousOperation,
+)
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import render
-from django.template import TemplateDoesNotExist
+from django.template import Context, Template, TemplateDoesNotExist
 from django.urls import get_resolver
 from django.views import View
 from django.views.debug import (
@@ -15,6 +18,8 @@ from django.views.debug import (
 from django.views.decorators.debug import (
     sensitive_post_parameters, sensitive_variables,
 )
+
+TEMPLATES_PATH = Path(__file__).resolve().parent / 'templates'
 
 
 def index_page(request):
@@ -46,8 +51,20 @@ def raises500(request):
         return technical_500_response(request, *sys.exc_info())
 
 
+class Raises500View(View):
+    def get(self, request):
+        try:
+            raise Exception
+        except Exception:
+            return technical_500_response(request, *sys.exc_info())
+
+
 def raises400(request):
     raise SuspiciousOperation
+
+
+def raises400_bad_request(request):
+    raise BadRequest('Malformed request syntax')
 
 
 def raises403(request):
@@ -70,6 +87,18 @@ class Http404View(View):
 
 def template_exception(request):
     return render(request, 'debug/template_exception.html')
+
+
+def safestring_in_template_exception(request):
+    """
+    Trigger an exception in the template machinery which causes a SafeString
+    to be inserted as args[0] of the Exception.
+    """
+    template = Template('{% extends "<script>alert(1);</script>" %}')
+    try:
+        template.render(Context())
+    except Exception:
+        return technical_500_response(request, *sys.exc_info())
 
 
 def jsi18n(request):
@@ -232,6 +261,11 @@ class CustomExceptionReporter(ExceptionReporter):
 
     def get_traceback_html(self):
         return self.custom_traceback_text
+
+
+class TemplateOverrideExceptionReporter(ExceptionReporter):
+    html_template_path = TEMPLATES_PATH / 'my_technical_500.html'
+    text_template_path = TEMPLATES_PATH / 'my_technical_500.txt'
 
 
 def custom_reporter_class_view(request):

@@ -1,3 +1,4 @@
+import pickle
 from datetime import datetime
 from functools import partialmethod
 from io import StringIO
@@ -5,11 +6,12 @@ from unittest import mock, skipIf
 
 from django.core import serializers
 from django.core.serializers import SerializerDoesNotExist
-from django.core.serializers.base import ProgressBar
+from django.core.serializers.base import PickleSerializer, ProgressBar
 from django.db import connection, transaction
 from django.http import HttpResponse
 from django.test import SimpleTestCase, override_settings, skipUnlessDBFeature
-from django.test.utils import Approximate
+from django.test.utils import Approximate, ignore_warnings
+from django.utils.deprecation import RemovedInDjango50Warning
 
 from .models import (
     Actor, Article, Author, AuthorProfile, BaseModel, Category, Child,
@@ -90,29 +92,30 @@ class SerializerRegistrationTests(SimpleTestCase):
 class SerializersTestBase:
     serializer_name = None  # Set by subclasses to the serialization format name
 
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         sports = Category.objects.create(name="Sports")
         music = Category.objects.create(name="Music")
         op_ed = Category.objects.create(name="Op-Ed")
 
-        self.joe = Author.objects.create(name="Joe")
-        self.jane = Author.objects.create(name="Jane")
+        cls.joe = Author.objects.create(name='Joe')
+        cls.jane = Author.objects.create(name='Jane')
 
-        self.a1 = Article(
-            author=self.jane,
+        cls.a1 = Article(
+            author=cls.jane,
             headline="Poker has no place on ESPN",
             pub_date=datetime(2006, 6, 16, 11, 00)
         )
-        self.a1.save()
-        self.a1.categories.set([sports, op_ed])
+        cls.a1.save()
+        cls.a1.categories.set([sports, op_ed])
 
-        self.a2 = Article(
-            author=self.joe,
+        cls.a2 = Article(
+            author=cls.joe,
             headline="Time to reform copyright",
             pub_date=datetime(2006, 6, 16, 13, 00, 11, 345)
         )
-        self.a2.save()
-        self.a2.categories.set([music, op_ed])
+        cls.a2.save()
+        cls.a2.categories.set([music, op_ed])
 
     def test_serialize(self):
         """Basic serialization works."""
@@ -248,6 +251,19 @@ class SerializersTestBase:
 
         with self.assertNumQueries(0):
             serializers.serialize(self.serializer_name, [mv])
+
+    def test_serialize_prefetch_related_m2m(self):
+        # One query for the Article table and one for each prefetched m2m
+        # field.
+        with self.assertNumQueries(3):
+            serializers.serialize(
+                self.serializer_name,
+                Article.objects.all().prefetch_related('categories', 'meta_data'),
+            )
+        # One query for the Article table, and two m2m queries for each
+        # article.
+        with self.assertNumQueries(5):
+            serializers.serialize(self.serializer_name, Article.objects.all())
 
     def test_serialize_with_null_pk(self):
         """
@@ -402,6 +418,31 @@ class SerializersTransactionTestBase:
         art_obj = Article.objects.all()[0]
         self.assertEqual(art_obj.categories.all().count(), 1)
         self.assertEqual(art_obj.author.name, "Agnes")
+
+
+class PickleSerializerTests(SimpleTestCase):
+    @ignore_warnings(category=RemovedInDjango50Warning)
+    def test_serializer_protocol(self):
+        serializer = PickleSerializer(protocol=3)
+        self.assertEqual(serializer.protocol, 3)
+        # If protocol is not provided, it defaults to pickle.HIGHEST_PROTOCOL
+        serializer = PickleSerializer()
+        self.assertEqual(serializer.protocol, pickle.HIGHEST_PROTOCOL)
+
+    @ignore_warnings(category=RemovedInDjango50Warning)
+    def test_serializer_loads_dumps(self):
+        serializer = PickleSerializer()
+        test_data = 'test data'
+        dump = serializer.dumps(test_data)
+        self.assertEqual(serializer.loads(dump), test_data)
+
+    def test_serializer_warning(self):
+        msg = (
+            'PickleSerializer is deprecated due to its security risk. Use '
+            'JSONSerializer instead.'
+        )
+        with self.assertRaisesMessage(RemovedInDjango50Warning, msg):
+            PickleSerializer()
 
 
 def register_tests(test_class, method_name, test_func, exclude=()):

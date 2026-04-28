@@ -2,7 +2,6 @@
 Helper functions for creating Form classes from Django models
 and database field objects.
 """
-import warnings
 from itertools import chain
 
 from django.core.exceptions import (
@@ -15,7 +14,6 @@ from django.forms.utils import ErrorList
 from django.forms.widgets import (
     HiddenInput, MultipleHiddenInput, RadioSelect, SelectMultiple,
 )
-from django.utils.deprecation import RemovedInDjango40Warning
 from django.utils.text import capfirst, get_text_list
 from django.utils.translation import gettext, gettext_lazy as _
 
@@ -97,10 +95,18 @@ def model_to_dict(instance, fields=None, exclude=None):
 
 def apply_limit_choices_to_to_formfield(formfield):
     """Apply limit_choices_to to the formfield's queryset if needed."""
+    from django.db.models import Exists, OuterRef, Q
     if hasattr(formfield, 'queryset') and hasattr(formfield, 'get_limit_choices_to'):
         limit_choices_to = formfield.get_limit_choices_to()
-        if limit_choices_to is not None:
-            formfield.queryset = formfield.queryset.complex_filter(limit_choices_to)
+        if limit_choices_to:
+            complex_filter = limit_choices_to
+            if not isinstance(complex_filter, Q):
+                complex_filter = Q(**limit_choices_to)
+            complex_filter &= Q(pk=OuterRef('pk'))
+            # Use Exists() to avoid potential duplicates.
+            formfield.queryset = formfield.queryset.filter(
+                Exists(formfield.queryset.model._base_manager.filter(complex_filter)),
+            )
 
 
 def fields_for_model(model, fields=None, exclude=None, widgets=None,
@@ -670,7 +676,10 @@ class BaseModelFormSet(BaseFormSet):
                 for form in self.saved_forms:
                     form.save_m2m()
             self.save_m2m = save_m2m
-        return self.save_existing_objects(commit) + self.save_new_objects(commit)
+        if self.edit_only:
+            return self.save_existing_objects(commit)
+        else:
+            return self.save_existing_objects(commit) + self.save_new_objects(commit)
 
     save.alters_data = True
 
@@ -712,7 +721,10 @@ class BaseModelFormSet(BaseFormSet):
                         # poke error messages into the right places and mark
                         # the form as invalid
                         errors.append(self.get_unique_error_message(unique_check))
-                        form._errors[NON_FIELD_ERRORS] = self.error_class([self.get_form_error()])
+                        form._errors[NON_FIELD_ERRORS] = self.error_class(
+                            [self.get_form_error()],
+                            renderer=self.renderer,
+                        )
                         # remove the data from the cleaned_data dict since it was invalid
                         for field in unique_check:
                             if field in form.cleaned_data:
@@ -741,7 +753,10 @@ class BaseModelFormSet(BaseFormSet):
                         # poke error messages into the right places and mark
                         # the form as invalid
                         errors.append(self.get_date_error_message(date_check))
-                        form._errors[NON_FIELD_ERRORS] = self.error_class([self.get_form_error()])
+                        form._errors[NON_FIELD_ERRORS] = self.error_class(
+                            [self.get_form_error()],
+                            renderer=self.renderer,
+                        )
                         # remove the data from the cleaned_data dict since it was invalid
                         del form.cleaned_data[field]
                     # mark the data as seen
@@ -815,7 +830,7 @@ class BaseModelFormSet(BaseFormSet):
 
     def add_fields(self, form, index):
         """Add a hidden field for the object's primary key."""
-        from django.db.models import AutoField, OneToOneField, ForeignKey
+        from django.db.models import AutoField, ForeignKey, OneToOneField
         self._pk_field = pk = self.model._meta.pk
         # If a pk isn't editable, then it won't be on the form, so we need to
         # add it here so we can tell which object is which when we get the
@@ -862,7 +877,9 @@ def modelformset_factory(model, form=ModelForm, formfield_callback=None,
                          can_order=False, max_num=None, fields=None, exclude=None,
                          widgets=None, validate_max=False, localized_fields=None,
                          labels=None, help_texts=None, error_messages=None,
-                         min_num=None, validate_min=False, field_classes=None):
+                         min_num=None, validate_min=False, field_classes=None,
+                         absolute_max=None, can_delete_extra=True, renderer=None,
+                         edit_only=False):
     """Return a FormSet class for the given Django model class."""
     meta = getattr(form, 'Meta', None)
     if (getattr(meta, 'fields', fields) is None and
@@ -879,8 +896,11 @@ def modelformset_factory(model, form=ModelForm, formfield_callback=None,
                              error_messages=error_messages, field_classes=field_classes)
     FormSet = formset_factory(form, formset, extra=extra, min_num=min_num, max_num=max_num,
                               can_order=can_order, can_delete=can_delete,
-                              validate_min=validate_min, validate_max=validate_max)
+                              validate_min=validate_min, validate_max=validate_max,
+                              absolute_max=absolute_max, can_delete_extra=can_delete_extra,
+                              renderer=renderer)
     FormSet.model = model
+    FormSet.edit_only = edit_only
     return FormSet
 
 
@@ -1001,9 +1021,17 @@ def _get_foreign_key(parent_model, model, fk_name=None, can_fail=False):
         fks_to_parent = [f for f in opts.fields if f.name == fk_name]
         if len(fks_to_parent) == 1:
             fk = fks_to_parent[0]
-            if not isinstance(fk, ForeignKey) or \
-                    (fk.remote_field.model != parent_model and
-                     fk.remote_field.model not in parent_model._meta.get_parent_list()):
+            parent_list = parent_model._meta.get_parent_list()
+            if not isinstance(fk, ForeignKey) or (
+                # ForeignKey to proxy models.
+                fk.remote_field.model._meta.proxy and
+                fk.remote_field.model._meta.proxy_for_model not in parent_list
+            ) or (
+                # ForeignKey to concrete models.
+                not fk.remote_field.model._meta.proxy and
+                fk.remote_field.model != parent_model and
+                fk.remote_field.model not in parent_list
+            ):
                 raise ValueError(
                     "fk_name '%s' is not a ForeignKey to '%s'." % (fk_name, parent_model._meta.label)
                 )
@@ -1013,11 +1041,15 @@ def _get_foreign_key(parent_model, model, fk_name=None, can_fail=False):
             )
     else:
         # Try to discover what the ForeignKey from model to parent_model is
+        parent_list = parent_model._meta.get_parent_list()
         fks_to_parent = [
             f for f in opts.fields
             if isinstance(f, ForeignKey) and (
                 f.remote_field.model == parent_model or
-                f.remote_field.model in parent_model._meta.get_parent_list()
+                f.remote_field.model in parent_list or (
+                    f.remote_field.model._meta.proxy and
+                    f.remote_field.model._meta.proxy_for_model in parent_list
+                )
             )
         ]
         if len(fks_to_parent) == 1:
@@ -1048,7 +1080,9 @@ def inlineformset_factory(parent_model, model, form=ModelForm,
                           can_delete=True, max_num=None, formfield_callback=None,
                           widgets=None, validate_max=False, localized_fields=None,
                           labels=None, help_texts=None, error_messages=None,
-                          min_num=None, validate_min=False, field_classes=None):
+                          min_num=None, validate_min=False, field_classes=None,
+                          absolute_max=None, can_delete_extra=True, renderer=None,
+                          edit_only=False):
     """
     Return an ``InlineFormSet`` for the given kwargs.
 
@@ -1078,6 +1112,10 @@ def inlineformset_factory(parent_model, model, form=ModelForm,
         'help_texts': help_texts,
         'error_messages': error_messages,
         'field_classes': field_classes,
+        'absolute_max': absolute_max,
+        'can_delete_extra': can_delete_extra,
+        'renderer': renderer,
+        'edit_only': edit_only,
     }
     FormSet = modelformset_factory(model, **kwargs)
     FormSet.fk = fk
@@ -1135,6 +1173,9 @@ class ModelChoiceIteratorValue:
     def __str__(self):
         return str(self.value)
 
+    def __hash__(self):
+        return hash(self.value)
+
     def __eq__(self, other):
         if isinstance(other, ModelChoiceIteratorValue):
             other = other.value
@@ -1177,8 +1218,9 @@ class ModelChoiceField(ChoiceField):
     # This class is a subclass of ChoiceField for purity, but it doesn't
     # actually use any of ChoiceField's implementation.
     default_error_messages = {
-        'invalid_choice': _('Select a valid choice. That choice is not one of'
-                            ' the available choices.'),
+        'invalid_choice': _(
+            'Select a valid choice. That choice is not one of the available choices.'
+        ),
     }
     iterator = ModelChoiceIterator
 
@@ -1273,7 +1315,11 @@ class ModelChoiceField(ChoiceField):
                 value = getattr(value, key)
             value = self.queryset.get(**{key: value})
         except (ValueError, TypeError, self.queryset.model.DoesNotExist):
-            raise ValidationError(self.error_messages['invalid_choice'], code='invalid_choice')
+            raise ValidationError(
+                self.error_messages['invalid_choice'],
+                code='invalid_choice',
+                params={'value': value},
+            )
         return value
 
     def validate(self, value):
@@ -1293,20 +1339,14 @@ class ModelMultipleChoiceField(ModelChoiceField):
     hidden_widget = MultipleHiddenInput
     default_error_messages = {
         'invalid_list': _('Enter a list of values.'),
-        'invalid_choice': _('Select a valid choice. %(value)s is not one of the'
-                            ' available choices.'),
+        'invalid_choice': _(
+            'Select a valid choice. %(value)s is not one of the available choices.'
+        ),
         'invalid_pk_value': _('“%(pk)s” is not a valid value.')
     }
 
     def __init__(self, queryset, **kwargs):
         super().__init__(queryset, empty_label=None, **kwargs)
-        if self.error_messages.get('list') is not None:
-            warnings.warn(
-                "The 'list' error message key is deprecated in favor of "
-                "'invalid_list'.",
-                RemovedInDjango40Warning, stacklevel=2,
-            )
-            self.error_messages['invalid_list'] = self.error_messages['list']
 
     def to_python(self, value):
         if not value:

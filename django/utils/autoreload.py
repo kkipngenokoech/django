@@ -14,6 +14,7 @@ from pathlib import Path
 from types import ModuleType
 from zipimport import zipimporter
 
+import django
 from django.apps import apps
 from django.core.signals import request_finished
 from django.dispatch import Signal
@@ -43,6 +44,16 @@ try:
     import pywatchman
 except ImportError:
     pywatchman = None
+
+
+def is_django_module(module):
+    """Return True if the given module is nested under Django."""
+    return module.__name__.startswith('django.')
+
+
+def is_django_path(path):
+    """Return True if the given file path is nested under Django."""
+    return Path(django.__file__).parent in Path(path).parents
 
 
 def check_errors(fn):
@@ -138,15 +149,15 @@ def iter_modules_and_files(modules, extra_files):
             continue
         path = Path(filename)
         try:
-            resolved_path = path.resolve(strict=True).absolute()
-        except FileNotFoundError:
-            # The module could have been removed, don't fail loudly if this
-            # is the case.
-            continue
+            if not path.exists():
+                # The module could have been removed, don't fail loudly if this
+                # is the case.
+                continue
         except ValueError as e:
             # Network filesystems may return null bytes in file paths.
             logger.debug('"%s" raised when resolving path: "%s"', e, path)
             continue
+        resolved_path = path.resolve().absolute()
         results.add(resolved_path)
     return frozenset(results)
 
@@ -161,8 +172,29 @@ def common_roots(paths):
     """
     # Inspired from Werkzeug:
     # https://github.com/pallets/werkzeug/blob/7477be2853df70a022d9613e765581b9411c3c39/werkzeug/_reloader.py
+    
+    # Filter out paths that are subpaths of other paths to avoid circular watching
+    filtered_paths = []
+    sorted_paths = sorted(paths, key=lambda p: len(p.parts))
+    
+    for path in sorted_paths:
+        # Check if this path is a subpath of any already included path
+        is_subpath = False
+        for existing_path in filtered_paths:
+            try:
+                path.relative_to(existing_path)
+                is_subpath = True
+                break
+            except ValueError:
+                continue
+        
+        if not is_subpath:
+            # Check if any existing paths are subpaths of this path
+            filtered_paths = [p for p in filtered_paths if not _is_subpath(p, path)]
+            filtered_paths.append(path)
+    
     # Create a sorted list of the path components, longest first.
-    path_parts = sorted([x.parts for x in paths], key=len, reverse=True)
+    path_parts = sorted([x.parts for x in filtered_paths], key=len, reverse=True)
     tree = {}
     for chunks in path_parts:
         node = tree
@@ -182,6 +214,15 @@ def common_roots(paths):
     return tuple(_walk(tree, ()))
 
 
+def _is_subpath(potential_subpath, parent_path):
+    """Check if potential_subpath is a subpath of parent_path."""
+    try:
+        potential_subpath.relative_to(parent_path)
+        return True
+    except ValueError:
+        return False
+
+
 def sys_path_directories():
     """
     Yield absolute directories from sys.path, ignoring entries that don't
@@ -189,10 +230,9 @@ def sys_path_directories():
     """
     for path in sys.path:
         path = Path(path)
-        try:
-            resolved_path = path.resolve(strict=True).absolute()
-        except FileNotFoundError:
+        if not path.exists():
             continue
+        resolved_path = path.resolve().absolute()
         # If the path is a file (like a zip file), watch the parent directory.
         if resolved_path.is_file():
             yield resolved_path.parent
@@ -206,13 +246,38 @@ def get_child_arguments():
     executable is reported to not have the .exe extension which can cause bugs
     on reloading.
     """
-    import django.__main__
+    import __main__
+    py_script = Path(sys.argv[0])
 
     args = [sys.executable] + ['-W%s' % o for o in sys.warnoptions]
-    if sys.argv[0] == django.__main__.__file__:
-        # The server was started with `python -m django runserver`.
-        args += ['-m', 'django']
+    if sys.implementation.name == 'cpython':
+        args.extend(
+            f'-X{key}' if value is True else f'-X{key}={value}'
+            for key, value in sys._xoptions.items()
+        )
+    # __spec__ is set when the server was started with the `-m` option,
+    # see https://docs.python.org/3/reference/import.html#main-spec
+    # __spec__ may not exist, e.g. when running in a Conda env.
+    if getattr(__main__, '__spec__', None) is not None:
+        spec = __main__.__spec__
+        if (spec.name == '__main__' or spec.name.endswith('.__main__')) and spec.parent:
+            name = spec.parent
+        else:
+            name = spec.name
+        args += ['-m', name]
         args += sys.argv[1:]
+    elif not py_script.exists():
+        # sys.argv[0] may not exist for several reasons on Windows.
+        # It may exist with a .exe extension or have a -script.py suffix.
+        exe_entrypoint = py_script.with_suffix('.exe')
+        if exe_entrypoint.exists():
+            # Should be executed directly, ignoring sys.executable.
+            return [exe_entrypoint, *sys.argv[1:]]
+        script_entrypoint = py_script.with_name('%s-script.py' % py_script.name)
+        if script_entrypoint.exists():
+            # Should be executed as usual.
+            return [*args, script_entrypoint, *sys.argv[1:]]
+        raise RuntimeError('Script %s does not exist.' % py_script)
     else:
         args += sys.argv
     return args
@@ -241,14 +306,31 @@ class BaseReloader:
     def watch_dir(self, path, glob):
         path = Path(path)
         try:
-            path = path.absolute()
-        except FileNotFoundError:
+            path = path.resolve().absolute()
+        except (FileNotFoundError, OSError):
             logger.debug(
                 'Unable to watch directory %s as it cannot be resolved.',
                 path,
                 exc_info=True,
             )
             return
+        
+        # Check if this path is already being watched by a parent directory
+        for existing_path in list(self.directory_globs.keys()):
+            try:
+                # If the new path is a subpath of an existing watched path, skip it
+                path.relative_to(existing_path)
+                logger.debug('Directory %s already covered by parent watch %s.', path, existing_path)
+                return
+            except ValueError:
+                # If an existing path is a subpath of the new path, remove it
+                try:
+                    existing_path.relative_to(path)
+                    logger.debug('Removing redundant watch %s, covered by %s.', existing_path, path)
+                    del self.directory_globs[existing_path]
+                except ValueError:
+                    continue
+        
         logger.debug('Watching dir %s with glob %s.', path, glob)
         self.directory_globs[path].add(glob)
 
@@ -286,6 +368,7 @@ class BaseReloader:
         logger.debug('Waiting for apps ready_event.')
         self.wait_for_apps_ready(apps, django_main_thread)
         from django.urls import get_resolver
+
         # Prevent a race condition where URL modules aren't loaded when the
         # reloader starts by accessing the urlconf_module property.
         try:
@@ -410,14 +493,21 @@ class WatchmanReloader(BaseReloader):
         logger.debug('Watchman watch-project result: %s', result)
         return result['watch'], result.get('relative_path')
 
-    @functools.lru_cache()
+    @functools.lru_cache
     def _get_clock(self, root):
         return self.client.query('clock', root)['clock']
 
     def _subscribe(self, directory, name, expression):
         root, rel_path = self._watch_root(directory)
+        # Only receive notifications of files changing, filtering out other types
+        # like special files: https://facebook.github.io/watchman/docs/type
+        only_files_expression = [
+            'allof',
+            ['anyof', ['type', 'f'], ['type', 'l']],
+            expression
+        ]
         query = {
-            'expression': expression,
+            'expression': only_files_expression,
             'fields': ['name'],
             'since': self._get_clock(root),
             'dedup_results': True,
@@ -468,7 +558,18 @@ class WatchmanReloader(BaseReloader):
         extra_directories = self.directory_globs.keys()
         watched_file_dirs = [f.parent for f in watched_files]
         sys_paths = list(sys_path_directories())
-        return frozenset((*extra_directories, *watched_file_dirs, *sys_paths))
+        
+        # Combine all paths and resolve them to avoid duplicates and circular references
+        all_paths = set()
+        for path in (*extra_directories, *watched_file_dirs, *sys_paths):
+            try:
+                resolved_path = path.resolve().absolute()
+                all_paths.add(resolved_path)
+            except (OSError, ValueError):
+                # Skip paths that can't be resolved
+                continue
+        
+        return frozenset(all_paths)
 
     def _update_watches(self):
         watched_files = list(self.watched_files(include_globs=False))
@@ -531,6 +632,8 @@ class WatchmanReloader(BaseReloader):
                 for sub in list(self.client.subs.keys()):
                     self._check_subscription(sub)
             yield
+            # Protect against busy loops.
+            time.sleep(0.1)
 
     def stop(self):
         self.client.close()
@@ -576,7 +679,7 @@ def start_django(reloader, main_func, *args, **kwargs):
 
     main_func = check_errors(main_func)
     django_main_thread = threading.Thread(target=main_func, args=args, kwargs=kwargs, name='django-main-thread')
-    django_main_thread.setDaemon(True)
+    django_main_thread.daemon = True
     django_main_thread.start()
 
     while not reloader.should_stop:

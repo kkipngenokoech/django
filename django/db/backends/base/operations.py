@@ -74,6 +74,12 @@ class BaseDatabaseOperations:
         """
         return len(objs)
 
+    def format_for_duration_arithmetic(self, sql):
+        raise NotImplementedError(
+            'subclasses of BaseDatabaseOperations may require a '
+            'format_for_duration_arithmetic() method.'
+        )
+
     def cache_key_culling_sql(self):
         """
         Return an SQL query that retrieves the first cache key greater than the
@@ -82,7 +88,8 @@ class BaseDatabaseOperations:
         This is used by the 'db' cache backend to determine where to start
         culling.
         """
-        return "SELECT cache_key FROM %s ORDER BY cache_key LIMIT 1 OFFSET %%s"
+        cache_key = self.quote_name('cache_key')
+        return f'SELECT {cache_key} FROM %s ORDER BY {cache_key} LIMIT 1 OFFSET %%s'
 
     def unification_cast_sql(self, output_field):
         """
@@ -99,17 +106,14 @@ class BaseDatabaseOperations:
         """
         raise NotImplementedError('subclasses of BaseDatabaseOperations may require a date_extract_sql() method')
 
-    def date_interval_sql(self, timedelta):
-        """
-        Implement the date interval functionality for expressions.
-        """
-        raise NotImplementedError('subclasses of BaseDatabaseOperations may require a date_interval_sql() method')
-
-    def date_trunc_sql(self, lookup_type, field_name):
+    def date_trunc_sql(self, lookup_type, field_name, tzname=None):
         """
         Given a lookup_type of 'year', 'month', or 'day', return the SQL that
-        truncates the given date field field_name to a date object with only
-        the given specificity.
+        truncates the given date or datetime field field_name to a date object
+        with only the given specificity.
+
+        If `tzname` is provided, the given value is truncated in a specific
+        timezone.
         """
         raise NotImplementedError('subclasses of BaseDatabaseOperations may require a date_trunc_sql() method.')
 
@@ -144,11 +148,14 @@ class BaseDatabaseOperations:
         """
         raise NotImplementedError('subclasses of BaseDatabaseOperations may require a datetime_trunc_sql() method')
 
-    def time_trunc_sql(self, lookup_type, field_name):
+    def time_trunc_sql(self, lookup_type, field_name, tzname=None):
         """
         Given a lookup_type of 'hour', 'minute' or 'second', return the SQL
-        that truncates the given time field field_name to a time object with
-        only the given specificity.
+        that truncates the given time or datetime field field_name to a time
+        object with only the given specificity.
+
+        If `tzname` is provided, the given value is truncated in a specific
+        timezone.
         """
         raise NotImplementedError('subclasses of BaseDatabaseOperations may require a time_trunc_sql() method')
 
@@ -158,13 +165,6 @@ class BaseDatabaseOperations:
         that extracts a value from the given time field field_name.
         """
         return self.date_extract_sql(lookup_type, field_name)
-
-    def json_cast_text_sql(self, field_name):
-        """Return the SQL to cast a JSON value to text value."""
-        raise NotImplementedError(
-            'subclasses of BaseDatabaseOperations may require a '
-            'json_cast_text_sql() method'
-        )
 
     def deferrable_sql(self):
         """
@@ -207,11 +207,12 @@ class BaseDatabaseOperations:
         """
         return []
 
-    def for_update_sql(self, nowait=False, skip_locked=False, of=()):
+    def for_update_sql(self, nowait=False, skip_locked=False, of=(), no_key=False):
         """
         Return the FOR UPDATE SQL clause to lock rows for an update operation.
         """
-        return 'FOR UPDATE%s%s%s' % (
+        return 'FOR%s UPDATE%s%s%s' % (
+            ' NO KEY' if no_key else '',
             ' OF %s' % ', '.join(of) if of else '',
             ' NOWAIT' if nowait else '',
             ' SKIP LOCKED' if skip_locked else '',
@@ -345,10 +346,6 @@ class BaseDatabaseOperations:
         not quote the given name if it's already been quoted.
         """
         raise NotImplementedError('subclasses of BaseDatabaseOperations may require a quote_name() method')
-
-    def random_function_sql(self):
-        """Return an SQL expression that returns a random value."""
-        return 'RANDOM()'
 
     def regex_lookup(self, lookup_type):
         """
@@ -509,6 +506,10 @@ class BaseDatabaseOperations:
         """
         if value is None:
             return None
+        # Expression values are adapted by the database.
+        if hasattr(value, 'resolve_expression'):
+            return value
+
         return str(value)
 
     def adapt_timefield_value(self, value):
@@ -518,6 +519,10 @@ class BaseDatabaseOperations:
         """
         if value is None:
             return None
+        # Expression values are adapted by the database.
+        if hasattr(value, 'resolve_expression'):
+            return value
+
         if timezone.is_aware(value):
             raise ValueError("Django does not support timezone-aware times.")
         return str(value)
@@ -536,30 +541,46 @@ class BaseDatabaseOperations:
         """
         return value or None
 
-    def year_lookup_bounds_for_date_field(self, value):
+    def year_lookup_bounds_for_date_field(self, value, iso_year=False):
         """
         Return a two-elements list with the lower and upper bound to be used
         with a BETWEEN operator to query a DateField value using a year
         lookup.
 
         `value` is an int, containing the looked-up year.
+        If `iso_year` is True, return bounds for ISO-8601 week-numbering years.
         """
-        first = datetime.date(value, 1, 1)
-        second = datetime.date(value, 12, 31)
+        if iso_year:
+            first = datetime.date.fromisocalendar(value, 1, 1)
+            second = (
+                datetime.date.fromisocalendar(value + 1, 1, 1) -
+                datetime.timedelta(days=1)
+            )
+        else:
+            first = datetime.date(value, 1, 1)
+            second = datetime.date(value, 12, 31)
         first = self.adapt_datefield_value(first)
         second = self.adapt_datefield_value(second)
         return [first, second]
 
-    def year_lookup_bounds_for_datetime_field(self, value):
+    def year_lookup_bounds_for_datetime_field(self, value, iso_year=False):
         """
         Return a two-elements list with the lower and upper bound to be used
         with a BETWEEN operator to query a DateTimeField value using a year
         lookup.
 
         `value` is an int, containing the looked-up year.
+        If `iso_year` is True, return bounds for ISO-8601 week-numbering years.
         """
-        first = datetime.datetime(value, 1, 1)
-        second = datetime.datetime(value, 12, 31, 23, 59, 59, 999999)
+        if iso_year:
+            first = datetime.datetime.fromisocalendar(value, 1, 1)
+            second = (
+                datetime.datetime.fromisocalendar(value + 1, 1, 1) -
+                datetime.timedelta(microseconds=1)
+            )
+        else:
+            first = datetime.datetime(value, 1, 1)
+            second = datetime.datetime(value, 12, 31, 23, 59, 59, 999999)
         if settings.USE_TZ:
             tz = timezone.get_current_timezone()
             first = timezone.make_aware(first, tz)
@@ -696,8 +717,8 @@ class BaseDatabaseOperations:
             raise ValueError('Unknown options: %s' % ', '.join(sorted(options.keys())))
         return self.explain_prefix
 
-    def insert_statement(self, ignore_conflicts=False):
+    def insert_statement(self, on_conflict=None):
         return 'INSERT INTO'
 
-    def ignore_conflicts_suffix_sql(self, ignore_conflicts=None):
+    def on_conflict_suffix_sql(self, fields, on_conflict, update_fields, unique_fields):
         return ''
