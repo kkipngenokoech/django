@@ -1138,6 +1138,10 @@ class QuerySet:
         """
         Return a new QuerySet instance that will select only distinct results.
         """
+        if self.query.combinator:
+            raise NotSupportedError(
+                'Calling distinct() after union() is not supported.'
+            )
         assert not self.query.is_sliced, \
             "Cannot create distinct fields once a slice has been taken."
         obj = self._chain()
