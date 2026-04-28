@@ -1,0 +1,13 @@
+==========================
+Django 3.0.5 release notes
+==========================
+
+*Expected April 1, 2020*
+
+Django 3.0.5 fixes several bugs in 3.0.4.
+
+Bugfixes
+========
+
+* Added the ability to handle ``.po`` files containing different plural
+  equations for the same language (:ticket:`30439`).
