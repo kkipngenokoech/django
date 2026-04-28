@@ -3,18 +3,13 @@ import json
 import os
 import posixpath
 import re
-import warnings
 from urllib.parse import unquote, urldefrag, urlsplit, urlunsplit
 
 from django.conf import settings
 from django.contrib.staticfiles.utils import check_settings, matches_patterns
-from django.core.cache import (
-    InvalidCacheBackendError, cache as default_cache, caches,
-)
 from django.core.exceptions import ImproperlyConfigured
 from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage, get_storage_class
-from django.utils.deprecation import RemovedInDjango31Warning
 from django.utils.functional import LazyObject
 
 
@@ -54,7 +49,11 @@ class HashedFilesMixin:
             r"""(url\(['"]{0,1}\s*(.*?)["']{0,1}\))""",
             (r"""(@import\s*["']\s*(.*?)["'])""", """@import url("%s")"""),
         )),
+        ('*.js', (
+            (r'(?m)^(//# (?-i:sourceMappingURL)=(.*))$', '//# sourceMappingURL=%s'),
+        )),
     )
+    keep_intermediate_files = True
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -102,8 +101,7 @@ class HashedFilesMixin:
                 content.close()
         path, filename = os.path.split(clean_name)
         root, ext = os.path.splitext(filename)
-        if file_hash is not None:
-            file_hash = ".%s" % file_hash
+        file_hash = ('.%s' % file_hash) if file_hash else ''
         hashed_name = os.path.join(path, "%s%s%s" %
                                    (root, file_hash, ext))
         unparsed_name = list(parsed_name)
@@ -231,17 +229,25 @@ class HashedFilesMixin:
             path for path in paths
             if matches_patterns(path, self._patterns)
         ]
-        # Do a single pass first. Post-process all files once, then repeat for
-        # adjustable files.
+
+        # Adjustable files to yield at end, keyed by the original path.
+        processed_adjustable_paths = {}
+
+        # Do a single pass first. Post-process all files once, yielding not
+        # adjustable files and exceptions, and collecting adjustable files.
         for name, hashed_name, processed, _ in self._post_process(paths, adjustable_paths, hashed_files):
-            yield name, hashed_name, processed
+            if name not in adjustable_paths or isinstance(processed, Exception):
+                yield name, hashed_name, processed
+            else:
+                processed_adjustable_paths[name] = (name, hashed_name, processed)
 
         paths = {path: paths[path] for path in adjustable_paths}
 
         for i in range(self.max_post_process_passes):
             substitutions = False
             for name, hashed_name, processed, subst in self._post_process(paths, adjustable_paths, hashed_files):
-                yield name, hashed_name, processed
+                # Overwrite since hashed_name may be newer.
+                processed_adjustable_paths[name] = (name, hashed_name, processed)
                 substitutions = substitutions or subst
 
             if not substitutions:
@@ -252,6 +258,9 @@ class HashedFilesMixin:
 
         # Store the processed paths
         self.hashed_files.update(hashed_files)
+
+        # Yield adjustable files with final, hashed name.
+        yield from processed_adjustable_paths.values()
 
     def _post_process(self, paths, adjustable_paths, hashed_files):
         # Sort the files by directory level
@@ -284,7 +293,7 @@ class HashedFilesMixin:
                 # ..to apply each replacement pattern to the content
                 if name in adjustable_paths:
                     old_hashed_name = hashed_name
-                    content = original_file.read().decode(settings.FILE_CHARSET)
+                    content = original_file.read().decode('utf-8')
                     for extension, patterns in self._patterns.items():
                         if matches_patterns(path, (extension,)):
                             for pattern, template in patterns:
@@ -297,8 +306,9 @@ class HashedFilesMixin:
                         self.delete(hashed_name)
                     # then save the processed result
                     content_file = ContentFile(content.encode())
-                    # Save intermediate file for reference
-                    saved_name = self._save(hashed_name, content_file)
+                    if self.keep_intermediate_files:
+                        # Save intermediate file for reference
+                        self._save(hashed_name, content_file)
                     hashed_name = self.hashed_name(name, content_file)
 
                     if self.exists(hashed_name):
@@ -370,6 +380,7 @@ class ManifestFilesMixin(HashedFilesMixin):
     manifest_version = '1.0'  # the manifest format standard
     manifest_name = 'staticfiles.json'
     manifest_strict = True
+    keep_intermediate_files = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -379,7 +390,7 @@ class ManifestFilesMixin(HashedFilesMixin):
         try:
             with self.open(self.manifest_name) as manifest:
                 return manifest.read().decode()
-        except OSError:
+        except FileNotFoundError:
             return None
 
     def load_manifest(self):
@@ -400,7 +411,8 @@ class ManifestFilesMixin(HashedFilesMixin):
     def post_process(self, *args, **kwargs):
         self.hashed_files = {}
         yield from super().post_process(*args, **kwargs)
-        self.save_manifest()
+        if not kwargs.get('dry_run'):
+            self.save_manifest()
 
     def save_manifest(self):
         payload = {'paths': self.hashed_files, 'version': self.manifest_version}
@@ -425,63 +437,6 @@ class ManifestFilesMixin(HashedFilesMixin):
         if '?#' in name and not unparsed_name[3]:
             unparsed_name[2] += '?'
         return urlunsplit(unparsed_name)
-
-
-class _MappingCache:
-    """
-    A small dict-like wrapper for a given cache backend instance.
-    """
-    def __init__(self, cache):
-        self.cache = cache
-
-    def __setitem__(self, key, value):
-        self.cache.set(key, value)
-
-    def __getitem__(self, key):
-        value = self.cache.get(key)
-        if value is None:
-            raise KeyError("Couldn't find a file name '%s'" % key)
-        return value
-
-    def clear(self):
-        self.cache.clear()
-
-    def update(self, data):
-        self.cache.set_many(data)
-
-    def get(self, key, default=None):
-        try:
-            return self[key]
-        except KeyError:
-            return default
-
-
-class CachedFilesMixin(HashedFilesMixin):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        try:
-            self.hashed_files = _MappingCache(caches['staticfiles'])
-        except InvalidCacheBackendError:
-            # Use the default backend
-            self.hashed_files = _MappingCache(default_cache)
-
-    def hash_key(self, name):
-        key = hashlib.md5(self.clean_name(name).encode()).hexdigest()
-        return 'staticfiles:%s' % key
-
-
-class CachedStaticFilesStorage(CachedFilesMixin, StaticFilesStorage):
-    """
-    A static file system storage backend which also saves
-    hashed copies of the files it saves.
-    """
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            'CachedStaticFilesStorage is deprecated in favor of '
-            'ManifestStaticFilesStorage.',
-            RemovedInDjango31Warning, stacklevel=2,
-        )
-        super().__init__(*args, **kwargs)
 
 
 class ManifestStaticFilesStorage(ManifestFilesMixin, StaticFilesStorage):

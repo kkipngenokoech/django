@@ -1,4 +1,5 @@
 import datetime
+import re
 
 from django.forms.utils import flatatt, pretty_name
 from django.forms.widgets import Textarea, TextInput
@@ -63,7 +64,10 @@ class BoundField:
         # Prevent unnecessary reevaluation when accessing BoundField's attrs
         # from templates.
         if not isinstance(idx, (int, slice)):
-            raise TypeError
+            raise TypeError(
+                'BoundField indices must be integers or slices, not %s.'
+                % type(idx).__name__
+            )
         return self.subwidgets[idx]
 
     @property
@@ -149,7 +153,9 @@ class BoundField:
         id_ = widget.attrs.get('id') or self.auto_id
         if id_:
             id_for_label = widget.id_for_label(id_)
-            if id_for_label:
+            # Check if widget is labelable before adding 'for' attribute
+            widget_is_labelable = getattr(widget, 'labelable', True)
+            if id_for_label and widget_is_labelable:
                 attrs = {**(attrs or {}), 'for': id_for_label}
             if self.field.required and hasattr(self.form, 'required_css_class'):
                 attrs = attrs or {}
@@ -223,6 +229,10 @@ class BoundField:
         if self.field.disabled:
             attrs['disabled'] = True
         return attrs
+
+    @property
+    def widget_type(self):
+        return re.sub(r'widget$|input$', '', self.field.widget.__class__.__name__.lower())
 
 
 @html_safe
