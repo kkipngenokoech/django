@@ -5,7 +5,7 @@ from django.contrib.contenttypes.fields import (
 )
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
-from django.db.models.query import ModelIterable, QuerySet
+from django.db.models.query import ModelIterable
 from django.utils.functional import cached_property
 
 
@@ -104,7 +104,7 @@ class ModelIterableSubclass(ModelIterable):
     pass
 
 
-class TeacherQuerySet(QuerySet):
+class TeacherQuerySet(models.QuerySet):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._iterable_class = ModelIterableSubclass
@@ -172,6 +172,11 @@ class TaggedItem(models.Model):
         return self.tag
 
 
+class Article(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=20)
+
+
 class Bookmark(models.Model):
     url = models.URLField()
     tags = GenericRelation(TaggedItem, related_query_name='bookmarks')
@@ -188,9 +193,12 @@ class Comment(models.Model):
     comment = models.TextField()
 
     # Content-object field
-    content_type = models.ForeignKey(ContentType, models.CASCADE)
+    content_type = models.ForeignKey(ContentType, models.CASCADE, null=True)
     object_pk = models.TextField()
     content_object = GenericForeignKey(ct_field="content_type", fk_field="object_pk")
+    content_type_uuid = models.ForeignKey(ContentType, models.CASCADE, related_name='comments', null=True)
+    object_pk_uuid = models.TextField()
+    content_object_uuid = GenericForeignKey(ct_field='content_type_uuid', fk_field='object_pk_uuid')
 
     class Meta:
         ordering = ['id']

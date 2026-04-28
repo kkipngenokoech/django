@@ -345,6 +345,7 @@ class StateTests(SimpleTestCase):
                     'migrations.Tag',
                     models.CASCADE,
                     auto_created=True,
+                    parent_link=True,
                     primary_key=True,
                     to_field='id',
                     serialize=False,
@@ -531,6 +532,61 @@ class StateTests(SimpleTestCase):
         project_state.add_model(ModelState.from_model(B))
         self.assertEqual(len(project_state.apps.get_models()), 2)
 
+    def test_reload_related_model_on_non_relational_fields(self):
+        """
+        The model is reloaded even on changes that are not involved in
+        relations. Other models pointing to or from it are also reloaded.
+        """
+        project_state = ProjectState()
+        project_state.apps  # Render project state.
+        project_state.add_model(ModelState('migrations', 'A', []))
+        project_state.add_model(ModelState('migrations', 'B', [
+            ('a', models.ForeignKey('A', models.CASCADE)),
+        ]))
+        project_state.add_model(ModelState('migrations', 'C', [
+            ('b', models.ForeignKey('B', models.CASCADE)),
+            ('name', models.TextField()),
+        ]))
+        project_state.add_model(ModelState('migrations', 'D', [
+            ('a', models.ForeignKey('A', models.CASCADE)),
+        ]))
+        operation = AlterField(
+            model_name='C',
+            name='name',
+            field=models.TextField(blank=True),
+        )
+        operation.state_forwards('migrations', project_state)
+        project_state.reload_model('migrations', 'a', delay=True)
+        A = project_state.apps.get_model('migrations.A')
+        B = project_state.apps.get_model('migrations.B')
+        D = project_state.apps.get_model('migrations.D')
+        self.assertIs(B._meta.get_field('a').related_model, A)
+        self.assertIs(D._meta.get_field('a').related_model, A)
+
+    def test_reload_model_relationship_consistency(self):
+        project_state = ProjectState()
+        project_state.add_model(ModelState('migrations', 'A', []))
+        project_state.add_model(ModelState('migrations', 'B', [
+            ('a', models.ForeignKey('A', models.CASCADE)),
+        ]))
+        project_state.add_model(ModelState('migrations', 'C', [
+            ('b', models.ForeignKey('B', models.CASCADE)),
+        ]))
+        A = project_state.apps.get_model('migrations.A')
+        B = project_state.apps.get_model('migrations.B')
+        C = project_state.apps.get_model('migrations.C')
+        self.assertEqual([r.related_model for r in A._meta.related_objects], [B])
+        self.assertEqual([r.related_model for r in B._meta.related_objects], [C])
+        self.assertEqual([r.related_model for r in C._meta.related_objects], [])
+
+        project_state.reload_model('migrations', 'a', delay=True)
+        A = project_state.apps.get_model('migrations.A')
+        B = project_state.apps.get_model('migrations.B')
+        C = project_state.apps.get_model('migrations.C')
+        self.assertEqual([r.related_model for r in A._meta.related_objects], [B])
+        self.assertEqual([r.related_model for r in B._meta.related_objects], [C])
+        self.assertEqual([r.related_model for r in C._meta.related_objects], [])
+
     def test_add_relations(self):
         """
         #24573 - Adding relations to existing models should reload the
@@ -657,7 +713,7 @@ class StateTests(SimpleTestCase):
             return [mod for mod in state.apps.get_models() if mod._meta.model_name == 'a'][0]
 
         project_state = ProjectState()
-        project_state.add_model((ModelState.from_model(A)))
+        project_state.add_model(ModelState.from_model(A))
         self.assertEqual(len(get_model_a(project_state)._meta.related_objects), 1)
         old_state = project_state.clone()
 
@@ -1052,7 +1108,7 @@ class ModelStateTests(SimpleTestCase):
             ['searchablelocation_ptr', 'name', 'bus_routes', 'inbound']
         )
         self.assertEqual(station_state.fields[1][1].max_length, 128)
-        self.assertEqual(station_state.fields[2][1].null, False)
+        self.assertIs(station_state.fields[2][1].null, False)
         self.assertEqual(
             station_state.options,
             {'abstract': False, 'swappable': 'TEST_SWAPPABLE_MODEL', 'indexes': [], 'constraints': []}
@@ -1105,7 +1161,7 @@ class ModelStateTests(SimpleTestCase):
             class Meta:
                 app_label = 'migrations'
                 abstract = True
-                indexes = [models.indexes.Index(fields=['name'])]
+                indexes = [models.Index(fields=['name'])]
 
         class Child1(Abstract):
             pass
@@ -1131,7 +1187,7 @@ class ModelStateTests(SimpleTestCase):
 
             class Meta:
                 app_label = 'migrations'
-                indexes = [models.indexes.Index(fields=['name'], name='foo_idx')]
+                indexes = [models.Index(fields=['name'], name='foo_idx')]
 
         model_state = ModelState.from_model(TestModel)
         index_names = [index.name for index in model_state.options['indexes']]

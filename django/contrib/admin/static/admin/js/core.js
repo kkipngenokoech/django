@@ -1,9 +1,5 @@
 // Core javascript helper functions
 
-// basic browser identification & version
-var isOpera = (navigator.userAgent.indexOf("Opera") >= 0) && parseFloat(navigator.appVersion);
-var isIE = ((document.all) && (!isOpera)) && parseFloat(navigator.appVersion.split("MSIE ")[1].split(";")[0]);
-
 // quickElement(tagType, parentReference [, textInChildNode, attribute, attributeValue ...]);
 function quickElement() {
     'use strict';
@@ -37,12 +33,8 @@ function findPosX(obj) {
     var curleft = 0;
     if (obj.offsetParent) {
         while (obj.offsetParent) {
-            curleft += obj.offsetLeft - ((isOpera) ? 0 : obj.scrollLeft);
-            obj = obj.offsetParent;
-        }
-        // IE offsetParent does not include the top-level
-        if (isIE && obj.parentElement) {
             curleft += obj.offsetLeft - obj.scrollLeft;
+            obj = obj.offsetParent;
         }
     } else if (obj.x) {
         curleft += obj.x;
@@ -55,12 +47,8 @@ function findPosY(obj) {
     var curtop = 0;
     if (obj.offsetParent) {
         while (obj.offsetParent) {
-            curtop += obj.offsetTop - ((isOpera) ? 0 : obj.scrollTop);
-            obj = obj.offsetParent;
-        }
-        // IE offsetParent does not include the top-level
-        if (isIE && obj.parentElement) {
             curtop += obj.offsetTop - obj.scrollTop;
+            obj = obj.offsetParent;
         }
     } else if (obj.y) {
         curtop += obj.y;
@@ -74,13 +62,7 @@ function findPosY(obj) {
 (function() {
     'use strict';
     Date.prototype.getTwelveHours = function() {
-        var hours = this.getHours();
-        if (hours === 0) {
-            return 12;
-        }
-        else {
-            return hours <= 12 ? hours : hours - 12;
-        }
+        return this.getHours() % 12 || 12;
     };
 
     Date.prototype.getTwoDigitMonth = function() {
@@ -105,14 +87,6 @@ function findPosY(obj) {
 
     Date.prototype.getTwoDigitSecond = function() {
         return (this.getSeconds() < 10) ? '0' + this.getSeconds() : this.getSeconds();
-    };
-
-    Date.prototype.getHourMinute = function() {
-        return this.getTwoDigitHour() + ':' + this.getTwoDigitMinute();
-    };
-
-    Date.prototype.getHourMinuteSecond = function() {
-        return this.getTwoDigitHour() + ':' + this.getTwoDigitMinute() + ':' + this.getTwoDigitSecond();
     };
 
     Date.prototype.getFullMonthName = function() {
@@ -153,17 +127,9 @@ function findPosY(obj) {
         return result;
     };
 
-// ----------------------------------------------------------------------------
-// String object extensions
-// ----------------------------------------------------------------------------
-    String.prototype.pad_left = function(pad_length, pad_string) {
-        var new_string = this;
-        for (var i = 0; new_string.length < pad_length; i++) {
-            new_string = pad_string + new_string;
-        }
-        return new_string;
-    };
-
+    // ----------------------------------------------------------------------------
+    // String object extensions
+    // ----------------------------------------------------------------------------
     String.prototype.strptime = function(format) {
         var split_format = format.split(/[.\-/]/);
         var date = this.split(/[.\-/]/);
@@ -171,18 +137,25 @@ function findPosY(obj) {
         var day, month, year;
         while (i < split_format.length) {
             switch (split_format[i]) {
-                case "%d":
-                    day = date[i];
-                    break;
-                case "%m":
-                    month = date[i] - 1;
-                    break;
-                case "%Y":
+            case "%d":
+                day = date[i];
+                break;
+            case "%m":
+                month = date[i] - 1;
+                break;
+            case "%Y":
+                year = date[i];
+                break;
+            case "%y":
+                // A %y value in the range of [00, 68] is in the current
+                // century, while [69, 99] is in the previous century,
+                // according to the Open Group Specification.
+                if (parseInt(date[i], 10) >= 69) {
                     year = date[i];
-                    break;
-                case "%y":
-                    year = date[i];
-                    break;
+                } else {
+                    year = (new Date(Date.UTC(date[i], 0))).getUTCFullYear() + 100;
+                }
+                break;
             }
             ++i;
         }
@@ -193,20 +166,3 @@ function findPosY(obj) {
     };
 
 })();
-// ----------------------------------------------------------------------------
-// Get the computed style for and element
-// ----------------------------------------------------------------------------
-function getStyle(oElm, strCssRule) {
-    'use strict';
-    var strValue = "";
-    if(document.defaultView && document.defaultView.getComputedStyle) {
-        strValue = document.defaultView.getComputedStyle(oElm, "").getPropertyValue(strCssRule);
-    }
-    else if(oElm.currentStyle) {
-        strCssRule = strCssRule.replace(/\-(\w)/g, function(strMatch, p1) {
-            return p1.toUpperCase();
-        });
-        strValue = oElm.currentStyle[strCssRule];
-    }
-    return strValue;
-}
