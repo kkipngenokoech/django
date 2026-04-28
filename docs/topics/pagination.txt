@@ -78,6 +78,8 @@ accessing the items for each page::
     objects such as Django's ``QuerySet`` to use a more efficient ``count()``
     method when available.
 
+.. _paginating-a-list-view:
+
 Paginating a ``ListView``
 =========================
 
@@ -90,7 +92,7 @@ your view class, for example::
 
     from myapp.models import Contact
 
-    class ContactList(ListView):
+    class ContactListView(ListView):
         paginate_by = 2
         model = Contact
 
