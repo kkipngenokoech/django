@@ -811,16 +811,6 @@ class Star(Expression):
         return '*', []
 
 
-class Random(Expression):
-    output_field = fields.FloatField()
-
-    def __repr__(self):
-        return "Random()"
-
-    def as_sql(self, compiler, connection):
-        return connection.ops.random_function_sql(), []
-
-
 class Col(Expression):
 
     contains_column_references = True
@@ -930,7 +920,7 @@ class ExpressionWrapper(Expression):
         return expression.get_group_by_cols(alias=alias)
 
     def as_sql(self, compiler, connection):
-        return self.expression.as_sql(compiler, connection)
+        return compiler.compile(self.expression)
 
     def __repr__(self):
         return "{}({})".format(self.__class__.__name__, self.expression)
@@ -1078,6 +1068,11 @@ class Case(Expression):
             sql = connection.ops.unification_cast_sql(self.output_field) % sql
         return sql, sql_params
 
+    def get_group_by_cols(self, alias=None):
+        if not self.cases:
+            return self.default.get_group_by_cols(alias)
+        return super().get_group_by_cols(alias)
+
 
 class Subquery(Expression):
     """
@@ -1088,19 +1083,18 @@ class Subquery(Expression):
     contains_aggregate = False
 
     def __init__(self, queryset, output_field=None, **extra):
-        self.query = queryset.query
+        # Allow the usage of both QuerySet and sql.Query objects.
+        self.query = getattr(queryset, 'query', queryset)
         self.extra = extra
-        # Prevent the QuerySet from being evaluated.
-        self.queryset = queryset._chain(_result_cache=[], prefetch_done=True)
         super().__init__(output_field)
 
     def __getstate__(self):
         state = super().__getstate__()
         args, kwargs = state['_constructor_args']
         if args:
-            args = (self.queryset, *args[1:])
+            args = (self.query, *args[1:])
         else:
-            kwargs['queryset'] = self.queryset
+            kwargs['queryset'] = self.query
         state['_constructor_args'] = args, kwargs
         return state
 

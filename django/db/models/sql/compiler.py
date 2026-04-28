@@ -6,8 +6,8 @@ from itertools import chain
 from django.core.exceptions import EmptyResultSet, FieldError
 from django.db import DatabaseError, NotSupportedError
 from django.db.models.constants import LOOKUP_SEP
-from django.db.models.expressions import F, OrderBy, Random, RawSQL, Ref, Value
-from django.db.models.functions import Cast
+from django.db.models.expressions import F, OrderBy, RawSQL, Ref, Value
+from django.db.models.functions import Cast, Random
 from django.db.models.query_utils import Q, select_related_descend
 from django.db.models.sql.constants import (
     CURSOR, GET_ITERATOR_CHUNK_SIZE, MULTI, NO_RESULTS, ORDER_DIR, SINGLE,
@@ -1596,8 +1596,11 @@ class SQLAggregateCompiler(SQLCompiler):
         sql = ', '.join(sql)
         params = tuple(params)
 
-        sql = 'SELECT %s FROM (%s) subquery' % (sql, self.query.subquery)
-        params = params + self.query.sub_params
+        inner_query_sql, inner_query_params = self.query.inner_query.get_compiler(
+            self.using
+        ).as_sql(with_col_aliases=True)
+        sql = 'SELECT %s FROM (%s) subquery' % (sql, inner_query_sql)
+        params = params + inner_query_params
         return sql, params
 
 
