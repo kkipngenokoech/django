@@ -236,6 +236,38 @@ class Options:
         else:
             self.order_with_respect_to = None
 
+        # Handle ordering inheritance - preserve field prefixes like '-' when inheriting
+        if not self.ordering and self.parents:
+            # If no ordering is defined locally, inherit from parents
+            for parent, _ in self.parents.items():
+                if hasattr(parent._meta, 'ordering') and parent._meta.ordering:
+                    # Inherit ordering from parent, preserving field prefixes
+                    inherited_ordering = []
+                    for field_name in parent._meta.ordering:
+                        if field_name.startswith('-'):
+                            # Preserve DESC ordering prefix
+                            base_field = field_name[1:]
+                            if base_field == 'pk':
+                                # For pk field, use the actual pk field name with prefix
+                                inherited_ordering.append('-' + parent._meta.pk.name)
+                            else:
+                                inherited_ordering.append(field_name)
+                        elif field_name.startswith('+'):
+                            # Preserve ASC ordering prefix
+                            base_field = field_name[1:]
+                            if base_field == 'pk':
+                                inherited_ordering.append('+' + parent._meta.pk.name)
+                            else:
+                                inherited_ordering.append(field_name)
+                        else:
+                            # No prefix, handle pk specially
+                            if field_name == 'pk':
+                                inherited_ordering.append(parent._meta.pk.name)
+                            else:
+                                inherited_ordering.append(field_name)
+                    self.ordering = inherited_ordering
+                    break
+
         if self.pk is None:
             if self.parents:
                 # Promote the first parent link in lieu of adding yet another
