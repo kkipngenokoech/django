@@ -4,7 +4,10 @@ import re
 from datetime import datetime, timedelta
 from importlib import import_module
 
-import pytz
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
 
 from django import forms
 from django.conf import settings
@@ -24,6 +27,7 @@ from django.utils import translation
 from .models import (
     Advisor, Album, Band, Bee, Car, Company, Event, Honeycomb, Individual,
     Inventory, Member, MyFileField, Profile, School, Student,
+    UnsafeLimitChoicesTo, VideoStream,
 )
 from .widgetadmin import site as widget_admin_site
 
@@ -337,7 +341,7 @@ class AdminSplitDateTimeWidgetTest(SimpleTestCase):
     def test_localization(self):
         w = widgets.AdminSplitDateTime()
 
-        with self.settings(USE_L10N=True), translation.override('de-at'):
+        with translation.override('de-at'):
             w.is_localized = True
             self.assertHTMLEqual(
                 w.render('test', datetime(2007, 12, 1, 9, 30)),
@@ -487,6 +491,20 @@ class AdminFileWidgetTests(TestDataMixin, TestCase):
             },
         )
 
+    def test_render_disabled(self):
+        widget = widgets.AdminFileWidget(attrs={'disabled': True})
+        self.assertHTMLEqual(
+            widget.render('test', self.album.cover_art),
+            '<p class="file-upload">Currently: <a href="%(STORAGE_URL)salbums/'
+            r'hybrid_theory.jpg">albums\hybrid_theory.jpg</a> '
+            '<span class="clearable-file-input">'
+            '<input type="checkbox" name="test-clear" id="test-clear_id" disabled>'
+            '<label for="test-clear_id">Clear</label></span><br>'
+            'Change: <input type="file" name="test" disabled></p>' % {
+                'STORAGE_URL': default_storage.url(''),
+            },
+        )
+
     def test_readonly_fields(self):
         """
         File widgets should render as a link when they're marked "read only."
@@ -524,13 +542,13 @@ class ForeignKeyRawIdWidgetTest(TestCase):
 
         w = widgets.ForeignKeyRawIdWidget(rel, widget_admin_site)
         self.assertHTMLEqual(
-            w.render('test', band.pk, attrs={}),
-            '<input type="text" name="test" value="%(bandpk)s" '
+            w.render('test', band.uuid, attrs={}),
+            '<input type="text" name="test" value="%(banduuid)s" '
             'class="vForeignKeyRawIdAdminField">'
-            '<a href="/admin_widgets/band/?_to_field=id" class="related-lookup" '
+            '<a href="/admin_widgets/band/?_to_field=uuid" class="related-lookup" '
             'id="lookup_id_test" title="Lookup"></a>&nbsp;<strong>'
             '<a href="/admin_widgets/band/%(bandpk)s/change/">Linkin Park</a>'
-            '</strong>' % {'bandpk': band.pk}
+            '</strong>' % {'banduuid': band.uuid, 'bandpk': band.pk}
         )
 
     def test_relations_to_non_primary_key(self):
@@ -601,6 +619,26 @@ class ForeignKeyRawIdWidgetTest(TestCase):
             'class="related-lookup" id="lookup_id_test" title="Lookup"></a>'
             '&nbsp;<strong><a href="/admin_widgets/inventory/%(pk)s/change/">'
             'Hidden</a></strong>' % {'pk': hidden.pk}
+        )
+
+    def test_render_unsafe_limit_choices_to(self):
+        rel = UnsafeLimitChoicesTo._meta.get_field('band').remote_field
+        w = widgets.ForeignKeyRawIdWidget(rel, widget_admin_site)
+        self.assertHTMLEqual(
+            w.render('test', None),
+            '<input type="text" name="test" class="vForeignKeyRawIdAdminField">\n'
+            '<a href="/admin_widgets/band/?name=%22%26%3E%3Cescapeme&amp;_to_field=artist_ptr" '
+            'class="related-lookup" id="lookup_id_test" title="Lookup"></a>'
+        )
+
+    def test_render_fk_as_pk_model(self):
+        rel = VideoStream._meta.get_field('release_event').remote_field
+        w = widgets.ForeignKeyRawIdWidget(rel, widget_admin_site)
+        self.assertHTMLEqual(
+            w.render('test', None),
+            '<input type="text" name="test" class="vForeignKeyRawIdAdminField">\n'
+            '<a href="/admin_widgets/releaseevent/?_to_field=album" '
+            'class="related-lookup" id="lookup_id_test" title="Lookup"></a>'
         )
 
 
@@ -880,6 +918,7 @@ class DateTimePickerSeleniumTests(AdminWidgetSeleniumTestCase):
         The calendar shows the date from the input field for every locale
         supported by Django.
         """
+        self.selenium.set_window_size(1024, 768)
         self.admin_login(username='super', password='secret', login_url='/')
 
         # Enter test data
@@ -903,7 +942,7 @@ class DateTimePickerSeleniumTests(AdminWidgetSeleniumTestCase):
             expected_caption = '{:s} {:d}'.format(may_translation.upper(), 1984)
 
             # Test with every locale
-            with override_settings(LANGUAGE_CODE=language_code, USE_L10N=True):
+            with override_settings(LANGUAGE_CODE=language_code):
 
                 # Open a page that has a date picker widget
                 url = reverse('admin:admin_widgets_member_change', args=(member.pk,))
@@ -931,8 +970,8 @@ class DateTimePickerShortcutsSeleniumTests(AdminWidgetSeleniumTestCase):
         error_margin = timedelta(seconds=10)
 
         # If we are neighbouring a DST, we add an hour of error margin.
-        tz = pytz.timezone('America/Chicago')
-        utc_now = datetime.now(pytz.utc)
+        tz = zoneinfo.ZoneInfo('America/Chicago')
+        utc_now = datetime.now(zoneinfo.ZoneInfo('UTC'))
         tz_yesterday = (utc_now - timedelta(days=1)).astimezone(tz).tzname()
         tz_tomorrow = (utc_now + timedelta(days=1)).astimezone(tz).tzname()
         if tz_yesterday != tz_tomorrow:
@@ -959,7 +998,7 @@ class DateTimePickerShortcutsSeleniumTests(AdminWidgetSeleniumTestCase):
         with self.wait_page_loaded():
             self.selenium.find_element_by_name('_save').click()
 
-        # Make sure that "now" in javascript is within 10 seconds
+        # Make sure that "now" in JavaScript is within 10 seconds
         # from "now" on the server side.
         member = Member.objects.get(name='test')
         self.assertGreater(member.birthdate, now - error_margin)
@@ -1142,6 +1181,7 @@ class HorizontalVerticalFilterSeleniumTests(AdminWidgetSeleniumTestCase):
         self.assertEqual(self.selenium.current_url, original_url)
 
     def test_basic(self):
+        self.selenium.set_window_size(1024, 768)
         self.school.students.set([self.lisa, self.peter])
         self.school.alumni.set([self.lisa, self.peter])
 
@@ -1166,6 +1206,7 @@ class HorizontalVerticalFilterSeleniumTests(AdminWidgetSeleniumTestCase):
         """
         from selenium.webdriver.common.keys import Keys
 
+        self.selenium.set_window_size(1024, 768)
         self.school.students.set([self.lisa, self.peter])
         self.school.alumni.set([self.lisa, self.peter])
 

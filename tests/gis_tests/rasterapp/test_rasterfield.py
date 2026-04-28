@@ -143,7 +143,9 @@ class RasterFieldTest(TransactionTestCase):
         unprojected coordinate systems. This test just checks that the lookup
         can be called, but doesn't check if the result makes logical sense.
         """
-        from django.contrib.gis.db.backends.postgis.operations import PostGISOperations
+        from django.contrib.gis.db.backends.postgis.operations import (
+            PostGISOperations,
+        )
 
         # Create test raster and geom.
         rast = GDALRaster(json.loads(JSON_RASTER))
@@ -327,12 +329,12 @@ class RasterFieldTest(TransactionTestCase):
 
     def test_lookup_with_raster_bbox(self):
         rast = GDALRaster(json.loads(JSON_RASTER))
-        # Shift raster upwards
+        # Shift raster upward
         rast.origin.y = 2
         # The raster in the model is not strictly below
         qs = RasterModel.objects.filter(rast__strictly_below=rast)
         self.assertEqual(qs.count(), 0)
-        # Shift raster further upwards
+        # Shift raster further upward
         rast.origin.y = 6
         # The raster in the model is strictly below
         qs = RasterModel.objects.filter(rast__strictly_below=rast)

@@ -99,6 +99,8 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             super().alter_db_table(model, old_db_table, new_db_table)
 
     def alter_field(self, model, old_field, new_field, strict=False):
+        if not self._field_should_be_altered(old_field, new_field):
+            return
         old_field_name = old_field.name
         table_name = model._meta.db_table
         _, old_column_name = old_field.get_attname_column()
@@ -234,7 +236,36 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 if delete_field.name not in index.fields
             ]
 
-        constraints = list(model._meta.constraints)
+        # Work out the new constraints, taking renames into account
+        constraints = []
+        for constraint in model._meta.constraints:
+            if isinstance(constraint, UniqueConstraint):
+                # Update field names in UniqueConstraint to handle renames
+                new_fields = []
+                constraint_valid = True
+                for field_name in constraint.fields:
+                    if delete_field and field_name == delete_field.name:
+                        # Skip constraints that reference deleted fields
+                        constraint_valid = False
+                        break
+                    new_field_name = rename_mapping.get(field_name, field_name)
+                    new_fields.append(new_field_name)
+                
+                if constraint_valid:
+                    # Create a new UniqueConstraint with updated field names
+                    new_constraint = UniqueConstraint(
+                        fields=new_fields,
+                        name=constraint.name,
+                        condition=constraint.condition,
+                        deferrable=constraint.deferrable,
+                        include=constraint.include,
+                        opclasses=constraint.opclasses,
+                    )
+                    constraints.append(new_constraint)
+            else:
+                # For other constraint types, keep them as-is for now
+                # This may need to be extended for other constraint types in the future
+                constraints.append(constraint)
 
         # Provide isolated instances of the fields to the new model body so
         # that the existing model's internals aren't interfered with when
@@ -417,13 +448,26 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         self.delete_model(old_field.remote_field.through)
 
     def add_constraint(self, model, constraint):
-        if isinstance(constraint, UniqueConstraint) and constraint.condition:
+        if isinstance(constraint, UniqueConstraint) and (
+            constraint.condition or
+            constraint.contains_expressions or
+            constraint.include or
+            constraint.deferrable
+        ):
             super().add_constraint(model, constraint)
         else:
             self._remake_table(model)
 
     def remove_constraint(self, model, constraint):
-        if isinstance(constraint, UniqueConstraint) and constraint.condition:
+        if isinstance(constraint, UniqueConstraint) and (
+            constraint.condition or
+            constraint.contains_expressions or
+            constraint.include or
+            constraint.deferrable
+        ):
             super().remove_constraint(model, constraint)
         else:
             self._remake_table(model)
+
+    def _collate_sql(self, collation):
+        return 'COLLATE ' + collation

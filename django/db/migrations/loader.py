@@ -92,17 +92,23 @@ class MigrationLoader:
                 if not hasattr(module, '__path__'):
                     self.unmigrated_apps.add(app_config.label)
                     continue
+                # Empty directories are namespaces. Namespace packages have no
+                # __file__ and don't use a list for __path__. See
+                # https://docs.python.org/3/reference/import.html#namespace-packages
+                if (
+                    getattr(module, '__file__', None) is None and
+                    not isinstance(module.__path__, list)
+                ):
+                    self.unmigrated_apps.add(app_config.label)
+                    continue
                 # Force a reload if it's already loaded (tests need this)
                 if was_loaded:
                     reload(module)
+            self.migrated_apps.add(app_config.label)
             migration_names = {
                 name for _, name, is_pkg in pkgutil.iter_modules(module.__path__)
                 if not is_pkg and name[0] not in '_~'
             }
-            if migration_names or self.ignore_no_migrations:
-                self.migrated_apps.add(app_config.label)
-            else:
-                self.unmigrated_apps.add(app_config.label)
             # Load migrations
             for migration_name in migration_names:
                 migration_path = '%s.%s' % (module_name, migration_name)
@@ -143,7 +149,10 @@ class MigrationLoader:
                 "There is more than one migration for '%s' with the prefix '%s'" % (app_label, name_prefix)
             )
         elif not results:
-            raise KeyError("There no migrations for '%s' with the prefix '%s'" % (app_label, name_prefix))
+            raise KeyError(
+                f"There is no migration for '{app_label}' with the prefix "
+                f"'{name_prefix}'"
+            )
         else:
             return self.disk_migrations[results[0]]
 
@@ -317,7 +326,7 @@ class MigrationLoader:
             if app_label in seen_apps:
                 conflicting_apps.add(app_label)
             seen_apps.setdefault(app_label, set()).add(migration_name)
-        return {app_label: seen_apps[app_label] for app_label in conflicting_apps}
+        return {app_label: sorted(seen_apps[app_label]) for app_label in conflicting_apps}
 
     def project_state(self, nodes=None, at_end=True):
         """
@@ -326,7 +335,7 @@ class MigrationLoader:
 
         See graph.make_state() for the meaning of "nodes" and "at_end".
         """
-        return self.graph.make_state(nodes=nodes, at_end=at_end, real_apps=list(self.unmigrated_apps))
+        return self.graph.make_state(nodes=nodes, at_end=at_end, real_apps=self.unmigrated_apps)
 
     def collect_sql(self, plan):
         """
