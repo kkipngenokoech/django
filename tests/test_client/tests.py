@@ -61,8 +61,8 @@ class ClientTest(TestCase):
 
     def test_get_data_none(self):
         msg = (
-            'Cannot encode None in a query string. Did you mean to pass an '
-            'empty string or omit the value?'
+            "Cannot encode None for key 'value' in a query string. Did you "
+            "mean to pass an empty string or omit the value?"
         )
         with self.assertRaisesMessage(TypeError, msg):
             self.client.get('/get_view/', {'value': None})
@@ -102,8 +102,8 @@ class ClientTest(TestCase):
 
     def test_post_data_none(self):
         msg = (
-            'Cannot encode None as POST data. Did you mean to pass an empty '
-            'string or omit the value?'
+            "Cannot encode None for key 'value' as POST data. Did you mean "
+            "to pass an empty string or omit the value?"
         )
         with self.assertRaisesMessage(TypeError, msg):
             self.client.post('/post_view/', {'value': None})
@@ -829,8 +829,9 @@ class ClientTest(TestCase):
 
     def test_response_raises_multi_arg_exception(self):
         """A request may raise an exception with more than one required arg."""
-        with self.assertRaises(TwoArgException):
+        with self.assertRaises(TwoArgException) as cm:
             self.client.get('/two_arg_exception/')
+        self.assertEqual(cm.exception.args, ('one', 'two'))
 
     def test_uploading_temp_file(self):
         with tempfile.TemporaryFile() as test_file:
