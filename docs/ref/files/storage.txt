@@ -4,10 +4,10 @@ File storage API
 
 .. module:: django.core.files.storage
 
-Getting the current storage class
+Getting the default storage class
 =================================
 
-Django provides two convenient ways to access the current storage class:
+Django provides convenient ways to access the default storage class:
 
 .. class:: DefaultStorage
 
@@ -15,6 +15,11 @@ Django provides two convenient ways to access the current storage class:
     lazy access to the current default storage system as defined by
     :setting:`DEFAULT_FILE_STORAGE`. :class:`DefaultStorage` uses
     :func:`~django.core.files.storage.get_storage_class` internally.
+
+.. data:: default_storage
+
+    :data:`~django.core.files.storage.default_storage` is an instance of the
+    :class:`~django.core.files.storage.DefaultStorage`.
 
 .. function:: get_storage_class(import_path=None)
 
@@ -69,11 +74,6 @@ The ``FileSystemStorage`` class
         time of the last metadata change, and on others (like Windows), it's
         the creation time of the file.
 
-.. versionchanged:: 3.1
-
-    Support for :class:`pathlib.Path` was added to the
-    ``FileSystemStorage.save()`` method.
-
 The ``Storage`` class
 =====================
 
@@ -93,7 +93,7 @@ The ``Storage`` class
 
         Deletes the file referenced by ``name``. If deletion is not supported
         on the target storage system this will raise ``NotImplementedError``
-        instead
+        instead.
 
     .. method:: exists(name)
 
