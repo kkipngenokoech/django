@@ -10,6 +10,7 @@ from django.contrib.gis.geos import (
 )
 from django.core.management import call_command
 from django.db import NotSupportedError, connection
+from django.db.models import F, OuterRef, Subquery
 from django.test import TestCase, skipUnlessDBFeature
 
 from ..utils import (
@@ -17,8 +18,8 @@ from ..utils import (
     spatialite,
 )
 from .models import (
-    City, Country, Feature, MinusOneSRID, NonConcreteModel, PennsylvaniaCity,
-    State, Track,
+    City, Country, Feature, MinusOneSRID, MultiFields, NonConcreteModel,
+    PennsylvaniaCity, State, Track,
 )
 
 
@@ -429,6 +430,12 @@ class GeoLookupTest(TestCase):
             with self.subTest(lookup=lookup):
                 self.assertNotIn(null, State.objects.filter(**{'poly__%s' % lookup: geom}))
 
+    def test_wkt_string_in_lookup(self):
+        # Valid WKT strings don't emit error logs.
+        with self.assertRaisesMessage(AssertionError, 'no logs'):
+            with self.assertLogs('django.contrib.gis', 'ERROR'):
+                State.objects.filter(poly__intersects='LINESTRING(0 0, 1 1, 5 5)')
+
     @skipUnlessDBFeature("supports_relate_lookup")
     def test_relate_lookup(self):
         "Testing the 'relate' lookup type."
@@ -493,6 +500,21 @@ class GeoLookupTest(TestCase):
         for lookup in lookups:
             with self.subTest(lookup):
                 City.objects.filter(**{'point__' + lookup: functions.Union('point', 'point')}).exists()
+
+    def test_subquery_annotation(self):
+        multifields = MultiFields.objects.create(
+            city=City.objects.create(point=Point(1, 1)),
+            point=Point(2, 2),
+            poly=Polygon.from_bbox((0, 0, 2, 2)),
+        )
+        qs = MultiFields.objects.annotate(
+            city_point=Subquery(City.objects.filter(
+                id=OuterRef('city'),
+            ).values('point')),
+        ).filter(
+            city_point__within=F('poly'),
+        )
+        self.assertEqual(qs.get(), multifields)
 
 
 class GeoQuerySetTest(TestCase):

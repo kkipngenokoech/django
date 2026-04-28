@@ -16,7 +16,7 @@ from sqlite3 import dbapi2 as Database
 import pytz
 
 from django.core.exceptions import ImproperlyConfigured
-from django.db import utils
+from django.db import IntegrityError
 from django.db.backends import utils as backend_utils
 from django.db.backends.base.base import BaseDatabaseWrapper
 from django.utils import timezone
@@ -296,7 +296,8 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         return not bool(enabled)
 
     def enable_constraint_checking(self):
-        self.cursor().execute('PRAGMA foreign_keys = ON')
+        with self.cursor() as cursor:
+            cursor.execute('PRAGMA foreign_keys = ON')
 
     def check_constraints(self, table_names=None):
         """
@@ -309,7 +310,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         if self.features.supports_pragma_foreign_key_check:
             with self.cursor() as cursor:
                 if table_names is None:
-                    violations = self.cursor().execute('PRAGMA foreign_key_check').fetchall()
+                    violations = cursor.execute('PRAGMA foreign_key_check').fetchall()
                 else:
                     violations = chain.from_iterable(
                         cursor.execute('PRAGMA foreign_key_check(%s)' % table_name).fetchall()
@@ -328,7 +329,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
                         ),
                         (rowid,),
                     ).fetchone()
-                    raise utils.IntegrityError(
+                    raise IntegrityError(
                         "The row in table '%s' with primary key '%s' has an "
                         "invalid foreign key: %s.%s contains a value '%s' that "
                         "does not have a corresponding value in %s.%s." % (
@@ -360,7 +361,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
                             )
                         )
                         for bad_row in cursor.fetchall():
-                            raise utils.IntegrityError(
+                            raise IntegrityError(
                                 "The row in table '%s' with primary key '%s' has an "
                                 "invalid foreign key: %s.%s contains a value '%s' that "
                                 "does not have a corresponding value in %s.%s." % (

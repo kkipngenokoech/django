@@ -139,6 +139,10 @@ The functions defined in this module share the following properties:
     UTC offsets aren't supported; if ``value`` describes one, the result is
     ``None``.
 
+    .. versionchanged:: 3.1
+
+        Support for comma separators for milliseconds was added.
+
 .. function:: parse_datetime(value)
 
     Parses a string and returns a :class:`datetime.datetime`.
@@ -146,13 +150,23 @@ The functions defined in this module share the following properties:
     UTC offsets are supported; if ``value`` describes one, the result's
     ``tzinfo`` attribute is a :class:`datetime.timezone` instance.
 
+    .. versionchanged:: 3.1
+
+        Support for comma separators for milliseconds was added.
+
 .. function:: parse_duration(value)
 
     Parses a string and returns a :class:`datetime.timedelta`.
 
-    Expects data in the format ``"DD HH:MM:SS.uuuuuu"`` or as specified by ISO
-    8601 (e.g. ``P4DT1H15M20S`` which is equivalent to ``4 1:15:20``) or
-    PostgreSQL's day-time interval format (e.g. ``3 days 04:05:06``).
+    Expects data in the format ``"DD HH:MM:SS.uuuuuu"``,
+    ``"DD HH:MM:SS,uuuuuu"``,  or as specified by ISO 8601 (e.g.
+    ``P4DT1H15M20S`` which is equivalent to ``4 1:15:20``) or PostgreSQL's
+    day-time interval format (e.g. ``3 days 04:05:06``).
+
+    .. versionchanged:: 3.1
+
+        Support for comma separators for decimal fractions in the ISO 8601
+        format and for the format ``"DD HH:MM:SS,uuuuuu"`` was added.
 
 ``django.utils.decorators``
 ===========================
@@ -699,8 +713,8 @@ escaping HTML.
 
 .. function:: http_date(epoch_seconds=None)
 
-    Formats the time to match the :rfc:`1123` date format as specified by HTTP
-    :rfc:`7231#section-7.1.1.1`.
+    Formats the time to match the :rfc:`1123#section-5.2.14` date format as
+    specified by HTTP :rfc:`7231#section-7.1.1.1`.
 
     Accepts a floating point number expressed in seconds since the epoch in
     UTC--such as that outputted by ``time.time()``. If set to ``None``,
@@ -816,10 +830,10 @@ appropriate entities.
     Converts a string to a URL slug by:
 
     #. Converting to ASCII if ``allow_unicode`` is ``False`` (the default).
+    #. Converting to lowercase.
     #. Removing characters that aren't alphanumerics, underscores, hyphens, or
        whitespace.
     #. Removing leading and trailing whitespace.
-    #. Converting to lowercase.
     #. Replacing any whitespace or repeated dashes with single dashes.
 
     For example::

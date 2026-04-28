@@ -8,11 +8,9 @@ from sqlite3 import dbapi2
 from unittest import mock
 
 from django.core.exceptions import ImproperlyConfigured
-from django.db import ConnectionHandler, connection, transaction
-from django.db.models import Avg, StdDev, Sum, Variance
-from django.db.models.aggregates import Aggregate
-from django.db.models.fields import CharField
-from django.db.utils import NotSupportedError
+from django.db import NotSupportedError, connection, transaction
+from django.db.models import Aggregate, Avg, CharField, StdDev, Sum, Variance
+from django.db.utils import ConnectionHandler
 from django.test import (
     TestCase, TransactionTestCase, override_settings, skipIfDBFeature,
 )
@@ -199,7 +197,8 @@ class LastExecutedQueryTest(TestCase):
     def test_no_interpolation(self):
         # This shouldn't raise an exception (#17158)
         query = "SELECT strftime('%Y', 'now');"
-        connection.cursor().execute(query)
+        with connection.cursor() as cursor:
+            cursor.execute(query)
         self.assertEqual(connection.queries[-1]['sql'], query)
 
     def test_parameter_quoting(self):
@@ -207,7 +206,8 @@ class LastExecutedQueryTest(TestCase):
         # worth testing that parameters are quoted (#14091).
         query = "SELECT %s"
         params = ["\"'\\"]
-        connection.cursor().execute(query, params)
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
         # Note that the single quote is repeated
         substituted = "SELECT '\"''\\'"
         self.assertEqual(connection.queries[-1]['sql'], substituted)

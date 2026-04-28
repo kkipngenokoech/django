@@ -202,6 +202,45 @@ class MultipleFieldsTest(GrailTestData, PostgreSQLTestCase):
         )
         self.assertSequenceEqual(searched, [self.french])
 
+    @skipUnlessDBFeature('has_websearch_to_tsquery')
+    def test_web_search(self):
+        line_qs = Line.objects.annotate(search=SearchVector('dialogue'))
+        searched = line_qs.filter(
+            search=SearchQuery(
+                '"burned body" "split kneecaps"',
+                search_type='websearch',
+            ),
+        )
+        self.assertSequenceEqual(searched, [])
+        searched = line_qs.filter(
+            search=SearchQuery(
+                '"body burned" "kneecaps split" -"nostrils"',
+                search_type='websearch',
+            ),
+        )
+        self.assertSequenceEqual(searched, [self.verse1])
+        searched = line_qs.filter(
+            search=SearchQuery(
+                '"Sir Robin" ("kneecaps" OR "Camelot")',
+                search_type='websearch',
+            ),
+        )
+        self.assertSequenceEqual(searched, [self.verse0, self.verse1])
+
+    @skipUnlessDBFeature('has_websearch_to_tsquery')
+    def test_web_search_with_config(self):
+        line_qs = Line.objects.annotate(
+            search=SearchVector('scene__setting', 'dialogue', config='french'),
+        )
+        searched = line_qs.filter(
+            search=SearchQuery('cadeau -beau', search_type='websearch', config='french'),
+        )
+        self.assertSequenceEqual(searched, [])
+        searched = line_qs.filter(
+            search=SearchQuery('beau cadeau', search_type='websearch', config='french'),
+        )
+        self.assertSequenceEqual(searched, [self.french])
+
     def test_bad_search_type(self):
         with self.assertRaisesMessage(ValueError, "Unknown search_type argument 'foo'."):
             SearchQuery('kneecaps', search_type='foo')
@@ -249,6 +288,25 @@ class TestCombinations(GrailTestData, PostgreSQLTestCase):
             ),
         ).filter(search='bedemir')
         self.assertCountEqual(searched, [self.bedemir0, self.bedemir1, self.crowd, self.witch, self.duck])
+
+    def test_vector_combined_mismatch(self):
+        msg = (
+            'SearchVector can only be combined with other SearchVector '
+            'instances, got NoneType.'
+        )
+        with self.assertRaisesMessage(TypeError, msg):
+            Line.objects.filter(dialogue__search=None + SearchVector('character__name'))
+
+    def test_combine_different_vector_configs(self):
+        searched = Line.objects.annotate(
+            search=(
+                SearchVector('dialogue', config='english') +
+                SearchVector('dialogue', config='french')
+            ),
+        ).filter(
+            search=SearchQuery('cadeaux', config='french') | SearchQuery('nostrils')
+        )
+        self.assertCountEqual(searched, [self.french, self.verse2])
 
     def test_query_and(self):
         searched = Line.objects.annotate(
@@ -301,7 +359,10 @@ class TestCombinations(GrailTestData, PostgreSQLTestCase):
         self.assertCountEqual(searched, [self.verse0, self.verse1, self.verse2])
 
     def test_query_combined_mismatch(self):
-        msg = "SearchQuery can only be combined with other SearchQuerys, got"
+        msg = (
+            'SearchQuery can only be combined with other SearchQuery '
+            'instances, got NoneType.'
+        )
         with self.assertRaisesMessage(TypeError, msg):
             Line.objects.filter(dialogue__search=None | SearchQuery('kneecaps'))
 

@@ -80,7 +80,7 @@ class Media:
     def render_js(self):
         return [
             format_html(
-                '<script type="text/javascript" src="{}"></script>',
+                '<script src="{}"></script>',
                 self.absolute_path(path)
             ) for path in self._js
         ]
@@ -183,7 +183,7 @@ class MediaDefiningClass(type):
     Metaclass for classes that can have media definitions.
     """
     def __new__(mcs, name, bases, attrs):
-        new_class = super(MediaDefiningClass, mcs).__new__(mcs, name, bases, attrs)
+        new_class = super().__new__(mcs, name, bases, attrs)
 
         if 'media' not in attrs:
             new_class.media = media_property(new_class)
@@ -387,6 +387,9 @@ class FileInput(Input):
     def value_omitted_from_data(self, data, files, name):
         return name not in files
 
+    def use_required_attribute(self, initial):
+        return super().use_required_attribute(initial) and not initial
+
 
 FILE_INPUT_CONTRADICTION = object()
 
@@ -450,9 +453,6 @@ class ClearableFileInput(FileInput):
             # False signals to clear any existing value, as opposed to just None
             return False
         return upload
-
-    def use_required_attribute(self, initial):
-        return super().use_required_attribute(initial) and not initial
 
     def value_omitted_from_data(self, data, files, name):
         return (
@@ -522,9 +522,7 @@ class CheckboxInput(Input):
 
     def get_context(self, name, value, attrs):
         if self.check_test(value):
-            if attrs is None:
-                attrs = {}
-            attrs['checked'] = True
+            attrs = {**(attrs or {}), 'checked': True}
         return super().get_context(name, value, attrs)
 
     def value_from_datadict(self, data, files, name):

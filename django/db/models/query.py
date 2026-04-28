@@ -12,18 +12,17 @@ from itertools import chain
 from django.conf import settings
 from django.core import exceptions
 from django.db import (
-    DJANGO_VERSION_PICKLE_KEY, IntegrityError, connections, router,
-    transaction,
+    DJANGO_VERSION_PICKLE_KEY, IntegrityError, NotSupportedError, connections,
+    router, transaction,
 )
-from django.db.models import DateField, DateTimeField, sql
+from django.db.models import AutoField, DateField, DateTimeField, sql
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.deletion import Collector
 from django.db.models.expressions import Case, Expression, F, Value, When
-from django.db.models.fields import AutoField
 from django.db.models.functions import Cast, Trunc
 from django.db.models.query_utils import FilteredRelation, Q
 from django.db.models.sql.constants import CURSOR, GET_ITERATOR_CHUNK_SIZE
-from django.db.utils import NotSupportedError
+from django.db.models.utils import resolve_callables
 from django.utils import timezone
 from django.utils.functional import cached_property, partition
 from django.utils.version import get_version
@@ -591,8 +590,8 @@ class QuerySet:
                 obj, created = self._create_object_from_params(kwargs, params, lock=True)
                 if created:
                     return obj, created
-            for k, v in defaults.items():
-                setattr(obj, k, v() if callable(v) else v)
+            for k, v in resolve_callables(defaults):
+                setattr(obj, k, v)
             obj.save(using=self.db)
         return obj, False
 
@@ -603,16 +602,16 @@ class QuerySet:
         """
         try:
             with transaction.atomic(using=self.db):
-                params = {k: v() if callable(v) else v for k, v in params.items()}
+                params = dict(resolve_callables(params))
                 obj = self.create(**params)
             return obj, True
-        except IntegrityError as e:
+        except IntegrityError:
             try:
                 qs = self.select_for_update() if lock else self
                 return qs.get(**lookup), False
             except self.model.DoesNotExist:
                 pass
-            raise e
+            raise
 
     def _extract_model_params(self, defaults, **kwargs):
         """
@@ -710,6 +709,7 @@ class QuerySet:
 
     def delete(self):
         """Delete the records in the current QuerySet."""
+        self._not_support_combined_queries('delete')
         assert not self.query.is_sliced, \
             "Cannot use 'limit' or 'offset' with delete."
 
@@ -747,7 +747,10 @@ class QuerySet:
         query = self.query.clone()
         query.__class__ = sql.DeleteQuery
         cursor = query.get_compiler(using).execute_sql(CURSOR)
-        return cursor.rowcount if cursor else 0
+        if cursor:
+            with cursor:
+                return cursor.rowcount
+        return 0
     _raw_delete.alters_data = True
 
     def update(self, **kwargs):
@@ -755,6 +758,7 @@ class QuerySet:
         Update all elements in the current QuerySet, setting all the given
         fields to the appropriate values.
         """
+        self._not_support_combined_queries('update')
         assert not self.query.is_sliced, \
             "Cannot update a query once a slice has been taken."
         self._for_write = True
@@ -1533,8 +1537,16 @@ class Prefetch:
         self.prefetch_through = lookup
         # `prefetch_to` is the path to the attribute that stores the result.
         self.prefetch_to = lookup
-        if queryset is not None and not issubclass(queryset._iterable_class, ModelIterable):
-            raise ValueError('Prefetch querysets cannot use values().')
+        if queryset is not None and (
+            isinstance(queryset, RawQuerySet) or (
+                hasattr(queryset, '_iterable_class') and
+                not issubclass(queryset._iterable_class, ModelIterable)
+            )
+        ):
+            raise ValueError(
+                'Prefetch querysets cannot use raw(), values(), and '
+                'values_list().'
+            )
         if to_attr:
             self.prefetch_to = LOOKUP_SEP.join(lookup.split(LOOKUP_SEP)[:-1] + [to_attr])
 

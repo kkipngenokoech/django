@@ -3,8 +3,8 @@ from unittest import mock
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import connection
-from django.db.models import Prefetch, QuerySet
-from django.db.models.query import get_prefetcher, prefetch_related_objects
+from django.db.models import Prefetch, QuerySet, prefetch_related_objects
+from django.db.models.query import get_prefetcher
 from django.db.models.sql import Query
 from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -815,11 +815,19 @@ class CustomPrefetchTests(TestCase):
             self.traverse_qs(list(houses), [['occupants', 'houses', 'main_room']])
 
     def test_values_queryset(self):
-        with self.assertRaisesMessage(ValueError, 'Prefetch querysets cannot use values().'):
+        msg = 'Prefetch querysets cannot use raw(), values(), and values_list().'
+        with self.assertRaisesMessage(ValueError, msg):
             Prefetch('houses', House.objects.values('pk'))
+        with self.assertRaisesMessage(ValueError, msg):
+            Prefetch('houses', House.objects.values_list('pk'))
         # That error doesn't affect managers with custom ModelIterable subclasses
         self.assertIs(Teacher.objects_custom.all()._iterable_class, ModelIterableSubclass)
         Prefetch('teachers', Teacher.objects_custom.all())
+
+    def test_raw_queryset(self):
+        msg = 'Prefetch querysets cannot use raw(), values(), and values_list().'
+        with self.assertRaisesMessage(ValueError, msg):
+            Prefetch('houses', House.objects.raw('select pk from house'))
 
     def test_to_attr_doesnt_cache_through_attr_as_list(self):
         house = House.objects.prefetch_related(

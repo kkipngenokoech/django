@@ -8,11 +8,11 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.validators import MaxValueValidator, RegexValidator
 from django.forms import (
     BooleanField, CharField, CheckboxSelectMultiple, ChoiceField, DateField,
-    DateTimeField, EmailField, FileField, FloatField, Form, HiddenInput,
-    ImageField, IntegerField, MultipleChoiceField, MultipleHiddenInput,
-    MultiValueField, NullBooleanField, PasswordInput, RadioSelect, Select,
-    SplitDateTimeField, SplitHiddenDateTimeWidget, Textarea, TextInput,
-    TimeField, ValidationError, forms,
+    DateTimeField, EmailField, FileField, FileInput, FloatField, Form,
+    HiddenInput, ImageField, IntegerField, MultipleChoiceField,
+    MultipleHiddenInput, MultiValueField, NullBooleanField, PasswordInput,
+    RadioSelect, Select, SplitDateTimeField, SplitHiddenDateTimeWidget,
+    Textarea, TextInput, TimeField, ValidationError, forms,
 )
 from django.forms.renderers import DjangoTemplates, get_default_renderer
 from django.forms.utils import ErrorList
@@ -1244,6 +1244,22 @@ value="Should escape &lt; &amp; &gt; and &lt;script&gt;alert(&#x27;xss&#x27;)&lt
         self.assertTrue(f.has_error(NON_FIELD_ERRORS))
         self.assertTrue(f.has_error(NON_FIELD_ERRORS, 'password_mismatch'))
         self.assertFalse(f.has_error(NON_FIELD_ERRORS, 'anything'))
+
+    def test_html_output_with_hidden_input_field_errors(self):
+        class TestForm(Form):
+            hidden_input = CharField(widget=HiddenInput)
+
+            def clean(self):
+                self.add_error(None, 'Form error')
+
+        f = TestForm(data={})
+        error_dict = {
+            'hidden_input': ['This field is required.'],
+            '__all__': ['Form error'],
+        }
+        self.assertEqual(f.errors, error_dict)
+        f.as_table()
+        self.assertEqual(f.errors, error_dict)
 
     def test_dynamic_construction(self):
         # It's possible to construct a Form dynamically by adding to the self.fields
@@ -2485,6 +2501,25 @@ Password: <input type="password" name="password" required>
         f = FileForm({})
         self.assertEqual(f.errors, {})
         self.assertEqual(f.cleaned_data['file1'], 'resume.txt')
+
+    def test_filefield_with_fileinput_required(self):
+        class FileForm(Form):
+            file1 = forms.FileField(widget=FileInput)
+
+        f = FileForm(auto_id=False)
+        self.assertHTMLEqual(
+            f.as_table(),
+            '<tr><th>File1:</th><td>'
+            '<input type="file" name="file1" required></td></tr>',
+        )
+        # A required file field with initial data doesn't contain the required
+        # HTML attribute. The file input is left blank by the user to keep the
+        # existing, initial value.
+        f = FileForm(initial={'file1': 'resume.txt'}, auto_id=False)
+        self.assertHTMLEqual(
+            f.as_table(),
+            '<tr><th>File1:</th><td><input type="file" name="file1"></td></tr>',
+        )
 
     def test_basic_processing_in_view(self):
         class UserRegistration(Form):
