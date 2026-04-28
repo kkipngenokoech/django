@@ -14,7 +14,9 @@ from django.contrib.admin.tests import AdminSeleniumTestCase
 from django.contrib.auth.models import User
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db.models import CharField, DateField, DateTimeField, UUIDField
+from django.db.models import (
+    CharField, DateField, DateTimeField, ManyToManyField, UUIDField,
+)
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import translation
@@ -138,6 +140,21 @@ class AdminFormfieldForDBFieldTests(SimpleTestCase):
         self.assertEqual(f2.widget.attrs['maxlength'], '20')
         self.assertEqual(f2.widget.attrs['size'], '10')
 
+    def test_formfield_overrides_m2m_filter_widget(self):
+        """
+        The autocomplete_fields, raw_id_fields, filter_vertical, and
+        filter_horizontal widgets for ManyToManyFields may be overridden by
+        specifying a widget in formfield_overrides.
+        """
+        class BandAdmin(admin.ModelAdmin):
+            filter_vertical = ['members']
+            formfield_overrides = {
+                ManyToManyField: {'widget': forms.CheckboxSelectMultiple},
+            }
+        ma = BandAdmin(Band, admin.site)
+        field = ma.formfield_for_dbfield(Band._meta.get_field('members'), request=None)
+        self.assertIsInstance(field.widget.widget, forms.CheckboxSelectMultiple)
+
     def test_formfield_overrides_for_datetime_field(self):
         """
         Overriding the widget for DateTimeField doesn't overrides the default
@@ -220,7 +237,7 @@ class AdminForeignKeyRawIdWidget(TestDataMixin, TestCase):
         pk = band.pk
         band.delete()
         post_data = {
-            "main_band": '%s' % pk,
+            "main_band": str(pk),
         }
         # Try posting with a nonexistent pk in a raw id field: this
         # should result in an error message, not a server exception.
@@ -375,42 +392,42 @@ class AdminURLWidgetTest(SimpleTestCase):
         w = widgets.AdminURLFieldWidget()
         output = w.render('test', 'http://example.com/<sometag>some-text</sometag>')
         self.assertEqual(
-            HREF_RE.search(output).groups()[0],
+            HREF_RE.search(output)[1],
             'http://example.com/%3Csometag%3Esome-text%3C/sometag%3E',
         )
         self.assertEqual(
-            TEXT_RE.search(output).groups()[0],
+            TEXT_RE.search(output)[1],
             'http://example.com/&lt;sometag&gt;some-text&lt;/sometag&gt;',
         )
         self.assertEqual(
-            VALUE_RE.search(output).groups()[0],
+            VALUE_RE.search(output)[1],
             'http://example.com/&lt;sometag&gt;some-text&lt;/sometag&gt;',
         )
         output = w.render('test', 'http://example-äüö.com/<sometag>some-text</sometag>')
         self.assertEqual(
-            HREF_RE.search(output).groups()[0],
+            HREF_RE.search(output)[1],
             'http://xn--example--7za4pnc.com/%3Csometag%3Esome-text%3C/sometag%3E',
         )
         self.assertEqual(
-            TEXT_RE.search(output).groups()[0],
+            TEXT_RE.search(output)[1],
             'http://example-äüö.com/&lt;sometag&gt;some-text&lt;/sometag&gt;',
         )
         self.assertEqual(
-            VALUE_RE.search(output).groups()[0],
+            VALUE_RE.search(output)[1],
             'http://example-äüö.com/&lt;sometag&gt;some-text&lt;/sometag&gt;',
         )
         output = w.render('test', 'http://www.example.com/%C3%A4"><script>alert("XSS!")</script>"')
         self.assertEqual(
-            HREF_RE.search(output).groups()[0],
+            HREF_RE.search(output)[1],
             'http://www.example.com/%C3%A4%22%3E%3Cscript%3Ealert(%22XSS!%22)%3C/script%3E%22',
         )
         self.assertEqual(
-            TEXT_RE.search(output).groups()[0],
+            TEXT_RE.search(output)[1],
             'http://www.example.com/%C3%A4&quot;&gt;&lt;script&gt;'
             'alert(&quot;XSS!&quot;)&lt;/script&gt;&quot;'
         )
         self.assertEqual(
-            VALUE_RE.search(output).groups()[0],
+            VALUE_RE.search(output)[1],
             'http://www.example.com/%C3%A4&quot;&gt;&lt;script&gt;alert(&quot;XSS!&quot;)&lt;/script&gt;&quot;',
         )
 
@@ -863,6 +880,7 @@ class DateTimePickerSeleniumTests(AdminWidgetSeleniumTestCase):
         The calendar shows the date from the input field for every locale
         supported by Django.
         """
+        self.selenium.set_window_size(1024, 768)
         self.admin_login(username='super', password='secret', login_url='/')
 
         # Enter test data
@@ -921,8 +939,6 @@ class DateTimePickerShortcutsSeleniumTests(AdminWidgetSeleniumTestCase):
         if tz_yesterday != tz_tomorrow:
             error_margin += timedelta(hours=1)
 
-        now = datetime.now()
-
         self.selenium.get(self.live_server_url + reverse('admin:admin_widgets_member_add'))
 
         self.selenium.find_element_by_id('id_name').send_keys('test')
@@ -930,6 +946,7 @@ class DateTimePickerShortcutsSeleniumTests(AdminWidgetSeleniumTestCase):
         # Click on the "today" and "now" shortcuts.
         shortcuts = self.selenium.find_elements_by_css_selector('.field-birthdate .datetimeshortcuts')
 
+        now = datetime.now()
         for shortcut in shortcuts:
             shortcut.find_element_by_tag_name('a').click()
 
@@ -1126,6 +1143,7 @@ class HorizontalVerticalFilterSeleniumTests(AdminWidgetSeleniumTestCase):
         self.assertEqual(self.selenium.current_url, original_url)
 
     def test_basic(self):
+        self.selenium.set_window_size(1024, 768)
         self.school.students.set([self.lisa, self.peter])
         self.school.alumni.set([self.lisa, self.peter])
 
@@ -1150,6 +1168,7 @@ class HorizontalVerticalFilterSeleniumTests(AdminWidgetSeleniumTestCase):
         """
         from selenium.webdriver.common.keys import Keys
 
+        self.selenium.set_window_size(1024, 768)
         self.school.students.set([self.lisa, self.peter])
         self.school.alumni.set([self.lisa, self.peter])
 

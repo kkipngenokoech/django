@@ -90,6 +90,10 @@ class SafeExceptionReporterFilter:
                 cleansed = self.cleansed_substitute
             elif isinstance(value, dict):
                 cleansed = {k: self.cleanse_setting(k, v) for k, v in value.items()}
+            elif isinstance(value, list):
+                cleansed = [self.cleanse_setting('', v) for v in value]
+            elif isinstance(value, tuple):
+                cleansed = tuple([self.cleanse_setting('', v) for v in value])
             else:
                 cleansed = value
         except TypeError:
@@ -369,7 +373,7 @@ class ExceptionReporter:
                 # (https://www.python.org/dev/peps/pep-0263/)
                 match = re.search(br'coding[:=]\s*([-\w.]+)', line)
                 if match:
-                    encoding = match.group(1).decode('ascii')
+                    encoding = match[1].decode('ascii')
                     break
             source = [str(sline, encoding, 'replace') for sline in source]
 

@@ -52,7 +52,7 @@ class InspectDBTestCase(TestCase):
         output = out.getvalue()
 
         def assertFieldType(name, definition):
-            out_def = re.search(r'^\s*%s = (models.*)$' % name, output, re.MULTILINE).groups()[0]
+            out_def = re.search(r'^\s*%s = (models.*)$' % name, output, re.MULTILINE)[1]
             self.assertEqual(definition, out_def)
 
         return assertFieldType
@@ -84,6 +84,15 @@ class InspectDBTestCase(TestCase):
             assertFieldType('uuid_field', "models.UUIDField()")
         elif not connection.features.interprets_empty_strings_as_nulls:
             assertFieldType('uuid_field', "models.CharField(max_length=32)")
+
+    @skipUnlessDBFeature('can_introspect_json_field', 'supports_json_field')
+    def test_json_field(self):
+        out = StringIO()
+        call_command('inspectdb', 'inspectdb_jsonfieldcolumntype', stdout=out)
+        output = out.getvalue()
+        if not connection.features.interprets_empty_strings_as_nulls:
+            self.assertIn('json_field = models.JSONField()', output)
+        self.assertIn('null_json_field = models.JSONField(blank=True, null=True)', output)
 
     def test_number_field_types(self):
         """Test introspection of various Django field types"""

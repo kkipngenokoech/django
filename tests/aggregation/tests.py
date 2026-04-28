@@ -1,6 +1,7 @@
 import datetime
 import re
 from decimal import Decimal
+from unittest import skipIf
 
 from django.core.exceptions import FieldError
 from django.db import connection
@@ -1190,6 +1191,42 @@ class AggregateTestCase(TestCase):
             },
         ])
 
+    def test_aggregation_subquery_annotation_values_collision(self):
+        books_rating_qs = Book.objects.filter(
+            publisher=OuterRef('pk'),
+            price=Decimal('29.69'),
+        ).values('rating')
+        publisher_qs = Publisher.objects.filter(
+            book__contact__age__gt=20,
+            name=self.p1.name,
+        ).annotate(
+            rating=Subquery(books_rating_qs),
+            contacts_count=Count('book__contact'),
+        ).values('rating').annotate(total_count=Count('rating'))
+        self.assertEqual(list(publisher_qs), [
+            {'rating': 4.0, 'total_count': 2},
+        ])
+
+    @skipUnlessDBFeature('supports_subqueries_in_group_by')
+    @skipIf(
+        connection.vendor == 'mysql' and 'ONLY_FULL_GROUP_BY' in connection.sql_mode,
+        'GROUP BY optimization does not work properly when ONLY_FULL_GROUP_BY '
+        'mode is enabled on MySQL, see #31331.',
+    )
+    def test_aggregation_subquery_annotation_multivalued(self):
+        """
+        Subquery annotations must be included in the GROUP BY if they use
+        potentially multivalued relations (contain the LOOKUP_SEP).
+        """
+        subquery_qs = Author.objects.filter(
+            pk=OuterRef('pk'),
+            book__name=OuterRef('book__name'),
+        ).values('pk')
+        author_qs = Author.objects.annotate(
+            subquery_id=Subquery(subquery_qs),
+        ).annotate(count=Count('book'))
+        self.assertEqual(author_qs.count(), Author.objects.count())
+
     def test_aggregation_order_by_not_selected_annotation_values(self):
         result_asc = [
             self.b4.pk,
@@ -1248,6 +1285,7 @@ class AggregateTestCase(TestCase):
         ).annotate(total=Count('*'))
         self.assertEqual(dict(has_long_books_breakdown), {True: 2, False: 3})
 
+    @skipUnlessDBFeature('supports_subqueries_in_group_by')
     def test_aggregation_subquery_annotation_related_field(self):
         publisher = Publisher.objects.create(name=self.a9.name, num_awards=2)
         book = Book.objects.create(
@@ -1267,3 +1305,8 @@ class AggregateTestCase(TestCase):
             contact_publisher__isnull=False,
         ).annotate(count=Count('authors'))
         self.assertSequenceEqual(books_qs, [book])
+        # FIXME: GROUP BY doesn't need to include a subquery with
+        # non-multivalued JOINs, see Col.possibly_multivalued (refs #31150):
+        # with self.assertNumQueries(1) as ctx:
+        #     self.assertSequenceEqual(books_qs, [book])
+        # self.assertEqual(ctx[0]['sql'].count('SELECT'), 2)

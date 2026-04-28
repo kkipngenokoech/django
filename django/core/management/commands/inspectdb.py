@@ -8,7 +8,7 @@ from django.db.models.constants import LOOKUP_SEP
 
 class Command(BaseCommand):
     help = "Introspects the database tables in the given database and outputs a Django model module."
-    requires_system_checks = False
+    requires_system_checks = []
     stealth_options = ('table_name_filter',)
     db_module = 'django.db'
 
@@ -31,7 +31,7 @@ class Command(BaseCommand):
     def handle(self, **options):
         try:
             for line in self.handle_inspection(options):
-                self.stdout.write("%s\n" % line)
+                self.stdout.write(line)
         except NotImplementedError:
             raise CommandError("Database inspection isn't supported for the currently selected database backend.")
 
