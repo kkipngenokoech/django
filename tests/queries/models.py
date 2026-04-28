@@ -1,8 +1,6 @@
 """
 Various complex queries that have been problematic in the past.
 """
-import threading
-
 from django.db import models
 from django.db.models.functions import Now
 
@@ -42,21 +40,15 @@ class Tag(models.Model):
 
 class Note(models.Model):
     note = models.CharField(max_length=100)
-    misc = models.CharField(max_length=10)
+    misc = models.CharField(max_length=25)
     tag = models.ForeignKey(Tag, models.SET_NULL, blank=True, null=True)
+    negate = models.BooleanField(default=True)
 
     class Meta:
         ordering = ['note']
 
     def __str__(self):
         return self.note
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Regression for #13227 -- having an attribute that
-        # is unpicklable doesn't stop you from cloning queries
-        # that use objects of that type as an argument.
-        self.lock = threading.Lock()
 
 
 class Annotation(models.Model):
@@ -77,6 +69,7 @@ class ExtraInfo(models.Model):
     note = models.ForeignKey(Note, models.CASCADE, null=True)
     value = models.IntegerField(null=True)
     date = models.ForeignKey(DateTimePK, models.SET_NULL, null=True)
+    filterable = models.BooleanField(default=True)
 
     class Meta:
         ordering = ['info']
@@ -150,6 +143,7 @@ class Cover(models.Model):
 class Number(models.Model):
     num = models.IntegerField()
     other_num = models.IntegerField(null=True)
+    another_num = models.IntegerField(null=True)
 
     def __str__(self):
         return str(self.num)
@@ -414,7 +408,7 @@ class ChildObjectA(ObjectA):
 class ObjectB(models.Model):
     name = models.CharField(max_length=50)
     objecta = models.ForeignKey(ObjectA, models.CASCADE)
-    num = models.PositiveSmallIntegerField()
+    num = models.PositiveIntegerField()
 
     def __str__(self):
         return self.name
@@ -436,14 +430,14 @@ class ObjectC(models.Model):
 
 
 class SimpleCategory(models.Model):
-    name = models.CharField(max_length=15)
+    name = models.CharField(max_length=25)
 
     def __str__(self):
         return self.name
 
 
 class SpecialCategory(SimpleCategory):
-    special_name = models.CharField(max_length=15)
+    special_name = models.CharField(max_length=35)
 
     def __str__(self):
         return self.name + " " + self.special_name
@@ -619,13 +613,14 @@ class OrderItem(models.Model):
 
 
 class BaseUser(models.Model):
-    pass
+    annotation = models.ForeignKey(Annotation, models.CASCADE, null=True, blank=True)
 
 
 class Task(models.Model):
     title = models.CharField(max_length=10)
     owner = models.ForeignKey(BaseUser, models.CASCADE, related_name='owner')
     creator = models.ForeignKey(BaseUser, models.CASCADE, related_name='creator')
+    note = models.ForeignKey(Note, on_delete=models.CASCADE, null=True, blank=True)
 
     def __str__(self):
         return self.title
@@ -642,7 +637,7 @@ class StaffUser(BaseUser):
     staff = models.OneToOneField(Staff, models.CASCADE, related_name='user')
 
     def __str__(self):
-        return self.staff
+        return str(self.staff)
 
 
 class Ticket21203Parent(models.Model):

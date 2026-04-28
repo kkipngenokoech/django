@@ -118,6 +118,7 @@ class SimpleListFilter(ListFilter):
 class FieldListFilter(ListFilter):
     _field_list_filters = []
     _take_priority_index = 0
+    list_separator = ','
 
     def __init__(self, field, request, params, model, model_admin, field_path):
         self.field = field
@@ -127,7 +128,7 @@ class FieldListFilter(ListFilter):
         for p in self.expected_parameters():
             if p in params:
                 value = params.pop(p)
-                self.used_parameters[p] = prepare_lookup_value(p, value)
+                self.used_parameters[p] = prepare_lookup_value(p, value, self.list_separator)
 
     def has_output(self):
         return True
@@ -244,10 +245,12 @@ class BooleanFieldListFilter(FieldListFilter):
         return [self.lookup_kwarg, self.lookup_kwarg2]
 
     def choices(self, changelist):
+        field_choices = dict(self.field.flatchoices)
         for lookup, title in (
-                (None, _('All')),
-                ('1', _('Yes')),
-                ('0', _('No'))):
+            (None, _('All')),
+            ('1', field_choices.get(True, _('Yes'))),
+            ('0', field_choices.get(False, _('No'))),
+        ):
             yield {
                 'selected': self.lookup_val == lookup and not self.lookup_val2,
                 'query_string': changelist.get_query_string({self.lookup_kwarg: lookup}, [self.lookup_kwarg2]),
@@ -257,7 +260,7 @@ class BooleanFieldListFilter(FieldListFilter):
             yield {
                 'selected': self.lookup_val2 == 'True',
                 'query_string': changelist.get_query_string({self.lookup_kwarg2: 'True'}, [self.lookup_kwarg]),
-                'display': _('Unknown'),
+                'display': field_choices.get(None, _('Unknown')),
             }
 
 
@@ -449,11 +452,12 @@ class EmptyFieldListFilter(FieldListFilter):
         if self.lookup_val not in ('0', '1'):
             raise IncorrectLookupParameters
 
-        lookup_condition = models.Q()
+        lookup_conditions = []
         if self.field.empty_strings_allowed:
-            lookup_condition |= models.Q(**{self.field_path: ''})
+            lookup_conditions.append((self.field_path, ''))
         if self.field.null:
-            lookup_condition |= models.Q(**{'%s__isnull' % self.field_path: True})
+            lookup_conditions.append((f'{self.field_path}__isnull', True))
+        lookup_condition = models.Q(*lookup_conditions, _connector=models.Q.OR)
         if self.lookup_val == '1':
             return queryset.filter(lookup_condition)
         return queryset.exclude(lookup_condition)
