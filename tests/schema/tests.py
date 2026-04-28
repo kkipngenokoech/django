@@ -161,7 +161,7 @@ class SchemaTests(TransactionTestCase):
             schema_editor.add_field(model, field)
             cursor.execute("SELECT {} FROM {};".format(field_name, model._meta.db_table))
             database_default = cursor.fetchall()[0][0]
-            if cast_function and not type(database_default) == type(expected_default):
+            if cast_function and type(database_default) != type(expected_default):
                 database_default = cast_function(database_default)
             self.assertEqual(database_default, expected_default)
 
@@ -292,7 +292,12 @@ class SchemaTests(TransactionTestCase):
         with connection.schema_editor() as editor:
             editor.add_field(Node, new_field)
             editor.execute('UPDATE schema_node SET new_parent_fk_id = %s;', [parent.pk])
-        self.assertIn('new_parent_fk_id', self.get_indexes(Node._meta.db_table))
+        assertIndex = (
+            self.assertIn
+            if connection.features.indexes_foreign_keys
+            else self.assertNotIn
+        )
+        assertIndex('new_parent_fk_id', self.get_indexes(Node._meta.db_table))
 
     @skipUnlessDBFeature(
         'can_create_inline_fk',
@@ -724,12 +729,6 @@ class SchemaTests(TransactionTestCase):
         Foo.objects.create()
 
     def test_alter_not_unique_field_to_primary_key(self):
-        if (
-            connection.vendor == 'mysql' and
-            connection.mysql_is_mariadb and
-            (10, 4, 3) < connection.mysql_version < (10, 5, 2)
-        ):
-            self.skipTest('https://jira.mariadb.org/browse/MDEV-19598')
         # Create the table.
         with connection.schema_editor() as editor:
             editor.create_model(Author)
@@ -1161,6 +1160,7 @@ class SchemaTests(TransactionTestCase):
             editor.create_model(Author)
             editor.create_model(Book)
         expected_fks = 1 if connection.features.supports_foreign_keys else 0
+        expected_indexes = 1 if connection.features.indexes_foreign_keys else 0
 
         # Check the index is right to begin with.
         counts = self.get_constraints_count(
@@ -1168,7 +1168,10 @@ class SchemaTests(TransactionTestCase):
             Book._meta.get_field('author').column,
             (Author._meta.db_table, Author._meta.pk.column),
         )
-        self.assertEqual(counts, {'fks': expected_fks, 'uniques': 0, 'indexes': 1})
+        self.assertEqual(
+            counts,
+            {'fks': expected_fks, 'uniques': 0, 'indexes': expected_indexes},
+        )
 
         old_field = Book._meta.get_field('author')
         new_field = OneToOneField(Author, CASCADE)
@@ -1189,6 +1192,7 @@ class SchemaTests(TransactionTestCase):
             editor.create_model(Author)
             editor.create_model(Book)
         expected_fks = 1 if connection.features.supports_foreign_keys else 0
+        expected_indexes = 1 if connection.features.indexes_foreign_keys else 0
 
         # Check the index is right to begin with.
         counts = self.get_constraints_count(
@@ -1196,7 +1200,10 @@ class SchemaTests(TransactionTestCase):
             Book._meta.get_field('author').column,
             (Author._meta.db_table, Author._meta.pk.column),
         )
-        self.assertEqual(counts, {'fks': expected_fks, 'uniques': 0, 'indexes': 1})
+        self.assertEqual(
+            counts,
+            {'fks': expected_fks, 'uniques': 0, 'indexes': expected_indexes},
+        )
 
         old_field = Book._meta.get_field('author')
         # on_delete changed from CASCADE.
@@ -1211,7 +1218,10 @@ class SchemaTests(TransactionTestCase):
             (Author._meta.db_table, Author._meta.pk.column),
         )
         # The index remains.
-        self.assertEqual(counts, {'fks': expected_fks, 'uniques': 0, 'indexes': 1})
+        self.assertEqual(
+            counts,
+            {'fks': expected_fks, 'uniques': 0, 'indexes': expected_indexes},
+        )
 
     def test_alter_field_o2o_to_fk(self):
         with connection.schema_editor() as editor:
@@ -1941,7 +1951,6 @@ class SchemaTests(TransactionTestCase):
             TagUniqueRename._meta.db_table = old_table_name
 
     @isolate_apps('schema')
-    @unittest.skipIf(connection.vendor == 'sqlite', 'SQLite naively remakes the table on field alteration.')
     @skipUnlessDBFeature('supports_foreign_keys')
     def test_unique_no_unnecessary_fk_drops(self):
         """
@@ -1975,7 +1984,6 @@ class SchemaTests(TransactionTestCase):
         self.assertEqual(len(cm.records), 1)
 
     @isolate_apps('schema')
-    @unittest.skipIf(connection.vendor == 'sqlite', 'SQLite remakes the table on field alteration.')
     def test_unique_and_reverse_m2m(self):
         """
         AlterField can modify a unique field when there's a reverse M2M
@@ -2521,7 +2529,7 @@ class SchemaTests(TransactionTestCase):
             with self.assertRaisesMessage(TransactionManagementError, message):
                 editor.execute(editor.sql_create_table % {'table': 'foo', 'definition': ''})
 
-    @skipUnlessDBFeature('supports_foreign_keys')
+    @skipUnlessDBFeature('supports_foreign_keys', 'indexes_foreign_keys')
     def test_foreign_key_index_long_names_regression(self):
         """
         Regression test for #21497.
@@ -2743,7 +2751,6 @@ class SchemaTests(TransactionTestCase):
             if connection.features.can_introspect_default:
                 self.assertIsNone(field.default)
 
-    @unittest.skipIf(connection.vendor == 'sqlite', 'SQLite naively remakes the table on field alteration.')
     def test_alter_field_default_doesnt_perform_queries(self):
         """
         No queries are performed if a field default changes and the field's
@@ -2757,6 +2764,35 @@ class SchemaTests(TransactionTestCase):
         new_field.set_attributes_from_name('height')
         with connection.schema_editor() as editor, self.assertNumQueries(0):
             editor.alter_field(AuthorWithDefaultHeight, old_field, new_field, strict=True)
+
+    @skipUnlessDBFeature('supports_foreign_keys')
+    def test_alter_field_fk_attributes_noop(self):
+        """
+        No queries are performed when changing field attributes that don't
+        affect the schema.
+        """
+        with connection.schema_editor() as editor:
+            editor.create_model(Author)
+            editor.create_model(Book)
+        old_field = Book._meta.get_field('author')
+        new_field = ForeignKey(
+            Author,
+            blank=True,
+            editable=False,
+            error_messages={'invalid': 'error message'},
+            help_text='help text',
+            limit_choices_to={'limit': 'choice'},
+            on_delete=PROTECT,
+            related_name='related_name',
+            related_query_name='related_query_name',
+            validators=[lambda x: x],
+            verbose_name='verbose name',
+        )
+        new_field.set_attributes_from_name('author')
+        with connection.schema_editor() as editor, self.assertNumQueries(0):
+            editor.alter_field(Book, old_field, new_field, strict=True)
+        with connection.schema_editor() as editor, self.assertNumQueries(0):
+            editor.alter_field(Book, new_field, old_field, strict=True)
 
     def test_add_textfield_unhashable_default(self):
         # Create the table
@@ -2996,12 +3032,6 @@ class SchemaTests(TransactionTestCase):
         Changing the primary key field name of a model with a self-referential
         foreign key (#26384).
         """
-        if (
-            connection.vendor == 'mysql' and
-            connection.mysql_is_mariadb and
-            (10, 4, 12) < connection.mysql_version < (10, 5)
-        ):
-            self.skipTest('https://jira.mariadb.org/browse/MDEV-22775')
         with connection.schema_editor() as editor:
             editor.create_model(Node)
         old_field = Node._meta.get_field('node_id')
@@ -3158,7 +3188,6 @@ class SchemaTests(TransactionTestCase):
                 self.assertIs(statement.references_table('schema_author'), False)
                 self.assertIs(statement.references_table('schema_book'), False)
 
-    @unittest.skipIf(connection.vendor == 'sqlite', 'SQLite naively remakes the table on field alteration.')
     def test_rename_column_renames_deferred_sql_references(self):
         with connection.schema_editor() as editor:
             editor.create_model(Author)
@@ -3236,7 +3265,9 @@ class SchemaTests(TransactionTestCase):
     @isolate_apps('schema')
     @skipUnlessDBFeature('supports_collation_on_charfield')
     def test_db_collation_charfield(self):
-        collation = connection.features.test_collations['non_default']
+        collation = connection.features.test_collations.get('non_default')
+        if not collation:
+            self.skipTest('Language collations are not supported.')
 
         class Foo(Model):
             field = CharField(max_length=255, db_collation=collation)
@@ -3256,7 +3287,9 @@ class SchemaTests(TransactionTestCase):
     @isolate_apps('schema')
     @skipUnlessDBFeature('supports_collation_on_textfield')
     def test_db_collation_textfield(self):
-        collation = connection.features.test_collations['non_default']
+        collation = connection.features.test_collations.get('non_default')
+        if not collation:
+            self.skipTest('Language collations are not supported.')
 
         class Foo(Model):
             field = TextField(db_collation=collation)
@@ -3275,10 +3308,13 @@ class SchemaTests(TransactionTestCase):
 
     @skipUnlessDBFeature('supports_collation_on_charfield')
     def test_add_field_db_collation(self):
+        collation = connection.features.test_collations.get('non_default')
+        if not collation:
+            self.skipTest('Language collations are not supported.')
+
         with connection.schema_editor() as editor:
             editor.create_model(Author)
 
-        collation = connection.features.test_collations['non_default']
         new_field = CharField(max_length=255, db_collation=collation)
         new_field.set_attributes_from_name('alias')
         with connection.schema_editor() as editor:
@@ -3292,10 +3328,13 @@ class SchemaTests(TransactionTestCase):
 
     @skipUnlessDBFeature('supports_collation_on_charfield')
     def test_alter_field_db_collation(self):
+        collation = connection.features.test_collations.get('non_default')
+        if not collation:
+            self.skipTest('Language collations are not supported.')
+
         with connection.schema_editor() as editor:
             editor.create_model(Author)
 
-        collation = connection.features.test_collations['non_default']
         old_field = Author._meta.get_field('name')
         new_field = CharField(max_length=255, db_collation=collation)
         new_field.set_attributes_from_name('name')
@@ -3312,10 +3351,13 @@ class SchemaTests(TransactionTestCase):
 
     @skipUnlessDBFeature('supports_collation_on_charfield')
     def test_alter_field_type_and_db_collation(self):
+        collation = connection.features.test_collations.get('non_default')
+        if not collation:
+            self.skipTest('Language collations are not supported.')
+
         with connection.schema_editor() as editor:
             editor.create_model(Note)
 
-        collation = connection.features.test_collations['non_default']
         old_field = Note._meta.get_field('info')
         new_field = CharField(max_length=255, db_collation=collation)
         new_field.set_attributes_from_name('info')

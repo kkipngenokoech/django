@@ -11,13 +11,15 @@ import tempfile
 import threading
 import time
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock, skipIf
 
 from django.conf import settings
 from django.core import management, signals
 from django.core.cache import (
-    DEFAULT_CACHE_ALIAS, CacheKeyWarning, InvalidCacheKey, cache, caches,
+    DEFAULT_CACHE_ALIAS, CacheHandler, CacheKeyWarning, InvalidCacheKey, cache,
+    caches,
 )
 from django.core.cache.backends.base import InvalidCacheBackendError
 from django.core.cache.utils import make_template_fragment_key
@@ -34,13 +36,14 @@ from django.template.context_processors import csrf
 from django.template.response import TemplateResponse
 from django.test import (
     RequestFactory, SimpleTestCase, TestCase, TransactionTestCase,
-    override_settings,
+    ignore_warnings, override_settings,
 )
 from django.test.signals import setting_changed
 from django.utils import timezone, translation
 from django.utils.cache import (
     get_cache_key, learn_cache_key, patch_cache_control, patch_vary_headers,
 )
+from django.utils.deprecation import RemovedInDjango41Warning
 from django.views.decorators.cache import cache_control, cache_page
 
 from .models import Poll, expensive_calculation
@@ -1275,7 +1278,6 @@ configured_caches = {}
 for _cache_params in settings.CACHES.values():
     configured_caches[_cache_params['BACKEND']] = _cache_params
 
-MemcachedCache_params = configured_caches.get('django.core.cache.backends.memcached.MemcachedCache')
 PyLibMCCache_params = configured_caches.get('django.core.cache.backends.memcached.PyLibMCCache')
 PyMemcacheCache_params = configured_caches.get('django.core.cache.backends.memcached.PyMemcacheCache')
 
@@ -1348,10 +1350,7 @@ class BaseMemcachedTests(BaseCacheTests):
         # By default memcached allows objects up to 1MB. For the cache_db session
         # backend to always use the current session, memcached needs to delete
         # the old key if it fails to set.
-        # pylibmc doesn't seem to have SERVER_MAX_VALUE_LENGTH as far as I can
-        # tell from a quick check of its source code. This is falling back to
-        # the default value exposed by python-memcached on my system.
-        max_value_length = getattr(cache._lib, 'SERVER_MAX_VALUE_LENGTH', 1048576)
+        max_value_length = 2 ** 20
 
         cache.set('small_value', 'a')
         self.assertEqual(cache.get('small_value'), 'a')
@@ -1360,11 +1359,10 @@ class BaseMemcachedTests(BaseCacheTests):
         try:
             cache.set('small_value', large_value)
         except Exception:
-            # Some clients (e.g. pylibmc) raise when the value is too large,
-            # while others (e.g. python-memcached) intentionally return True
-            # indicating success. This test is primarily checking that the key
-            # was deleted, so the return/exception behavior for the set()
-            # itself is not important.
+            # Most clients (e.g. pymemcache or pylibmc) raise when the value is
+            # too large. This test is primarily checking that the key was
+            # deleted, so the return/exception behavior for the set() itself is
+            # not important.
             pass
         # small_value should be deleted, or set if configured to accept larger values
         value = cache.get('small_value')
@@ -1389,6 +1387,11 @@ class BaseMemcachedTests(BaseCacheTests):
             self.assertEqual(failing_keys, ['key'])
 
 
+# RemovedInDjango41Warning.
+MemcachedCache_params = configured_caches.get('django.core.cache.backends.memcached.MemcachedCache')
+
+
+@ignore_warnings(category=RemovedInDjango41Warning)
 @unittest.skipUnless(MemcachedCache_params, "MemcachedCache backend not configured")
 @override_settings(CACHES=caches_setting_for_tests(
     base=MemcachedCache_params,
@@ -1418,6 +1421,32 @@ class MemcachedCacheTests(BaseMemcachedTests, TestCase):
         """
         cache.set('key_default_none', None)
         self.assertEqual(cache.get('key_default_none', default='default'), 'default')
+
+
+class MemcachedCacheDeprecationTests(SimpleTestCase):
+    def test_warning(self):
+        from django.core.cache.backends.memcached import MemcachedCache
+
+        # Remove warnings filter on MemcachedCache deprecation warning, added
+        # in runtests.py.
+        warnings.filterwarnings(
+            'error',
+            'MemcachedCache is deprecated',
+            category=RemovedInDjango41Warning,
+        )
+        try:
+            msg = (
+                'MemcachedCache is deprecated in favor of PyMemcacheCache and '
+                'PyLibMCCache.'
+            )
+            with self.assertRaisesMessage(RemovedInDjango41Warning, msg):
+                MemcachedCache('127.0.0.1:11211', {})
+        finally:
+            warnings.filterwarnings(
+                'ignore',
+                'MemcachedCache is deprecated',
+                category=RemovedInDjango41Warning,
+            )
 
 
 @unittest.skipUnless(PyLibMCCache_params, "PyLibMCCache backend not configured")
@@ -1714,7 +1743,7 @@ class CacheUtils(SimpleTestCase):
     def _get_request_cache(self, method='GET', query_string=None, update_cache=None):
         request = self._get_request(self.host, self.path,
                                     method, query_string=query_string)
-        request._cache_update_cache = True if not update_cache else update_cache
+        request._cache_update_cache = update_cache if update_cache else True
         return request
 
     def test_patch_vary_headers(self):
@@ -2499,3 +2528,21 @@ class CacheHandlerTest(SimpleTestCase):
             t.join()
 
         self.assertIsNot(c[0], c[1])
+
+    def test_nonexistent_alias(self):
+        msg = "The connection 'nonexistent' doesn't exist."
+        with self.assertRaisesMessage(InvalidCacheBackendError, msg):
+            caches['nonexistent']
+
+    def test_nonexistent_backend(self):
+        test_caches = CacheHandler({
+            'invalid_backend': {
+                'BACKEND': 'django.nonexistent.NonexistentBackend',
+            },
+        })
+        msg = (
+            "Could not find backend 'django.nonexistent.NonexistentBackend': "
+            "No module named 'django.nonexistent'"
+        )
+        with self.assertRaisesMessage(InvalidCacheBackendError, msg):
+            test_caches['invalid_backend']

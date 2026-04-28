@@ -14,6 +14,8 @@ from pathlib import Path
 from subprocess import CompletedProcess
 from unittest import mock, skip, skipIf
 
+import pytz
+
 import django.__main__
 from django.apps.registry import Apps
 from django.test import SimpleTestCase
@@ -176,10 +178,10 @@ class TestChildArguments(SimpleTestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             exe_path = Path(tmpdir) / 'django-admin.exe'
             exe_path.touch()
-            with mock.patch('sys.argv', [exe_path.with_suffix(''), 'runserver']):
+            with mock.patch('sys.argv', [str(exe_path.with_suffix('')), 'runserver']):
                 self.assertEqual(
                     autoreload.get_child_arguments(),
-                    [exe_path, 'runserver']
+                    [str(exe_path), 'runserver']
                 )
 
     @mock.patch('sys.warnoptions', [])
@@ -187,10 +189,10 @@ class TestChildArguments(SimpleTestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             script_path = Path(tmpdir) / 'django-admin-script.py'
             script_path.touch()
-            with mock.patch('sys.argv', [script_path.with_name('django-admin'), 'runserver']):
+            with mock.patch('sys.argv', [str(script_path.with_name('django-admin')), 'runserver']):
                 self.assertEqual(
                     autoreload.get_child_arguments(),
-                    [sys.executable, script_path, 'runserver']
+                    [sys.executable, str(script_path), 'runserver']
                 )
 
     @mock.patch('sys.argv', ['does-not-exist', 'runserver'])
@@ -199,6 +201,26 @@ class TestChildArguments(SimpleTestCase):
         msg = 'Script does-not-exist does not exist.'
         with self.assertRaisesMessage(RuntimeError, msg):
             autoreload.get_child_arguments()
+
+
+class TestUtilities(SimpleTestCase):
+    def test_is_django_module(self):
+        for module, expected in (
+            (pytz, False),
+            (sys, False),
+            (autoreload, True)
+        ):
+            with self.subTest(module=module):
+                self.assertIs(autoreload.is_django_module(module), expected)
+
+    def test_is_django_path(self):
+        for module, expected in (
+            (pytz.__file__, False),
+            (contextlib.__file__, False),
+            (autoreload.__file__, True)
+        ):
+            with self.subTest(module=module):
+                self.assertIs(autoreload.is_django_path(module), expected)
 
 
 class TestCommonRoots(SimpleTestCase):
@@ -411,7 +433,7 @@ class RestartWithReloaderTests(SimpleTestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             script = Path(temp_dir) / 'manage.py'
             script.touch()
-            argv = [script, 'runserver']
+            argv = [str(script), 'runserver']
             mock_call = self.patch_autoreload(argv)
             autoreload.restart_with_reloader()
             self.assertEqual(mock_call.call_count, 1)

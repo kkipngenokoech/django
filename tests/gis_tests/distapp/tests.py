@@ -9,9 +9,7 @@ from django.db import NotSupportedError, connection
 from django.db.models import Exists, F, OuterRef, Q
 from django.test import TestCase, skipIfDBFeature, skipUnlessDBFeature
 
-from ..utils import (
-    FuncTestMixin, mysql, no_oracle, oracle, postgis, spatialite,
-)
+from ..utils import FuncTestMixin, mysql, oracle, postgis, spatialite
 from .models import (
     AustraliaCity, CensusZipcode, Interstate, SouthTexasCity, SouthTexasCityFt,
     SouthTexasInterstate, SouthTexasZipcode,
@@ -434,10 +432,7 @@ class DistanceFunctionsTests(FuncTestMixin, TestCase):
         ).filter(d=D(m=1))
         self.assertTrue(qs.exists())
 
-    @unittest.skipUnless(
-        connection.vendor == 'oracle',
-        'Oracle supports tolerance parameter.',
-    )
+    @skipUnlessDBFeature('supports_tolerance_parameter')
     def test_distance_function_tolerance_escaping(self):
         qs = Interstate.objects.annotate(
             d=Distance(
@@ -450,10 +445,7 @@ class DistanceFunctionsTests(FuncTestMixin, TestCase):
         with self.assertRaisesMessage(TypeError, msg):
             qs.exists()
 
-    @unittest.skipUnless(
-        connection.vendor == 'oracle',
-        'Oracle supports tolerance parameter.',
-    )
+    @skipUnlessDBFeature('supports_tolerance_parameter')
     def test_distance_function_tolerance(self):
         # Tolerance is greater than distance.
         qs = Interstate.objects.annotate(
@@ -475,7 +467,6 @@ class DistanceFunctionsTests(FuncTestMixin, TestCase):
         with self.assertRaisesMessage(ValueError, msg):
             list(qs)
 
-    @no_oracle  # Oracle already handles geographic distance calculation.
     @skipUnlessDBFeature("has_Distance_function", 'has_Transform_function')
     def test_distance_transform(self):
         """
