@@ -80,14 +80,12 @@ class Feed:
         except AttributeError:
             return default
         if callable(attr):
-            # Check co_argcount rather than try/excepting the function and
-            # catching the TypeError, because something inside the function
-            # may raise the TypeError. This technique is more accurate.
+            # Check co_argcount rather than try/except because of django.contrib.gis.feeds.Feed.__getattribute__
             try:
-                code = attr.__code__
+                code = attr.__func__.__code__
             except AttributeError:
-                code = attr.__call__.__code__
-            if code.co_argcount == 2:       # one argument is 'self'
+                code = attr.__code__
+            if code.co_argcount == 2:  # one argument is 'self'
                 return attr(obj)
             else:
                 return attr()
@@ -112,8 +110,8 @@ class Feed:
 
     def get_context_data(self, **kwargs):
         """
-        Return a dictionary to use as extra context if either
-        ``self.description_template`` or ``self.item_template`` are used.
+        Return a dictionary to use as extra context if either the description
+        or title template are used.
 
         Default implementation preserves the old behavior
         of using {'obj': item, 'site': current_site} as the context.
@@ -138,7 +136,7 @@ class Feed:
             language=self.language or get_language(),
             feed_url=add_domain(
                 current_site.domain,
-                self._get_dynamic_attr('feed_url', obj) or request.path,
+                self._get_dynamic_attr('feed_url', obj) or request.get_full_path(),
                 request.is_secure(),
             ),
             author_name=self._get_dynamic_attr('author_name', obj),
@@ -166,8 +164,7 @@ class Feed:
                 pass
 
         for item in self._get_dynamic_attr('items', obj):
-            context = self.get_context_data(item=item, site=current_site,
-                                            obj=obj, request=request)
+            context = self.get_context_data(item=item, site=current_site, obj=obj)
             if title_tmp is not None:
                 title = title_tmp.render(context, request)
             else:
@@ -176,11 +173,13 @@ class Feed:
                 description = description_tmp.render(context, request)
             else:
                 description = self._get_dynamic_attr('item_description', item)
+
             link = add_domain(
                 current_site.domain,
                 self._get_dynamic_attr('item_link', item),
                 request.is_secure(),
             )
+
             enclosures = self._get_dynamic_attr('item_enclosures', item)
             author_name = self._get_dynamic_attr('item_author_name', item)
             if author_name is not None:
@@ -189,15 +188,15 @@ class Feed:
             else:
                 author_email = author_link = None
 
-            tz = get_default_timezone()
-
             pubdate = self._get_dynamic_attr('item_pubdate', item)
             if pubdate and is_naive(pubdate):
-                pubdate = make_aware(pubdate, tz)
+                ltz = get_default_timezone()
+                pubdate = make_aware(pubdate, ltz)
 
             updateddate = self._get_dynamic_attr('item_updateddate', item)
             if updateddate and is_naive(updateddate):
-                updateddate = make_aware(updateddate, tz)
+                ltz = get_default_timezone()
+                updateddate = make_aware(updateddate, ltz)
 
             feed.add_item(
                 title=title,
@@ -214,6 +213,7 @@ class Feed:
                 author_link=author_link,
                 categories=self._get_dynamic_attr('item_categories', item),
                 item_copyright=self._get_dynamic_attr('item_copyright', item),
+                comments=self._get_dynamic_attr('item_comments', item),
                 **self.item_extra_kwargs(item)
             )
         return feed
