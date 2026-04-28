@@ -350,14 +350,11 @@ class DatabaseOperations(BaseDatabaseOperations):
         if format and not (analyze and not self.connection.mysql_is_mariadb):
             # Only MariaDB supports the analyze option with formats.
             prefix += ' FORMAT=%s' % format
-        if self.connection.features.needs_explain_extended and not analyze and format is None:
-            # ANALYZE, EXTENDED, and FORMAT are mutually exclusive options.
-            prefix += ' EXTENDED'
         return prefix
 
     def regex_lookup(self, lookup_type):
         # REGEXP BINARY doesn't work correctly in MySQL 8+ and REGEXP_LIKE
-        # doesn't exist in MySQL 5.6 or in MariaDB.
+        # doesn't exist in MySQL 5.x or in MariaDB.
         if self.connection.mysql_version < (8, 0, 0) or self.connection.mysql_is_mariadb:
             if lookup_type == 'regex':
                 return '%s REGEXP BINARY %s'
@@ -368,3 +365,13 @@ class DatabaseOperations(BaseDatabaseOperations):
 
     def insert_statement(self, ignore_conflicts=False):
         return 'INSERT IGNORE INTO' if ignore_conflicts else super().insert_statement(ignore_conflicts)
+
+    def lookup_cast(self, lookup_type, internal_type=None):
+        lookup = '%s'
+        if internal_type == 'JSONField':
+            if self.connection.mysql_is_mariadb or lookup_type in (
+                'iexact', 'contains', 'icontains', 'startswith', 'istartswith',
+                'endswith', 'iendswith', 'regex', 'iregex',
+            ):
+                lookup = 'JSON_UNQUOTE(%s)'
+        return lookup

@@ -140,7 +140,7 @@ class Media:
         except CyclicDependencyError:
             warnings.warn(
                 'Detected duplicate Media files in an opposite order: {}'.format(
-                    ', '.join(repr(l) for l in lists)
+                    ', '.join(repr(list_) for list_ in lists)
                 ), MediaOrderConflictWarning,
             )
             return list(all_items)
@@ -225,16 +225,16 @@ class Widget(metaclass=MediaDefiningClass):
         return str(value)
 
     def get_context(self, name, value, attrs):
-        context = {}
-        context['widget'] = {
-            'name': name,
-            'is_hidden': self.is_hidden,
-            'required': self.is_required,
-            'value': self.format_value(value),
-            'attrs': self.build_attrs(self.attrs, attrs),
-            'template_name': self.template_name,
+        return {
+            'widget': {
+                'name': name,
+                'is_hidden': self.is_hidden,
+                'required': self.is_required,
+                'value': self.format_value(value),
+                'attrs': self.build_attrs(self.attrs, attrs),
+                'template_name': self.template_name,
+            },
         }
-        return context
 
     def render(self, name, value, attrs=None, renderer=None):
         """Render the widget as an HTML string."""

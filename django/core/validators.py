@@ -61,7 +61,7 @@ class RegexValidator:
 
 @deconstructible
 class URLValidator(RegexValidator):
-    ul = '\u00a1-\uffff'  # unicode letters range (must not be a raw string)
+    ul = '\u00a1-\uffff'  # Unicode letters range (must not be a raw string).
 
     # IP patterns
     ipv4_re = r'(?:25[0-5]|2[0-4]\d|[0-1]?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|[0-1]?\d?\d)){3}'
@@ -97,7 +97,9 @@ class URLValidator(RegexValidator):
             self.schemes = schemes
 
     def __call__(self, value):
-        # Check first if the scheme is valid
+        if not isinstance(value, str):
+            raise ValidationError(self.message, code=self.code)
+        # Check if the scheme is valid.
         scheme = value.split('://')[0].lower()
         if scheme not in self.schemes:
             raise ValidationError(self.message, code=self.code)
@@ -124,7 +126,7 @@ class URLValidator(RegexValidator):
             # Now verify IPv6 in the netloc part
             host_match = re.search(r'^\[(.+)\](?::\d{2,5})?$', urlsplit(value).netloc)
             if host_match:
-                potential_ip = host_match.groups()[0]
+                potential_ip = host_match[1]
                 try:
                     validate_ipv6_address(potential_ip)
                 except ValidationError:
@@ -202,7 +204,7 @@ class EmailValidator:
 
         literal_match = self.literal_regex.match(domain_part)
         if literal_match:
-            ip_address = literal_match.group(1)
+            ip_address = literal_match[1]
             try:
                 validate_ipv46_address(ip_address)
                 return True

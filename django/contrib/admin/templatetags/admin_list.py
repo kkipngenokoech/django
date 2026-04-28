@@ -253,8 +253,6 @@ def items_for_result(cl, result, form):
                     result_repr = display_for_field(value, f, empty_value_display)
                 if isinstance(f, (models.DateField, models.TimeField, models.ForeignKey)):
                     row_classes.append('nowrap')
-        if str(result_repr) == '':
-            result_repr = mark_safe('&nbsp;')
         row_class = mark_safe(' class="%s"' % ' '.join(row_classes))
         # If list_display_links not defined, add the link tag to the first field
         if link_in_col(first, field_name, cl):
@@ -382,12 +380,12 @@ def date_hierarchy(cl):
             # select appropriate start level
             date_range = cl.queryset.aggregate(first=models.Min(field_name),
                                                last=models.Max(field_name))
-            if dates_or_datetimes == 'datetimes':
-                date_range = {
-                    k: timezone.localtime(v) if timezone.is_aware(v) else v
-                    for k, v in date_range.items()
-                }
             if date_range['first'] and date_range['last']:
+                if dates_or_datetimes == 'datetimes':
+                    date_range = {
+                        k: timezone.localtime(v) if timezone.is_aware(v) else v
+                        for k, v in date_range.items()
+                    }
                 if date_range['first'].year == date_range['last'].year:
                     year_lookup = date_range['first'].year
                     if date_range['first'].month == date_range['last'].month:

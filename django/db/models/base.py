@@ -4,6 +4,7 @@ import warnings
 from functools import partialmethod
 from itertools import chain
 
+import django
 from django.apps import apps
 from django.conf import settings
 from django.core import checks
@@ -36,7 +37,6 @@ from django.utils.encoding import force_str
 from django.utils.hashable import make_hashable
 from django.utils.text import capfirst, get_text_list
 from django.utils.translation import gettext_lazy as _
-from django.utils.version import get_version
 
 
 class Deferred:
@@ -538,7 +538,7 @@ class Model(metaclass=ModelBase):
 
     def __reduce__(self):
         data = self.__getstate__()
-        data[DJANGO_VERSION_PICKLE_KEY] = get_version()
+        data[DJANGO_VERSION_PICKLE_KEY] = django.__version__
         class_id = self._meta.app_label, self._meta.object_name
         return model_unpickle, (class_id,), data
 
@@ -547,21 +547,22 @@ class Model(metaclass=ModelBase):
         return self.__dict__
 
     def __setstate__(self, state):
-        msg = None
         pickled_version = state.get(DJANGO_VERSION_PICKLE_KEY)
         if pickled_version:
-            current_version = get_version()
-            if current_version != pickled_version:
-                msg = (
-                    "Pickled model instance's Django version %s does not match "
-                    "the current version %s." % (pickled_version, current_version)
+            if pickled_version != django.__version__:
+                warnings.warn(
+                    "Pickled model instance's Django version %s does not "
+                    "match the current version %s."
+                    % (pickled_version, django.__version__),
+                    RuntimeWarning,
+                    stacklevel=2,
                 )
         else:
-            msg = "Pickled model instance's Django version is not specified."
-
-        if msg:
-            warnings.warn(msg, RuntimeWarning, stacklevel=2)
-
+            warnings.warn(
+                "Pickled model instance's Django version is not specified.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         self.__dict__.update(state)
 
     def _get_pk_val(self, meta=None):
@@ -1613,12 +1614,10 @@ class Model(metaclass=ModelBase):
             if not router.allow_migrate_model(db, cls):
                 continue
             connection = connections[db]
-            if (
+            if not (
                 connection.features.supports_partial_indexes or
                 'supports_partial_indexes' in cls._meta.required_db_features
-            ):
-                continue
-            if any(index.condition is not None for index in cls._meta.indexes):
+            ) and any(index.condition is not None for index in cls._meta.indexes):
                 errors.append(
                     checks.Warning(
                         '%s does not support indexes with conditions.'
@@ -1631,7 +1630,24 @@ class Model(metaclass=ModelBase):
                         id='models.W037',
                     )
                 )
+            if not (
+                connection.features.supports_covering_indexes or
+                'supports_covering_indexes' in cls._meta.required_db_features
+            ) and any(index.include for index in cls._meta.indexes):
+                errors.append(
+                    checks.Warning(
+                        '%s does not support indexes with non-key columns.'
+                        % connection.display_name,
+                        hint=(
+                            "Non-key columns will be ignored. Silence this "
+                            "warning if you don't care about it."
+                        ),
+                        obj=cls,
+                        id='models.W040',
+                    )
+                )
         fields = [field for index in cls._meta.indexes for field, _ in index.fields_orders]
+        fields += [include for index in cls._meta.indexes for include in index.include]
         errors.extend(cls._check_local_fields(fields, 'indexes'))
         return errors
 
@@ -1747,7 +1763,9 @@ class Model(metaclass=ModelBase):
                     else:
                         _cls = None
                 except (FieldDoesNotExist, AttributeError):
-                    if fld is None or fld.get_transform(part) is None:
+                    if fld is None or (
+                        fld.get_transform(part) is None and fld.get_lookup(part) is None
+                    ):
                         errors.append(
                             checks.Error(
                                 "'ordering' refers to the nonexistent field, "
@@ -1904,6 +1922,49 @@ class Model(metaclass=ModelBase):
                         id='models.W036',
                     )
                 )
+            if not (
+                connection.features.supports_deferrable_unique_constraints or
+                'supports_deferrable_unique_constraints' in cls._meta.required_db_features
+            ) and any(
+                isinstance(constraint, UniqueConstraint) and constraint.deferrable is not None
+                for constraint in cls._meta.constraints
+            ):
+                errors.append(
+                    checks.Warning(
+                        '%s does not support deferrable unique constraints.'
+                        % connection.display_name,
+                        hint=(
+                            "A constraint won't be created. Silence this "
+                            "warning if you don't care about it."
+                        ),
+                        obj=cls,
+                        id='models.W038',
+                    )
+                )
+            if not (
+                connection.features.supports_covering_indexes or
+                'supports_covering_indexes' in cls._meta.required_db_features
+            ) and any(
+                isinstance(constraint, UniqueConstraint) and constraint.include
+                for constraint in cls._meta.constraints
+            ):
+                errors.append(
+                    checks.Warning(
+                        '%s does not support unique constraints with non-key '
+                        'columns.' % connection.display_name,
+                        hint=(
+                            "A constraint won't be created. Silence this "
+                            "warning if you don't care about it."
+                        ),
+                        obj=cls,
+                        id='models.W039',
+                    )
+                )
+            fields = chain.from_iterable(
+                (*constraint.fields, *constraint.include)
+                for constraint in cls._meta.constraints if isinstance(constraint, UniqueConstraint)
+            )
+            errors.extend(cls._check_local_fields(fields, 'constraints'))
         return errors
 
 

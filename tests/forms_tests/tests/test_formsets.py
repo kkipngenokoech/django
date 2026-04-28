@@ -2,9 +2,10 @@ import datetime
 from collections import Counter
 from unittest import mock
 
+from django.core.exceptions import ValidationError
 from django.forms import (
     BaseForm, CharField, DateField, FileField, Form, IntegerField,
-    SplitDateTimeField, ValidationError, formsets,
+    SplitDateTimeField, formsets,
 )
 from django.forms.formsets import BaseFormSet, all_valid, formset_factory
 from django.forms.utils import ErrorList
@@ -875,6 +876,70 @@ class FormsFormsetTestCase(SimpleTestCase):
 <tr><th><label for="id_form-2-name">Name:</label></th>
 <td><input id="id_form-2-name" name="form-2-name" type="text" value="Jack and Coke"></td></tr>"""
         )
+
+    def test_default_absolute_max(self):
+        # absolute_max defaults to 2 * DEFAULT_MAX_NUM if max_num is None.
+        data = {
+            'form-TOTAL_FORMS': 2001,
+            'form-INITIAL_FORMS': '0',
+            'form-MAX_NUM_FORMS': '0',
+        }
+        formset = FavoriteDrinksFormSet(data=data)
+        self.assertIs(formset.is_valid(), False)
+        self.assertEqual(
+            formset.non_form_errors(),
+            ['Please submit 1000 or fewer forms.'],
+        )
+        self.assertEqual(formset.absolute_max, 2000)
+
+    def test_absolute_max(self):
+        data = {
+            'form-TOTAL_FORMS': '2001',
+            'form-INITIAL_FORMS': '0',
+            'form-MAX_NUM_FORMS': '0',
+        }
+        AbsoluteMaxFavoriteDrinksFormSet = formset_factory(
+            FavoriteDrinkForm,
+            absolute_max=3000,
+        )
+        formset = AbsoluteMaxFavoriteDrinksFormSet(data=data)
+        self.assertIs(formset.is_valid(), True)
+        self.assertEqual(len(formset.forms), 2001)
+        # absolute_max provides a hard limit.
+        data['form-TOTAL_FORMS'] = '3001'
+        formset = AbsoluteMaxFavoriteDrinksFormSet(data=data)
+        self.assertIs(formset.is_valid(), False)
+        self.assertEqual(len(formset.forms), 3000)
+        self.assertEqual(
+            formset.non_form_errors(),
+            ['Please submit 1000 or fewer forms.'],
+        )
+
+    def test_absolute_max_with_max_num(self):
+        data = {
+            'form-TOTAL_FORMS': '1001',
+            'form-INITIAL_FORMS': '0',
+            'form-MAX_NUM_FORMS': '0',
+        }
+        LimitedFavoriteDrinksFormSet = formset_factory(
+            FavoriteDrinkForm,
+            max_num=30,
+            absolute_max=1000,
+        )
+        formset = LimitedFavoriteDrinksFormSet(data=data)
+        self.assertIs(formset.is_valid(), False)
+        self.assertEqual(len(formset.forms), 1000)
+        self.assertEqual(
+            formset.non_form_errors(),
+            ['Please submit 30 or fewer forms.'],
+        )
+
+    def test_absolute_max_invalid(self):
+        msg = "'absolute_max' must be greater or equal to 'max_num'."
+        for max_num in [None, 31]:
+            with self.subTest(max_num=max_num):
+                with self.assertRaisesMessage(ValueError, msg):
+                    formset_factory(FavoriteDrinkForm, max_num=max_num, absolute_max=30)
 
     def test_more_initial_form_result_in_one(self):
         """
