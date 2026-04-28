@@ -8,8 +8,9 @@ from django.db import models
 from django.test import SimpleTestCase, override_settings
 from django.test.utils import extend_sys_path, isolate_apps
 
-from .default_config_app.apps import CustomConfig
 from .models import SoAlternative, TotallyNormal, new_apps
+from .one_config_app.apps import OneConfig
+from .two_configs_one_default_app.apps import TwoConfig
 
 # Small list with a variety of cases for tests that iterate on installed apps.
 # Intentionally not in alphabetical order to check if the order is preserved.
@@ -84,25 +85,56 @@ class AppsTests(SimpleTestCase):
                 pass
 
     def test_no_such_app_config(self):
-        msg = "No module named 'apps.NoSuchConfig'"
+        msg = "Module 'apps' does not contain a 'NoSuchConfig' class."
         with self.assertRaisesMessage(ImportError, msg):
             with self.settings(INSTALLED_APPS=['apps.NoSuchConfig']):
                 pass
 
     def test_no_such_app_config_with_choices(self):
         msg = (
-            "'apps.apps' does not contain a class 'NoSuchConfig'. Choices are: "
-            "'BadConfig', 'MyAdmin', 'MyAuth', 'NoSuchApp', 'PlainAppsConfig', "
-            "'RelabeledAppsConfig'."
+            "Module 'apps.apps' does not contain a 'NoSuchConfig' class. "
+            "Choices are: 'BadConfig', 'ModelPKAppsConfig', 'MyAdmin', "
+            "'MyAuth', 'NoSuchApp', 'PlainAppsConfig', 'RelabeledAppsConfig'."
         )
-        with self.assertRaisesMessage(ImproperlyConfigured, msg):
+        with self.assertRaisesMessage(ImportError, msg):
             with self.settings(INSTALLED_APPS=['apps.apps.NoSuchConfig']):
                 pass
 
-    def test_default_app_config(self):
-        with self.settings(INSTALLED_APPS=['apps.default_config_app']):
-            config = apps.get_app_config('default_config_app')
-        self.assertIsInstance(config, CustomConfig)
+    def test_no_config_app(self):
+        """Load an app that doesn't provide an AppConfig class."""
+        with self.settings(INSTALLED_APPS=['apps.no_config_app']):
+            config = apps.get_app_config('no_config_app')
+        self.assertIsInstance(config, AppConfig)
+
+    def test_one_config_app(self):
+        """Load an app that provides an AppConfig class."""
+        with self.settings(INSTALLED_APPS=['apps.one_config_app']):
+            config = apps.get_app_config('one_config_app')
+        self.assertIsInstance(config, OneConfig)
+
+    def test_two_configs_app(self):
+        """Load an app that provides two AppConfig classes."""
+        with self.settings(INSTALLED_APPS=['apps.two_configs_app']):
+            config = apps.get_app_config('two_configs_app')
+        self.assertIsInstance(config, AppConfig)
+
+    def test_two_default_configs_app(self):
+        """Load an app that provides two default AppConfig classes."""
+        msg = (
+            "'apps.two_default_configs_app.apps' declares more than one "
+            "default AppConfig: 'TwoConfig', 'TwoConfigBis'."
+        )
+        with self.assertRaisesMessage(RuntimeError, msg):
+            with self.settings(INSTALLED_APPS=['apps.two_default_configs_app']):
+                pass
+
+    def test_two_configs_one_default_app(self):
+        """
+        Load an app that provides two AppConfig classes, one being the default.
+        """
+        with self.settings(INSTALLED_APPS=['apps.two_configs_one_default_app']):
+            config = apps.get_app_config('two_configs_one_default_app')
+        self.assertIsInstance(config, TwoConfig)
 
     @override_settings(INSTALLED_APPS=SOME_INSTALLED_APPS)
     def test_get_app_configs(self):
@@ -394,6 +426,38 @@ class AppConfigTests(SimpleTestCase):
     def test_repr(self):
         ac = AppConfig('label', Stub(__path__=['a']))
         self.assertEqual(repr(ac), '<AppConfig: label>')
+
+    def test_invalid_label(self):
+        class MyAppConfig(AppConfig):
+            label = 'invalid.label'
+
+        msg = "The app label 'invalid.label' is not a valid Python identifier."
+        with self.assertRaisesMessage(ImproperlyConfigured, msg):
+            MyAppConfig('test_app', Stub())
+
+    @override_settings(
+        INSTALLED_APPS=['apps.apps.ModelPKAppsConfig'],
+        DEFAULT_AUTO_FIELD='django.db.models.SmallAutoField',
+    )
+    def test_app_default_auto_field(self):
+        apps_config = apps.get_app_config('apps')
+        self.assertEqual(
+            apps_config.default_auto_field,
+            'django.db.models.BigAutoField',
+        )
+        self.assertIs(apps_config._is_default_auto_field_overridden, True)
+
+    @override_settings(
+        INSTALLED_APPS=['apps.apps.PlainAppsConfig'],
+        DEFAULT_AUTO_FIELD='django.db.models.SmallAutoField',
+    )
+    def test_default_auto_field_setting(self):
+        apps_config = apps.get_app_config('apps')
+        self.assertEqual(
+            apps_config.default_auto_field,
+            'django.db.models.SmallAutoField',
+        )
+        self.assertIs(apps_config._is_default_auto_field_overridden, False)
 
 
 class NamespacePackageAppTests(SimpleTestCase):

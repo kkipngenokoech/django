@@ -2,8 +2,11 @@ import copy
 import datetime
 import re
 
-from django.db.backends.base.schema import BaseDatabaseSchemaEditor
-from django.db.utils import DatabaseError
+from django.db import DatabaseError
+from django.db.backends.base.schema import (
+    BaseDatabaseSchemaEditor, _related_non_m2m_objects,
+)
+from django.utils.duration import duration_iso_string
 
 
 class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
@@ -14,6 +17,9 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
     sql_alter_column_not_null = "MODIFY %(column)s NOT NULL"
     sql_alter_column_default = "MODIFY %(column)s DEFAULT %(default)s"
     sql_alter_column_no_default = "MODIFY %(column)s DEFAULT NULL"
+    sql_alter_column_no_default_null = sql_alter_column_no_default
+    sql_alter_column_collate = "MODIFY %(column)s %(type)s%(collation)s"
+
     sql_delete_column = "ALTER TABLE %(table)s DROP COLUMN %(column)s"
     sql_create_column_inline_fk = 'CONSTRAINT %(name)s REFERENCES %(to_table)s(%(to_column)s)%(deferrable)s'
     sql_delete_table = "DROP TABLE %(table)s CASCADE CONSTRAINTS"
@@ -22,8 +28,10 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
     def quote_value(self, value):
         if isinstance(value, (datetime.date, datetime.time, datetime.datetime)):
             return "'%s'" % value
+        elif isinstance(value, datetime.timedelta):
+            return "'%s'" % duration_iso_string(value)
         elif isinstance(value, str):
-            return "'%s'" % value.replace("\'", "\'\'")
+            return "'%s'" % value.replace("\'", "\'\'").replace('%', '%%')
         elif isinstance(value, (bytes, bytearray, memoryview)):
             return "'%s'" % value.hex()
         elif isinstance(value, bool):
@@ -90,7 +98,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         # Make a new field that's like the new one but with a temporary
         # column name.
         new_temp_field = copy.deepcopy(new_field)
-        new_temp_field.null = (new_field.get_internal_type() not in ('AutoField', 'BigAutoField'))
+        new_temp_field.null = (new_field.get_internal_type() not in ('AutoField', 'BigAutoField', 'SmallAutoField'))
         new_temp_field.column = self._generate_temp_name(new_field.column)
         # Add it
         self.add_field(model, new_temp_field)
@@ -121,6 +129,28 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         self.remove_field(model, old_field)
         # Rename and possibly make the new field NOT NULL
         super().alter_field(model, new_temp_field, new_field)
+        # Recreate foreign key (if necessary) because the old field is not
+        # passed to the alter_field() and data types of new_temp_field and
+        # new_field always match.
+        new_type = new_field.db_type(self.connection)
+        if (
+            (old_field.primary_key and new_field.primary_key) or
+            (old_field.unique and new_field.unique)
+        ) and old_type != new_type:
+            for _, rel in _related_non_m2m_objects(new_temp_field, new_field):
+                if rel.field.db_constraint:
+                    self.execute(self._create_fk_sql(rel.related_model, rel.field, '_fk'))
+
+    def _alter_column_type_sql(self, model, old_field, new_field, new_type):
+        auto_field_types = {'AutoField', 'BigAutoField', 'SmallAutoField'}
+        # Drop the identity if migrating away from AutoField.
+        if (
+            old_field.get_internal_type() in auto_field_types and
+            new_field.get_internal_type() not in auto_field_types and
+            self._is_identity_column(model._meta.db_table, new_field.column)
+        ):
+            self._drop_identity(model._meta.db_table, new_field.column)
+        return super()._alter_column_type_sql(model, old_field, new_field, new_type)
 
     def normalize_name(self, name):
         """
@@ -147,21 +177,18 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             return False
         return create_index
 
-    def _unique_should_be_added(self, old_field, new_field):
-        return (
-            super()._unique_should_be_added(old_field, new_field) and
-            not self._field_became_primary_key(old_field, new_field)
-        )
-
     def _is_identity_column(self, table_name, column_name):
         with self.connection.cursor() as cursor:
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT
                     CASE WHEN identity_column = 'YES' THEN 1 ELSE 0 END
                 FROM user_tab_cols
                 WHERE table_name = %s AND
                       column_name = %s
-            """, [self.normalize_name(table_name), self.normalize_name(column_name)])
+                """,
+                [self.normalize_name(table_name), self.normalize_name(column_name)],
+            )
             row = cursor.fetchone()
             return row[0] if row else False
 
@@ -170,3 +197,18 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             'table': self.quote_name(table_name),
             'column': self.quote_name(column_name),
         })
+
+    def _get_default_collation(self, table_name):
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT default_collation FROM user_tables WHERE table_name = %s
+                """,
+                [self.normalize_name(table_name)],
+            )
+            return cursor.fetchone()[0]
+
+    def _alter_column_collation_sql(self, model, new_field, new_type, new_collation):
+        if new_collation is None:
+            new_collation = self._get_default_collation(model._meta.db_table)
+        return super()._alter_column_collation_sql(model, new_field, new_type, new_collation)

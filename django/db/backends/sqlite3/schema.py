@@ -2,11 +2,12 @@ import copy
 from decimal import Decimal
 
 from django.apps.registry import Apps
+from django.db import NotSupportedError
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.backends.ddl_references import Statement
+from django.db.backends.utils import strip_quotes
 from django.db.models import UniqueConstraint
 from django.db.transaction import atomic
-from django.db.utils import NotSupportedError
 
 
 class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
@@ -14,6 +15,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
     sql_delete_table = "DROP TABLE %(table)s"
     sql_create_fk = None
     sql_create_inline_fk = "REFERENCES %(to_table)s (%(to_column)s) DEFERRABLE INITIALLY DEFERRED"
+    sql_create_column_inline_fk = sql_create_inline_fk
     sql_create_unique = "CREATE UNIQUE INDEX %(name)s ON %(table)s (%(columns)s)"
     sql_delete_unique = "DROP INDEX %(name)s"
 
@@ -63,6 +65,9 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         else:
             raise ValueError("Cannot quote parameter value %r of type %s" % (value, type(value)))
 
+    def prepare_default(self, value):
+        return self.quote_value(value)
+
     def _is_referenced_by_fk_constraint(self, table_name, column_name=None, ignore_self=False):
         """
         Return whether or not the provided table name is referenced by another
@@ -74,9 +79,8 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             for other_table in self.connection.introspection.get_table_list(cursor):
                 if ignore_self and other_table.name == table_name:
                     continue
-                constraints = self.connection.introspection._get_foreign_key_constraints(cursor, other_table.name)
-                for constraint in constraints.values():
-                    constraint_table, constraint_column = constraint['foreign_key']
+                relations = self.connection.introspection.get_relations(cursor, other_table.name)
+                for constraint_column, constraint_table in relations.values():
                     if (constraint_table == table_name and
                             (column_name is None or constraint_column == column_name)):
                         return True
@@ -98,6 +102,8 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             super().alter_db_table(model, old_db_table, new_db_table)
 
     def alter_field(self, model, old_field, new_field, strict=False):
+        if not self._field_should_be_altered(old_field, new_field):
+            return
         old_field_name = old_field.name
         table_name = model._meta.db_table
         _, old_column_name = old_field.get_attname_column()
@@ -184,8 +190,8 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             body[create_field.name] = create_field
             # Choose a default and insert it into the copy map
             if not create_field.many_to_many and create_field.concrete:
-                mapping[create_field.column] = self.quote_value(
-                    self.effective_default(create_field)
+                mapping[create_field.column] = self.prepare_default(
+                    self.effective_default(create_field),
                 )
         # Add in any altered fields
         if alter_field:
@@ -196,7 +202,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             if old_field.null and not new_field.null:
                 case_sql = "coalesce(%(col)s, %(default)s)" % {
                     'col': self.quote_name(old_field.column),
-                    'default': self.quote_value(self.effective_default(new_field))
+                    'default': self.prepare_default(self.effective_default(new_field)),
                 }
                 mapping[new_field.column] = case_sql
             else:
@@ -263,7 +269,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         body_copy = copy.deepcopy(body)
         meta_contents = {
             'app_label': model._meta.app_label,
-            'db_table': 'new__%s' % model._meta.db_table,
+            'db_table': 'new__%s' % strip_quotes(model._meta.db_table),
             'unique_together': unique_together,
             'index_together': index_together,
             'indexes': indexes,
@@ -317,14 +323,19 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                     self.deferred_sql.remove(sql)
 
     def add_field(self, model, field):
-        """
-        Create a field on a model. Usually involves adding a column, but may
-        involve adding a table instead (for M2M fields).
-        """
-        # Special-case implicit M2M tables
-        if field.many_to_many and field.remote_field.through._meta.auto_created:
-            return self.create_model(field.remote_field.through)
-        self._remake_table(model, create_field=field)
+        """Create a field on a model."""
+        if (
+            # Primary keys and unique fields are not supported in ALTER TABLE
+            # ADD COLUMN.
+            field.primary_key or field.unique or
+            # Fields with default values cannot by handled by ALTER TABLE ADD
+            # COLUMN statement because DROP DEFAULT is not supported in
+            # ALTER TABLE.
+            not field.null or self.effective_default(field) is not None
+        ):
+            self._remake_table(model, create_field=field)
+        else:
+            super().add_field(model, field)
 
     def remove_field(self, model, field):
         """
@@ -357,11 +368,28 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             return self.execute(self._rename_field_sql(model._meta.db_table, old_field, new_field, new_type))
         # Alter by remaking table
         self._remake_table(model, alter_field=(old_field, new_field))
-        # Rebuild tables with FKs pointing to this field if the PK type changed.
-        if old_field.primary_key and new_field.primary_key and old_type != new_type:
-            for rel in new_field.model._meta.related_objects:
-                if not rel.many_to_many:
-                    self._remake_table(rel.related_model)
+        # Rebuild tables with FKs pointing to this field.
+        if new_field.unique and old_type != new_type:
+            related_models = set()
+            opts = new_field.model._meta
+            for remote_field in opts.related_objects:
+                # Ignore self-relationship since the table was already rebuilt.
+                if remote_field.related_model == model:
+                    continue
+                if not remote_field.many_to_many:
+                    if remote_field.field_name == new_field.name:
+                        related_models.add(remote_field.related_model)
+                elif new_field.primary_key and remote_field.through._meta.auto_created:
+                    related_models.add(remote_field.through)
+            if new_field.primary_key:
+                for many_to_many in opts.many_to_many:
+                    # Ignore self-relationship since the table was already rebuilt.
+                    if many_to_many.related_model == model:
+                        continue
+                    if many_to_many.remote_field.through._meta.auto_created:
+                        related_models.add(many_to_many.remote_field.through)
+            for related_model in related_models:
+                self._remake_table(related_model)
 
     def _alter_many_to_many(self, model, old_field, new_field, strict):
         """Alter M2Ms to repoint their to= endpoints."""
@@ -399,13 +427,26 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         self.delete_model(old_field.remote_field.through)
 
     def add_constraint(self, model, constraint):
-        if isinstance(constraint, UniqueConstraint) and constraint.condition:
+        if isinstance(constraint, UniqueConstraint) and (
+            constraint.condition or
+            constraint.contains_expressions or
+            constraint.include or
+            constraint.deferrable
+        ):
             super().add_constraint(model, constraint)
         else:
             self._remake_table(model)
 
     def remove_constraint(self, model, constraint):
-        if isinstance(constraint, UniqueConstraint) and constraint.condition:
+        if isinstance(constraint, UniqueConstraint) and (
+            constraint.condition or
+            constraint.contains_expressions or
+            constraint.include or
+            constraint.deferrable
+        ):
             super().remove_constraint(model, constraint)
         else:
             self._remake_table(model)
+
+    def _collate_sql(self, collation):
+        return 'COLLATE ' + collation

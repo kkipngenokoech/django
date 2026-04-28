@@ -1,16 +1,36 @@
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 
-from .. import Tags, Warning, register
+from .. import Error, Tags, Warning, register
 
+CROSS_ORIGIN_OPENER_POLICY_VALUES = {
+    'same-origin', 'same-origin-allow-popups', 'unsafe-none',
+}
+REFERRER_POLICY_VALUES = {
+    'no-referrer', 'no-referrer-when-downgrade', 'origin',
+    'origin-when-cross-origin', 'same-origin', 'strict-origin',
+    'strict-origin-when-cross-origin', 'unsafe-url',
+}
+
+SECRET_KEY_INSECURE_PREFIX = 'django-insecure-'
 SECRET_KEY_MIN_LENGTH = 50
 SECRET_KEY_MIN_UNIQUE_CHARACTERS = 5
+
+SECRET_KEY_WARNING_MSG = (
+    f"Your %s has less than {SECRET_KEY_MIN_LENGTH} characters, less than "
+    f"{SECRET_KEY_MIN_UNIQUE_CHARACTERS} unique characters, or it's prefixed "
+    f"with '{SECRET_KEY_INSECURE_PREFIX}' indicating that it was generated "
+    f"automatically by Django. Please generate a long and random value, "
+    f"otherwise many of Django's security-critical features will be "
+    f"vulnerable to attack."
+)
 
 W001 = Warning(
     "You do not have 'django.middleware.security.SecurityMiddleware' "
     "in your MIDDLEWARE so the SECURE_HSTS_SECONDS, "
-    "SECURE_CONTENT_TYPE_NOSNIFF, "
-    "SECURE_BROWSER_XSS_FILTER, and SECURE_SSL_REDIRECT settings "
-    "will have no effect.",
+    "SECURE_CONTENT_TYPE_NOSNIFF, SECURE_REFERRER_POLICY, "
+    "SECURE_CROSS_ORIGIN_OPENER_POLICY, and SECURE_SSL_REDIRECT settings will "
+    "have no effect.",
     id='security.W001',
 )
 
@@ -51,15 +71,6 @@ W006 = Warning(
     id='security.W006',
 )
 
-W007 = Warning(
-    "Your SECURE_BROWSER_XSS_FILTER setting is not set to True, "
-    "so your pages will not be served with an "
-    "'X-XSS-Protection: 1; mode=block' header. "
-    "You should consider enabling this header to activate the "
-    "browser's XSS filtering and help prevent XSS attacks.",
-    id='security.W007',
-)
-
 W008 = Warning(
     "Your SECURE_SSL_REDIRECT setting is not set to True. "
     "Unless your site should be available over both SSL and non-SSL "
@@ -70,13 +81,7 @@ W008 = Warning(
 )
 
 W009 = Warning(
-    "Your SECRET_KEY has less than %(min_length)s characters or less than "
-    "%(min_unique_chars)s unique characters. Please generate a long and random "
-    "SECRET_KEY, otherwise many of Django's security-critical features will be "
-    "vulnerable to attack." % {
-        'min_length': SECRET_KEY_MIN_LENGTH,
-        'min_unique_chars': SECRET_KEY_MIN_UNIQUE_CHARACTERS,
-    },
+    SECRET_KEY_WARNING_MSG % 'SECRET_KEY',
     id='security.W009',
 )
 
@@ -89,9 +94,8 @@ W019 = Warning(
     "You have "
     "'django.middleware.clickjacking.XFrameOptionsMiddleware' in your "
     "MIDDLEWARE, but X_FRAME_OPTIONS is not set to 'DENY'. "
-    "The default is 'SAMEORIGIN', but unless there is a good reason for "
-    "your site to serve other parts of itself in a frame, you should "
-    "change it to 'DENY'.",
+    "Unless there is a good reason for your site to serve other parts of "
+    "itself in a frame, you should change it to 'DENY'.",
     id='security.W019',
 )
 
@@ -105,6 +109,30 @@ W021 = Warning(
     "your site cannot be submitted to the browser preload list.",
     id='security.W021',
 )
+
+W022 = Warning(
+    'You have not set the SECURE_REFERRER_POLICY setting. Without this, your '
+    'site will not send a Referrer-Policy header. You should consider '
+    'enabling this header to protect user privacy.',
+    id='security.W022',
+)
+
+E023 = Error(
+    'You have set the SECURE_REFERRER_POLICY setting to an invalid value.',
+    hint='Valid values are: {}.'.format(', '.join(sorted(REFERRER_POLICY_VALUES))),
+    id='security.E023',
+)
+
+E024 = Error(
+    'You have set the SECURE_CROSS_ORIGIN_OPENER_POLICY setting to an invalid '
+    'value.',
+    hint='Valid values are: {}.'.format(
+        ', '.join(sorted(CROSS_ORIGIN_OPENER_POLICY_VALUES)),
+    ),
+    id='security.E024',
+)
+
+W025 = Warning(SECRET_KEY_WARNING_MSG, id='security.W025')
 
 
 def _security_middleware():
@@ -163,15 +191,6 @@ def check_content_type_nosniff(app_configs, **kwargs):
 
 
 @register(Tags.security, deploy=True)
-def check_xss_filter(app_configs, **kwargs):
-    passed_check = (
-        not _security_middleware() or
-        settings.SECURE_BROWSER_XSS_FILTER is True
-    )
-    return [] if passed_check else [W007]
-
-
-@register(Tags.security, deploy=True)
 def check_ssl_redirect(app_configs, **kwargs):
     passed_check = (
         not _security_middleware() or
@@ -180,14 +199,41 @@ def check_ssl_redirect(app_configs, **kwargs):
     return [] if passed_check else [W008]
 
 
+def _check_secret_key(secret_key):
+    return (
+        len(set(secret_key)) >= SECRET_KEY_MIN_UNIQUE_CHARACTERS and
+        len(secret_key) >= SECRET_KEY_MIN_LENGTH and
+        not secret_key.startswith(SECRET_KEY_INSECURE_PREFIX)
+    )
+
+
 @register(Tags.security, deploy=True)
 def check_secret_key(app_configs, **kwargs):
-    passed_check = (
-        getattr(settings, 'SECRET_KEY', None) and
-        len(set(settings.SECRET_KEY)) >= SECRET_KEY_MIN_UNIQUE_CHARACTERS and
-        len(settings.SECRET_KEY) >= SECRET_KEY_MIN_LENGTH
-    )
+    try:
+        secret_key = settings.SECRET_KEY
+    except (ImproperlyConfigured, AttributeError):
+        passed_check = False
+    else:
+        passed_check = _check_secret_key(secret_key)
     return [] if passed_check else [W009]
+
+
+@register(Tags.security, deploy=True)
+def check_secret_key_fallbacks(app_configs, **kwargs):
+    warnings = []
+    try:
+        fallbacks = settings.SECRET_KEY_FALLBACKS
+    except (ImproperlyConfigured, AttributeError):
+        warnings.append(
+            Warning(W025.msg % 'SECRET_KEY_FALLBACKS', id=W025.id)
+        )
+    else:
+        for index, key in enumerate(fallbacks):
+            if not _check_secret_key(key):
+                warnings.append(
+                    Warning(W025.msg % f'SECRET_KEY_FALLBACKS[{index}]', id=W025.id)
+                )
+    return warnings
 
 
 @register(Tags.security, deploy=True)
@@ -208,3 +254,29 @@ def check_xframe_deny(app_configs, **kwargs):
 @register(Tags.security, deploy=True)
 def check_allowed_hosts(app_configs, **kwargs):
     return [] if settings.ALLOWED_HOSTS else [W020]
+
+
+@register(Tags.security, deploy=True)
+def check_referrer_policy(app_configs, **kwargs):
+    if _security_middleware():
+        if settings.SECURE_REFERRER_POLICY is None:
+            return [W022]
+        # Support a comma-separated string or iterable of values to allow fallback.
+        if isinstance(settings.SECURE_REFERRER_POLICY, str):
+            values = {v.strip() for v in settings.SECURE_REFERRER_POLICY.split(',')}
+        else:
+            values = set(settings.SECURE_REFERRER_POLICY)
+        if not values <= REFERRER_POLICY_VALUES:
+            return [E023]
+    return []
+
+
+@register(Tags.security, deploy=True)
+def check_cross_origin_opener_policy(app_configs, **kwargs):
+    if (
+        _security_middleware() and
+        settings.SECURE_CROSS_ORIGIN_OPENER_POLICY is not None and
+        settings.SECURE_CROSS_ORIGIN_OPENER_POLICY not in CROSS_ORIGIN_OPENER_POLICY_VALUES
+    ):
+        return [E024]
+    return []

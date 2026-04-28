@@ -11,7 +11,7 @@ class SimpleTemplateResponse(HttpResponse):
     rendering_attrs = ['template_name', 'context_data', '_post_render_callbacks']
 
     def __init__(self, template, context=None, content_type=None, status=None,
-                 charset=None, using=None):
+                 charset=None, using=None, headers=None):
         # It would seem obvious to call these next two members 'template' and
         # 'context', but those names are reserved as part of the test Client
         # API. To avoid the name collision, we use different names.
@@ -33,7 +33,7 @@ class SimpleTemplateResponse(HttpResponse):
         # content argument doesn't make sense here because it will be replaced
         # with rendered template so we always pass empty string in order to
         # prevent errors and provide shorter signature.
-        super().__init__('', content_type, status, charset=charset)
+        super().__init__('', content_type, status, charset=charset, headers=headers)
 
         # _is_rendered tracks whether the template and context has been baked
         # into a final response.
@@ -49,8 +49,9 @@ class SimpleTemplateResponse(HttpResponse):
         """
         obj_dict = self.__dict__.copy()
         if not self._is_rendered:
-            raise ContentNotRenderedError('The response content must be '
-                                          'rendered before it can be pickled.')
+            raise ContentNotRenderedError(
+                'The response content must be rendered before it can be pickled.'
+            )
         for attr in self.rendering_attrs:
             if attr in obj_dict:
                 del obj_dict[attr]
@@ -80,8 +81,7 @@ class SimpleTemplateResponse(HttpResponse):
         """
         template = self.resolve_template(self.template_name)
         context = self.resolve_context(self.context_data)
-        content = template.render(context, self._request)
-        return content
+        return template.render(context, self._request)
 
     def add_post_render_callback(self, callback):
         """Add a new post-rendering callback.
@@ -140,6 +140,6 @@ class TemplateResponse(SimpleTemplateResponse):
     rendering_attrs = SimpleTemplateResponse.rendering_attrs + ['_request']
 
     def __init__(self, request, template, context=None, content_type=None,
-                 status=None, charset=None, using=None):
-        super().__init__(template, context, content_type, status, charset, using)
+                 status=None, charset=None, using=None, headers=None):
+        super().__init__(template, context, content_type, status, charset, using, headers=headers)
         self._request = request

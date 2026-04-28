@@ -5,7 +5,7 @@ Based partially on an example by Jonathan Feignberg in the Python
 Cookbook [1] (licensed under the Python Software License) and a ctypes port by
 Anatoly Techtonik for Roundup [2] (license [3]).
 
-[1] http://aspn.activestate.com/ASPN/Cookbook/Python/Recipe/65203
+[1] https://code.activestate.com/recipes/65203/
 [2] https://sourceforge.net/p/roundup/code/ci/default/tree/roundup/backends/portalocker.py
 [3] https://sourceforge.net/p/roundup/code/ci/default/tree/COPYING.txt
 
@@ -28,8 +28,10 @@ def _fd(f):
 
 if os.name == 'nt':
     import msvcrt
-    from ctypes import (sizeof, c_ulong, c_void_p, c_int64,
-                        Structure, Union, POINTER, windll, byref)
+    from ctypes import (
+        POINTER, Structure, Union, byref, c_int64, c_ulong, c_void_p, sizeof,
+        windll,
+    )
     from ctypes.wintypes import BOOL, DWORD, HANDLE
 
     LOCK_SH = 0  # the default
@@ -105,9 +107,12 @@ else:
             return True
     else:
         def lock(f, flags):
-            ret = fcntl.flock(_fd(f), flags)
-            return ret == 0
+            try:
+                fcntl.flock(_fd(f), flags)
+                return True
+            except BlockingIOError:
+                return False
 
         def unlock(f):
-            ret = fcntl.flock(_fd(f), fcntl.LOCK_UN)
-            return ret == 0
+            fcntl.flock(_fd(f), fcntl.LOCK_UN)
+            return True

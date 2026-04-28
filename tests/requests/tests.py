@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 from django.core.exceptions import DisallowedHost
 from django.core.handlers.wsgi import LimitedStream, WSGIRequest
 from django.http import HttpRequest, RawPostDataException, UnreadablePostError
+from django.http.multipartparser import MultiPartParserError
 from django.http.request import HttpHeaders, split_domain_port
 from django.test import RequestFactory, SimpleTestCase, override_settings
 from django.test.client import FakePayload
@@ -315,7 +316,7 @@ class RequestsTests(SimpleTestCase):
             '',
             'value',
             '--boundary--'
-            '']))
+        ]))
         request = WSGIRequest({
             'REQUEST_METHOD': 'POST',
             'CONTENT_TYPE': 'multipart/form-data; boundary=boundary',
@@ -340,7 +341,7 @@ class RequestsTests(SimpleTestCase):
             b'',
             b'value',
             b'--boundary--'
-            b''])
+        ])
         payload = FakePayload(payload_data)
         request = WSGIRequest({
             'REQUEST_METHOD': 'POST',
@@ -365,7 +366,7 @@ class RequestsTests(SimpleTestCase):
             '',
             'value',
             '--boundary--'
-            '']))
+        ]))
         request = WSGIRequest({
             'REQUEST_METHOD': 'POST',
             'CONTENT_TYPE': 'multipart/form-data; boundary=boundary',
@@ -457,7 +458,7 @@ class RequestsTests(SimpleTestCase):
         self.assertEqual(request.read(13), b'--boundary\r\nC')
         self.assertEqual(request.POST, {'name': ['value']})
 
-    def test_POST_immutable_for_mutipart(self):
+    def test_POST_immutable_for_multipart(self):
         """
         MultiPartParser.parse() leaves request.POST immutable.
         """
@@ -475,6 +476,27 @@ class RequestsTests(SimpleTestCase):
             'wsgi.input': payload,
         })
         self.assertFalse(request.POST._mutable)
+
+    def test_multipart_without_boundary(self):
+        request = WSGIRequest({
+            'REQUEST_METHOD': 'POST',
+            'CONTENT_TYPE': 'multipart/form-data;',
+            'CONTENT_LENGTH': 0,
+            'wsgi.input': FakePayload(),
+        })
+        with self.assertRaisesMessage(MultiPartParserError, 'Invalid boundary in multipart: None'):
+            request.POST
+
+    def test_multipart_non_ascii_content_type(self):
+        request = WSGIRequest({
+            'REQUEST_METHOD': 'POST',
+            'CONTENT_TYPE': 'multipart/form-data; boundary = \xe0',
+            'CONTENT_LENGTH': 0,
+            'wsgi.input': FakePayload(),
+        })
+        msg = 'Invalid non-ASCII Content-Type in multipart: multipart/form-data; boundary = à'
+        with self.assertRaisesMessage(MultiPartParserError, msg):
+            request.POST
 
     def test_POST_connection_error(self):
         """
@@ -535,18 +557,6 @@ class RequestsTests(SimpleTestCase):
         })
         with self.assertRaises(UnreadablePostError):
             request.FILES
-
-    @override_settings(ALLOWED_HOSTS=['example.com'])
-    def test_get_raw_uri(self):
-        factory = RequestFactory(HTTP_HOST='evil.com')
-        request = factory.get('////absolute-uri')
-        self.assertEqual(request.get_raw_uri(), 'http://evil.com//absolute-uri')
-
-        request = factory.get('/?foo=bar')
-        self.assertEqual(request.get_raw_uri(), 'http://evil.com/?foo=bar')
-
-        request = factory.get('/path/with:colons')
-        self.assertEqual(request.get_raw_uri(), 'http://evil.com/path/with:colons')
 
 
 class HostValidationTests(SimpleTestCase):
@@ -736,7 +746,7 @@ class HostValidationTests(SimpleTestCase):
         If ALLOWED_HOSTS is empty and DEBUG is True, variants of localhost are
         allowed.
         """
-        valid_hosts = ['localhost', '127.0.0.1', '[::1]']
+        valid_hosts = ['localhost', 'subdomain.localhost', '127.0.0.1', '[::1]']
         for host in valid_hosts:
             request = HttpRequest()
             request.META = {'HTTP_HOST': host}
@@ -874,6 +884,7 @@ class RequestHeadersTests(SimpleTestCase):
         request = WSGIRequest(self.ENVIRON)
         self.assertEqual(request.headers['User-Agent'], 'python-requests/1.2.0')
         self.assertEqual(request.headers['user-agent'], 'python-requests/1.2.0')
+        self.assertEqual(request.headers['user_agent'], 'python-requests/1.2.0')
         self.assertEqual(request.headers['Content-Type'], 'text/html')
         self.assertEqual(request.headers['Content-Length'], '100')
 

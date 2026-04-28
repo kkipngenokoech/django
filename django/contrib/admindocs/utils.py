@@ -3,8 +3,10 @@
 import re
 from email.errors import HeaderParseError
 from email.parser import HeaderParser
+from inspect import cleandoc
 
 from django.urls import reverse
+from django.utils.regex_helper import _lazy_re_compile
 from django.utils.safestring import mark_safe
 
 try:
@@ -18,31 +20,21 @@ else:
 
 
 def get_view_name(view_func):
+    if hasattr(view_func, 'view_class'):
+        klass = view_func.view_class
+        return f'{klass.__module__}.{klass.__qualname__}'
     mod_name = view_func.__module__
     view_name = getattr(view_func, '__qualname__', view_func.__class__.__name__)
     return mod_name + '.' + view_name
-
-
-def trim_docstring(docstring):
-    """
-    Uniformly trim leading/trailing whitespace from docstrings.
-
-    Based on https://www.python.org/dev/peps/pep-0257/#handling-docstring-indentation
-    """
-    if not docstring or not docstring.strip():
-        return ''
-    # Convert tabs to spaces and split into lines
-    lines = docstring.expandtabs().splitlines()
-    indent = min(len(line) - len(line.lstrip()) for line in lines if line.lstrip())
-    trimmed = [lines[0].lstrip()] + [line[indent:].rstrip() for line in lines[1:]]
-    return "\n".join(trimmed).strip()
 
 
 def parse_docstring(docstring):
     """
     Parse out the parts of a docstring.  Return (title, body, metadata).
     """
-    docstring = trim_docstring(docstring)
+    if not docstring:
+        return '', '', {}
+    docstring = cleandoc(docstring)
     parts = re.split(r'\n{2,}', docstring)
     title = parts[0]
     if len(parts) == 1:
@@ -145,9 +137,46 @@ if docutils_is_available:
     for name, urlbase in ROLES.items():
         create_reference_role(name, urlbase)
 
-# Match the beginning of a named or unnamed group.
-named_group_matcher = re.compile(r'\(\?P(<\w+>)')
-unnamed_group_matcher = re.compile(r'\(')
+# Match the beginning of a named, unnamed, or non-capturing groups.
+named_group_matcher = _lazy_re_compile(r'\(\?P(<\w+>)')
+unnamed_group_matcher = _lazy_re_compile(r'\(')
+non_capturing_group_matcher = _lazy_re_compile(r'\(\?\:')
+
+
+def replace_metacharacters(pattern):
+    """Remove unescaped metacharacters from the pattern."""
+    return re.sub(
+        r'((?:^|(?<!\\))(?:\\\\)*)(\\?)([?*+^$]|\\[bBAZ])',
+        lambda m: m[1] + m[3] if m[2] else m[1],
+        pattern,
+    )
+
+
+def _get_group_start_end(start, end, pattern):
+    # Handle nested parentheses, e.g. '^(?P<a>(x|y))/b' or '^b/((x|y)\w+)$'.
+    unmatched_open_brackets, prev_char = 1, None
+    for idx, val in enumerate(pattern[end:]):
+        # Check for unescaped `(` and `)`. They mark the start and end of a
+        # nested group.
+        if val == '(' and prev_char != '\\':
+            unmatched_open_brackets += 1
+        elif val == ')' and prev_char != '\\':
+            unmatched_open_brackets -= 1
+        prev_char = val
+        # If brackets are balanced, the end of the string for the current named
+        # capture group pattern has been reached.
+        if unmatched_open_brackets == 0:
+            return start, end + idx + 1
+
+
+def _find_groups(pattern, group_matcher):
+    prev_end = None
+    for match in group_matcher.finditer(pattern):
+        if indices := _get_group_start_end(match.start(0), match.end(0), pattern):
+            start, end = indices
+            if prev_end and start > prev_end or not prev_end:
+                yield start, end, match
+            prev_end = end
 
 
 def replace_named_groups(pattern):
@@ -155,33 +184,13 @@ def replace_named_groups(pattern):
     Find named groups in `pattern` and replace them with the group name. E.g.,
     1. ^(?P<a>\w+)/b/(\w+)$ ==> ^<a>/b/(\w+)$
     2. ^(?P<a>\w+)/b/(?P<c>\w+)/$ ==> ^<a>/b/<c>/$
+    3. ^(?P<a>\w+)/b/(\w+) ==> ^<a>/b/(\w+)
+    4. ^(?P<a>\w+)/b/(?P<c>\w+) ==> ^<a>/b/<c>
     """
-    named_group_indices = [
-        (m.start(0), m.end(0), m.group(1))
-        for m in named_group_matcher.finditer(pattern)
+    group_pattern_and_name = [
+        (pattern[start:end], match[1])
+        for start, end, match in _find_groups(pattern, named_group_matcher)
     ]
-    # Tuples of (named capture group pattern, group name).
-    group_pattern_and_name = []
-    # Loop over the groups and their start and end indices.
-    for start, end, group_name in named_group_indices:
-        # Handle nested parentheses, e.g. '^(?P<a>(x|y))/b'.
-        unmatched_open_brackets, prev_char = 1, None
-        for idx, val in enumerate(pattern[end:]):
-            # If brackets are balanced, the end of the string for the current
-            # named capture group pattern has been reached.
-            if unmatched_open_brackets == 0:
-                group_pattern_and_name.append((pattern[start:end + idx], group_name))
-                break
-
-            # Check for unescaped `(` and `)`. They mark the start and end of a
-            # nested group.
-            if val == '(' and prev_char != '\\':
-                unmatched_open_brackets += 1
-            elif val == ')' and prev_char != '\\':
-                unmatched_open_brackets -= 1
-            prev_char = val
-
-    # Replace the string for named capture groups with their group names.
     for group_pattern, group_name in group_pattern_and_name:
         pattern = pattern.replace(group_pattern, group_name)
     return pattern
@@ -192,46 +201,28 @@ def replace_unnamed_groups(pattern):
     Find unnamed groups in `pattern` and replace them with '<var>'. E.g.,
     1. ^(?P<a>\w+)/b/(\w+)$ ==> ^(?P<a>\w+)/b/<var>$
     2. ^(?P<a>\w+)/b/((x|y)\w+)$ ==> ^(?P<a>\w+)/b/<var>$
+    3. ^(?P<a>\w+)/b/(\w+) ==> ^(?P<a>\w+)/b/<var>
+    4. ^(?P<a>\w+)/b/((x|y)\w+) ==> ^(?P<a>\w+)/b/<var>
     """
-    unnamed_group_indices = [m.start(0) for m in unnamed_group_matcher.finditer(pattern)]
-    # Indices of the start of unnamed capture groups.
-    group_indices = []
-    # Loop over the start indices of the groups.
-    for start in unnamed_group_indices:
-        # Handle nested parentheses, e.g. '^b/((x|y)\w+)$'.
-        unmatched_open_brackets, prev_char = 1, None
-        for idx, val in enumerate(pattern[start + 1:]):
-            if unmatched_open_brackets == 0:
-                group_indices.append((start, start + 1 + idx))
-                break
-
-            # Check for unescaped `(` and `)`. They mark the start and end of
-            # a nested group.
-            if val == '(' and prev_char != '\\':
-                unmatched_open_brackets += 1
-            elif val == ')' and prev_char != '\\':
-                unmatched_open_brackets -= 1
-            prev_char = val
-
-    # Remove unnamed group matches inside other unnamed capture groups.
-    group_start_end_indices = []
-    prev_end = None
-    for start, end in group_indices:
-        if prev_end and start > prev_end or not prev_end:
-            group_start_end_indices.append((start, end))
+    final_pattern, prev_end = '', None
+    for start, end, _ in _find_groups(pattern, unnamed_group_matcher):
+        if prev_end:
+            final_pattern += pattern[prev_end:start]
+        final_pattern += pattern[:start] + '<var>'
         prev_end = end
+    return final_pattern + pattern[prev_end:]
 
-    if group_start_end_indices:
-        # Replace unnamed groups with <var>. Handle the fact that replacing the
-        # string between indices will change string length and thus indices
-        # will point to the wrong substring if not corrected.
-        final_pattern, prev_end = [], None
-        for start, end in group_start_end_indices:
-            if prev_end:
-                final_pattern.append(pattern[prev_end:start])
-            final_pattern.append(pattern[:start] + '<var>')
-            prev_end = end
-        final_pattern.append(pattern[prev_end:])
-        return ''.join(final_pattern)
-    else:
-        return pattern
+
+def remove_non_capturing_groups(pattern):
+    r"""
+    Find non-capturing groups in the given `pattern` and remove them, e.g.
+    1. (?P<a>\w+)/b/(?:\w+)c(?:\w+) => (?P<a>\\w+)/b/c
+    2. ^(?:\w+(?:\w+))a => ^a
+    3. ^a(?:\w+)/b(?:\w+) => ^a/b
+    """
+    group_start_end_indices = _find_groups(pattern, non_capturing_group_matcher)
+    final_pattern, prev_end = '', None
+    for start, end, _ in group_start_end_indices:
+        final_pattern += pattern[prev_end:start]
+        prev_end = end
+    return final_pattern + pattern[prev_end:]

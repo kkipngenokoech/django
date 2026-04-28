@@ -8,17 +8,18 @@ from itertools import cycle as itertools_cycle, groupby
 
 from django.conf import settings
 from django.utils import timezone
-from django.utils.html import conditional_escape, format_html
+from django.utils.html import conditional_escape, escape, format_html
 from django.utils.lorem_ipsum import paragraphs, words
 from django.utils.safestring import mark_safe
 
 from .base import (
     BLOCK_TAG_END, BLOCK_TAG_START, COMMENT_TAG_END, COMMENT_TAG_START,
     FILTER_SEPARATOR, SINGLE_BRACE_END, SINGLE_BRACE_START,
-    VARIABLE_ATTRIBUTE_SEPARATOR, VARIABLE_TAG_END, VARIABLE_TAG_START,
-    Context, Node, NodeList, TemplateSyntaxError, VariableDoesNotExist,
-    kwarg_re, render_value_in_context, token_kwargs,
+    VARIABLE_ATTRIBUTE_SEPARATOR, VARIABLE_TAG_END, VARIABLE_TAG_START, Node,
+    NodeList, TemplateSyntaxError, VariableDoesNotExist, kwarg_re,
+    render_value_in_context, token_kwargs,
 )
+from .context import Context
 from .defaultfilters import date
 from .library import Library
 from .smartif import IfParser, Literal
@@ -43,11 +44,15 @@ class AutoEscapeControlNode(Node):
 
 
 class CommentNode(Node):
+    child_nodelists = ()
+
     def render(self, context):
         return ''
 
 
 class CsrfTokenNode(Node):
+    child_nodelists = ()
+
     def render(self, context):
         csrf_token = context.get('csrf_token')
         if csrf_token:
@@ -94,10 +99,13 @@ class CycleNode(Node):
 
 class DebugNode(Node):
     def render(self, context):
+        if not settings.DEBUG:
+            return ''
+
         from pprint import pformat
-        output = [pformat(val) for val in context]
+        output = [escape(pformat(val)) for val in context]
         output.append('\n\n')
-        output.append(pformat(sys.modules))
+        output.append(escape(pformat(sys.modules)))
         return ''.join(output)
 
 
@@ -259,25 +267,6 @@ class IfChangedNode(Node):
             return context.render_context
 
 
-class IfEqualNode(Node):
-    child_nodelists = ('nodelist_true', 'nodelist_false')
-
-    def __init__(self, var1, var2, nodelist_true, nodelist_false, negate):
-        self.var1, self.var2 = var1, var2
-        self.nodelist_true, self.nodelist_false = nodelist_true, nodelist_false
-        self.negate = negate
-
-    def __repr__(self):
-        return '<%s>' % self.__class__.__name__
-
-    def render(self, context):
-        val1 = self.var1.resolve(context, ignore_failures=True)
-        val2 = self.var2.resolve(context, ignore_failures=True)
-        if (self.negate and val1 != val2) or (not self.negate and val1 == val2):
-            return self.nodelist_true.render(context)
-        return self.nodelist_false.render(context)
-
-
 class IfNode(Node):
 
     def __init__(self, conditions_nodelists):
@@ -360,6 +349,8 @@ class RegroupNode(Node):
 
 
 class LoadNode(Node):
+    child_nodelists = ()
+
     def render(self, context):
         return ''
 
@@ -418,14 +409,25 @@ class TemplateTagNode(Node):
 
 
 class URLNode(Node):
+    child_nodelists = ()
+
     def __init__(self, view_name, args, kwargs, asvar):
         self.view_name = view_name
         self.args = args
         self.kwargs = kwargs
         self.asvar = asvar
 
+    def __repr__(self):
+        return "<%s view_name='%s' args=%s kwargs=%s as=%s>" % (
+            self.__class__.__qualname__,
+            self.view_name,
+            repr(self.args),
+            repr(self.kwargs),
+            repr(self.asvar),
+        )
+
     def render(self, context):
-        from django.urls import reverse, NoReverseMatch
+        from django.urls import NoReverseMatch, reverse
         args = [arg.resolve(context) for arg in self.args]
         kwargs = {k: v.resolve(context) for k, v in self.kwargs.items()}
         view_name = self.view_name.resolve(context)
@@ -698,7 +700,7 @@ def firstof(parser, token):
             {{ var3 }}
         {% endif %}
 
-    but obviously much cleaner!
+    but much cleaner!
 
     You can also use a literal string as a fallback value in case all
     passed variables are False::
@@ -791,8 +793,9 @@ def do_for(parser, token):
     """
     bits = token.split_contents()
     if len(bits) < 4:
-        raise TemplateSyntaxError("'for' statements should have at least four"
-                                  " words: %s" % token.contents)
+        raise TemplateSyntaxError(
+            "'for' statements should have at least four words: %s" % token.contents
+        )
 
     is_reversed = bits[-1] == 'reversed'
     in_index = -3 if is_reversed else -2
@@ -804,8 +807,9 @@ def do_for(parser, token):
     loopvars = re.split(r' *, *', ' '.join(bits[1:in_index]))
     for var in loopvars:
         if not var or not invalid_chars.isdisjoint(var):
-            raise TemplateSyntaxError("'for' tag received an invalid argument:"
-                                      " %s" % token.contents)
+            raise TemplateSyntaxError(
+                "'for' tag received an invalid argument: %s" % token.contents
+            )
 
     sequence = parser.compile_filter(bits[in_index + 1])
     nodelist_loop = parser.parse(('empty', 'endfor',))
@@ -816,52 +820,6 @@ def do_for(parser, token):
     else:
         nodelist_empty = None
     return ForNode(loopvars, sequence, is_reversed, nodelist_loop, nodelist_empty)
-
-
-def do_ifequal(parser, token, negate):
-    bits = list(token.split_contents())
-    if len(bits) != 3:
-        raise TemplateSyntaxError("%r takes two arguments" % bits[0])
-    end_tag = 'end' + bits[0]
-    nodelist_true = parser.parse(('else', end_tag))
-    token = parser.next_token()
-    if token.contents == 'else':
-        nodelist_false = parser.parse((end_tag,))
-        parser.delete_first_token()
-    else:
-        nodelist_false = NodeList()
-    val1 = parser.compile_filter(bits[1])
-    val2 = parser.compile_filter(bits[2])
-    return IfEqualNode(val1, val2, nodelist_true, nodelist_false, negate)
-
-
-@register.tag
-def ifequal(parser, token):
-    """
-    Output the contents of the block if the two arguments equal each other.
-
-    Examples::
-
-        {% ifequal user.id comment.user_id %}
-            ...
-        {% endifequal %}
-
-        {% ifnotequal user.id comment.user_id %}
-            ...
-        {% else %}
-            ...
-        {% endifnotequal %}
-    """
-    return do_ifequal(parser, token, False)
-
-
-@register.tag
-def ifnotequal(parser, token):
-    """
-    Output the contents of the block if the two arguments are not equal.
-    See ifequal.
-    """
-    return do_ifequal(parser, token, True)
 
 
 class TemplateLiteral(Literal):
@@ -969,7 +927,7 @@ def do_if(parser, token):
 
     # {% endif %}
     if token.contents != 'endif':
-        raise TemplateSyntaxError('Malformed template tag at line {0}: "{1}"'.format(token.lineno, token.contents))
+        raise TemplateSyntaxError('Malformed template tag at line {}: "{}"'.format(token.lineno, token.contents))
 
     return IfNode(conditions_nodelists)
 
@@ -1204,8 +1162,9 @@ def regroup(parser, token):
     if bits[2] != 'by':
         raise TemplateSyntaxError("second argument to 'regroup' tag must be 'by'")
     if bits[4] != 'as':
-        raise TemplateSyntaxError("next-to-last argument to 'regroup' tag must"
-                                  " be 'as'")
+        raise TemplateSyntaxError(
+            "next-to-last argument to 'regroup' tag must be 'as'"
+        )
     var_name = bits[5]
     # RegroupNode will take each item in 'target', put it in the context under
     # 'var_name', evaluate 'var_name'.'expression' in the current context, and
@@ -1417,10 +1376,10 @@ def widthratio(parser, token):
     (because 175/200 = .875; .875 * 100 = 87.5 which is rounded up to 88).
 
     In some cases you might want to capture the result of widthratio in a
-    variable. It can be useful for instance in a blocktrans like this::
+    variable. It can be useful for instance in a blocktranslate like this::
 
         {% widthratio this_value max_value max_width as width %}
-        {% blocktrans %}The width is: {{ width }}{% endblocktrans %}
+        {% blocktranslate %}The width is: {{ width }}{% endblocktranslate %}
     """
     bits = token.split_contents()
     if len(bits) == 4:
@@ -1464,8 +1423,9 @@ def do_with(parser, token):
     remaining_bits = bits[1:]
     extra_context = token_kwargs(remaining_bits, parser, support_legacy=True)
     if not extra_context:
-        raise TemplateSyntaxError("%r expected at least one variable "
-                                  "assignment" % bits[0])
+        raise TemplateSyntaxError(
+            "%r expected at least one variable assignment" % bits[0]
+        )
     if remaining_bits:
         raise TemplateSyntaxError("%r received an invalid token: %r" %
                                   (bits[0], remaining_bits[0]))

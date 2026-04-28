@@ -5,10 +5,12 @@ that the producer of the string has already turned characters that should not
 be interpreted by the HTML engine (e.g. '<') into the appropriate entities.
 """
 
-from django.utils.functional import wraps
+from functools import wraps
 
 
 class SafeData:
+    __slots__ = ()
+
     def __html__(self):
         """
         Return the html representation of a string for interoperability.
@@ -23,9 +25,12 @@ class SafeString(str, SafeData):
     A str subclass that has been specifically marked as "safe" for HTML output
     purposes.
     """
+
+    __slots__ = ()
+
     def __add__(self, rhs):
         """
-        Concatenating a safe string with another safe byte string or
+        Concatenating a safe string with another safe bytestring or
         safe string is safe. Otherwise, the result is no longer safe.
         """
         t = super().__add__(rhs)

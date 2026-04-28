@@ -29,10 +29,11 @@ class BaseUserManager(models.Manager):
             email = email_name + '@' + domain_part.lower()
         return email
 
-    def make_random_password(self, length=10,
-                             allowed_chars='abcdefghjkmnpqrstuvwxyz'
-                                           'ABCDEFGHJKLMNPQRSTUVWXYZ'
-                                           '23456789'):
+    def make_random_password(
+        self,
+        length=10,
+        allowed_chars='abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789',
+    ):
         """
         Generate a random password with the given length and given
         allowed_chars. The default value of allowed_chars does not have "I" or
@@ -125,7 +126,11 @@ class AbstractBaseUser(models.Model):
         Return an HMAC of the password field.
         """
         key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
-        return salted_hmac(key_salt, self.password).hexdigest()
+        return salted_hmac(
+            key_salt,
+            self.password,
+            algorithm='sha256',
+        ).hexdigest()
 
     @classmethod
     def get_email_field_name(cls):
