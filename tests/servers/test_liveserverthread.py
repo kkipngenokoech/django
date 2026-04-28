@@ -1,5 +1,6 @@
 from django.db import DEFAULT_DB_ALIAS, connections
 from django.test import LiveServerTestCase, TestCase
+from django.test.testcases import LiveServerThread
 
 
 class LiveServerThreadTest(TestCase):
@@ -13,8 +14,6 @@ class LiveServerThreadTest(TestCase):
 
     def test_closes_connections(self):
         conn = connections[DEFAULT_DB_ALIAS]
-        if conn.vendor == 'sqlite' and conn.is_in_memory_db():
-            self.skipTest("the sqlite backend's close() method is a no-op when using an in-memory database")
         # Pass a connection to the thread to check they are being closed.
         connections_override = {DEFAULT_DB_ALIAS: conn}
 
@@ -25,3 +24,18 @@ class LiveServerThreadTest(TestCase):
             self.assertFalse(conn.is_usable())
         finally:
             conn.dec_thread_sharing()
+
+    def test_server_class(self):
+        class FakeServer:
+            def __init__(*args, **kwargs):
+                pass
+
+        class MyServerThread(LiveServerThread):
+            server_class = FakeServer
+
+        class MyServerTestCase(LiveServerTestCase):
+            server_thread_class = MyServerThread
+
+        thread = MyServerTestCase._create_server_thread(None)
+        server = thread._create_server()
+        self.assertIs(type(server), FakeServer)

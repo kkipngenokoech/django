@@ -11,10 +11,12 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.core.management.base import SystemCheckError
-from django.test import TransactionTestCase, skipUnlessDBFeature, testcases
+from django.test import TransactionTestCase, skipUnlessDBFeature
 from django.test.runner import DiscoverRunner
 from django.test.testcases import connections_support_transactions
-from django.test.utils import dependency_ordered
+from django.test.utils import (
+    captured_stderr, dependency_ordered, get_unique_databases_and_mirrors,
+)
 
 from .models import B, Person, Through
 
@@ -147,6 +149,11 @@ class ManageCommandTests(unittest.TestCase):
     def test_bad_test_runner(self):
         with self.assertRaises(AttributeError):
             call_command('test', 'sites', testrunner='test_runner.NonexistentRunner')
+
+    def test_time_recorded(self):
+        with captured_stderr() as stderr:
+            call_command('test', '--timing', 'sites', testrunner='test_runner.tests.MockTestRunner')
+        self.assertIn('Total run took', stderr.getvalue())
 
 
 class CustomTestRunnerOptionsSettingsTests(AdminScriptTestCase):
@@ -331,6 +338,33 @@ class SetupDatabasesTests(unittest.TestCase):
                 self.runner_instance.teardown_databases(old_config)
         mocked_db_creation.return_value.destroy_test_db.assert_called_once_with('dbname', 0, False)
 
+    def test_setup_test_database_aliases(self):
+        """
+        The default database must be the first because data migrations
+        use the default alias by default.
+        """
+        tested_connections = db.ConnectionHandler({
+            'other': {
+                'ENGINE': 'django.db.backends.dummy',
+                'NAME': 'dbname',
+            },
+            'default': {
+                'ENGINE': 'django.db.backends.dummy',
+                'NAME': 'dbname',
+            }
+        })
+        with mock.patch('django.test.utils.connections', new=tested_connections):
+            test_databases, _ = get_unique_databases_and_mirrors()
+            self.assertEqual(
+                test_databases,
+                {
+                    ('', '', 'django.db.backends.dummy', 'test_dbname'): (
+                        'dbname',
+                        ['default', 'other'],
+                    ),
+                },
+            )
+
     def test_destroy_test_db_restores_db_name(self):
         tested_connections = db.ConnectionHandler({
             'default': {
@@ -408,10 +442,11 @@ class EmptyDefaultDatabaseTest(unittest.TestCase):
         An empty default database in settings does not raise an ImproperlyConfigured
         error when running a unit test that does not use a database.
         """
-        testcases.connections = db.ConnectionHandler({'default': {}})
-        connection = testcases.connections[db.utils.DEFAULT_DB_ALIAS]
-        self.assertEqual(connection.settings_dict['ENGINE'], 'django.db.backends.dummy')
-        connections_support_transactions()
+        tested_connections = db.ConnectionHandler({'default': {}})
+        with mock.patch('django.db.connections', new=tested_connections):
+            connection = tested_connections[db.utils.DEFAULT_DB_ALIAS]
+            self.assertEqual(connection.settings_dict['ENGINE'], 'django.db.backends.dummy')
+            connections_support_transactions()
 
 
 class RunTestsExceptionHandlingTests(unittest.TestCase):

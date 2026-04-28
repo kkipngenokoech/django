@@ -1,9 +1,12 @@
 import ctypes
+import faulthandler
+import io
 import itertools
 import logging
 import multiprocessing
 import os
 import pickle
+import sys
 import textwrap
 import unittest
 from importlib import import_module
@@ -13,11 +16,11 @@ from django.core.management import call_command
 from django.db import connections
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import (
-    setup_databases as _setup_databases, setup_test_environment,
-    teardown_databases as _teardown_databases, teardown_test_environment,
+    NullTimeKeeper, TimeKeeper, setup_databases as _setup_databases,
+    setup_test_environment, teardown_databases as _teardown_databases,
+    teardown_test_environment,
 )
 from django.utils.datastructures import OrderedSet
-from django.utils.version import PY37
 
 try:
     import ipdb as pdb
@@ -34,6 +37,7 @@ class DebugSQLTextTestResult(unittest.TextTestResult):
     def __init__(self, stream, descriptions, verbosity):
         self.logger = logging.getLogger('django.db.backends')
         self.logger.setLevel(logging.DEBUG)
+        self.debug_sql_stream = None
         super().__init__(stream, descriptions, verbosity)
 
     def startTest(self, test):
@@ -52,8 +56,13 @@ class DebugSQLTextTestResult(unittest.TextTestResult):
 
     def addError(self, test, err):
         super().addError(test, err)
-        self.debug_sql_stream.seek(0)
-        self.errors[-1] = self.errors[-1] + (self.debug_sql_stream.read(),)
+        if self.debug_sql_stream is None:
+            # Error before tests e.g. in setUpTestData().
+            sql = ''
+        else:
+            self.debug_sql_stream.seek(0)
+            sql = self.debug_sql_stream.read()
+        self.errors[-1] = self.errors[-1] + (sql,)
 
     def addFailure(self, test, err):
         super().addFailure(test, err)
@@ -230,8 +239,8 @@ failure and get a correct traceback.
         self.stop_if_failfast()
 
     def addSubTest(self, test, subtest, err):
-        # Follow Python 3.5's implementation of unittest.TestResult.addSubTest()
-        # by not doing anything when a subtest is successful.
+        # Follow Python's implementation of unittest.TestResult.addSubTest() by
+        # not doing anything when a subtest is successful.
         if err is not None:
             # Call check_picklable() before check_subtest_picklable() since
             # check_picklable() performs the tblib check.
@@ -434,7 +443,8 @@ class DiscoverRunner:
                  interactive=True, failfast=False, keepdb=False,
                  reverse=False, debug_mode=False, debug_sql=False, parallel=0,
                  tags=None, exclude_tags=None, test_name_patterns=None,
-                 pdb=False, buffer=False, **kwargs):
+                 pdb=False, buffer=False, enable_faulthandler=True,
+                 timing=False, **kwargs):
 
         self.pattern = pattern
         self.top_level = top_level
@@ -448,6 +458,11 @@ class DiscoverRunner:
         self.parallel = parallel
         self.tags = set(tags or [])
         self.exclude_tags = set(exclude_tags or [])
+        if not faulthandler.is_enabled() and enable_faulthandler:
+            try:
+                faulthandler.enable(file=sys.stderr.fileno())
+            except (AttributeError, io.UnsupportedOperation):
+                faulthandler.enable(file=sys.__stderr__.fileno())
         self.pdb = pdb
         if self.pdb and self.parallel > 1:
             raise ValueError('You cannot use --pdb with parallel tests; pass --parallel=1 to use it.')
@@ -458,6 +473,7 @@ class DiscoverRunner:
                 '--parallel=1 to use it.'
             )
         self.test_name_patterns = None
+        self.time_keeper = TimeKeeper() if timing else NullTimeKeeper()
         if test_name_patterns:
             # unittest does not export the _convert_select_pattern function
             # that converts command-line arguments to patterns.
@@ -513,15 +529,24 @@ class DiscoverRunner:
             '-b', '--buffer', action='store_true',
             help='Discard output from passing tests.',
         )
-        if PY37:
-            parser.add_argument(
-                '-k', action='append', dest='test_name_patterns',
-                help=(
-                    'Only run test methods and classes that match the pattern '
-                    'or substring. Can be used multiple times. Same as '
-                    'unittest -k option.'
-                ),
-            )
+        parser.add_argument(
+            '--no-faulthandler', action='store_false', dest='enable_faulthandler',
+            help='Disables the Python faulthandler module during tests.',
+        )
+        parser.add_argument(
+            '--timing', action='store_true',
+            help=(
+                'Output timings, including database set up and total run time.'
+            ),
+        )
+        parser.add_argument(
+            '-k', action='append', dest='test_name_patterns',
+            help=(
+                'Only run test methods and classes that match the pattern '
+                'or substring. Can be used multiple times. Same as '
+                'unittest -k option.'
+            ),
+        )
 
     def setup_test_environment(self, **kwargs):
         setup_test_environment(debug=self.debug_mode)
@@ -612,8 +637,8 @@ class DiscoverRunner:
 
     def setup_databases(self, **kwargs):
         return _setup_databases(
-            self.verbosity, self.interactive, self.keepdb, self.debug_sql,
-            self.parallel, **kwargs
+            self.verbosity, self.interactive, time_keeper=self.time_keeper, keepdb=self.keepdb,
+            debug_sql=self.debug_sql, parallel=self.parallel, **kwargs
         )
 
     def get_resultclass(self):
@@ -692,7 +717,8 @@ class DiscoverRunner:
         self.setup_test_environment()
         suite = self.build_suite(test_labels, extra_tests)
         databases = self.get_databases(suite)
-        old_config = self.setup_databases(aliases=databases)
+        with self.time_keeper.timed('Total database setup'):
+            old_config = self.setup_databases(aliases=databases)
         run_failed = False
         try:
             self.run_checks(databases)
@@ -702,13 +728,15 @@ class DiscoverRunner:
             raise
         finally:
             try:
-                self.teardown_databases(old_config)
+                with self.time_keeper.timed('Total database teardown'):
+                    self.teardown_databases(old_config)
                 self.teardown_test_environment()
             except Exception:
                 # Silence teardown exceptions if an exception was raised during
                 # runs to avoid shadowing it.
                 if not run_failed:
                     raise
+        self.time_keeper.print_results()
         return self.suite_result(suite, result)
 
 
