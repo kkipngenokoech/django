@@ -969,6 +969,11 @@ class AdminViewBasicTest(AdminViewBasicTestCase):
         self.assertEqual(response.context['site_url'], '/my-site-url/')
         self.assertContains(response, '<a href="/my-site-url/">View site</a>')
 
+    def test_date_hierarchy_empty_queryset(self):
+        self.assertIs(Question.objects.exists(), False)
+        response = self.client.get(reverse('admin:admin_views_answer2_changelist'))
+        self.assertEqual(response.status_code, 200)
+
     @override_settings(TIME_ZONE='America/Sao_Paulo', USE_TZ=True)
     def test_date_hierarchy_timezone_dst(self):
         # This datetime doesn't exist in this timezone due to DST.
@@ -1229,26 +1234,18 @@ class AdminJavaScriptTest(TestCase):
             response = self.client.get(reverse('admin:admin_views_section_add'))
             self.assertNotContains(response, 'vendor/jquery/jquery.js')
             self.assertContains(response, 'vendor/jquery/jquery.min.js')
-            self.assertNotContains(response, 'prepopulate.js')
-            self.assertContains(response, 'prepopulate.min.js')
-            self.assertNotContains(response, 'actions.js')
-            self.assertContains(response, 'actions.min.js')
-            self.assertNotContains(response, 'collapse.js')
-            self.assertContains(response, 'collapse.min.js')
-            self.assertNotContains(response, 'inlines.js')
-            self.assertContains(response, 'inlines.min.js')
+            self.assertContains(response, 'prepopulate.js')
+            self.assertContains(response, 'actions.js')
+            self.assertContains(response, 'collapse.js')
+            self.assertContains(response, 'inlines.js')
         with override_settings(DEBUG=True):
             response = self.client.get(reverse('admin:admin_views_section_add'))
             self.assertContains(response, 'vendor/jquery/jquery.js')
             self.assertNotContains(response, 'vendor/jquery/jquery.min.js')
             self.assertContains(response, 'prepopulate.js')
-            self.assertNotContains(response, 'prepopulate.min.js')
             self.assertContains(response, 'actions.js')
-            self.assertNotContains(response, 'actions.min.js')
             self.assertContains(response, 'collapse.js')
-            self.assertNotContains(response, 'collapse.min.js')
             self.assertContains(response, 'inlines.js')
-            self.assertNotContains(response, 'inlines.min.js')
 
 
 @override_settings(ROOT_URLCONF='admin_views.urls')
@@ -1425,6 +1422,7 @@ def get_perm(Model, codename):
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
+                'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
             ],
@@ -2424,6 +2422,7 @@ class AdminViewPermissionsTest(TestCase):
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
+                'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
             ],
@@ -4454,13 +4453,13 @@ class SeleniumTests(AdminSeleniumTestCase):
         # Main form ----------------------------------------------------------
         self.selenium.find_element_by_id('id_pubdate').send_keys('2012-02-18')
         self.select_option('#id_status', 'option two')
-        self.selenium.find_element_by_id('id_name').send_keys(' this is the mAin nÀMë and it\'s awεšomeıııİ')
+        self.selenium.find_element_by_id('id_name').send_keys(' the mAin nÀMë and it\'s awεšomeıııİ')
         slug1 = self.selenium.find_element_by_id('id_slug1').get_attribute('value')
         slug2 = self.selenium.find_element_by_id('id_slug2').get_attribute('value')
         slug3 = self.selenium.find_element_by_id('id_slug3').get_attribute('value')
-        self.assertEqual(slug1, 'main-name-and-its-awesomeiiii-2012-02-18')
-        self.assertEqual(slug2, 'option-two-main-name-and-its-awesomeiiii')
-        self.assertEqual(slug3, 'this-is-the-main-n\xe0m\xeb-and-its-aw\u03b5\u0161ome\u0131\u0131\u0131i')
+        self.assertEqual(slug1, 'the-main-name-and-its-awesomeiiii-2012-02-18')
+        self.assertEqual(slug2, 'option-two-the-main-name-and-its-awesomeiiii')
+        self.assertEqual(slug3, 'the-main-n\xe0m\xeb-and-its-aw\u03b5\u0161ome\u0131\u0131\u0131i')
 
         # Stacked inlines ----------------------------------------------------
         # Initial inline
@@ -4471,8 +4470,8 @@ class SeleniumTests(AdminSeleniumTestCase):
         )
         slug1 = self.selenium.find_element_by_id('id_relatedprepopulated_set-0-slug1').get_attribute('value')
         slug2 = self.selenium.find_element_by_id('id_relatedprepopulated_set-0-slug2').get_attribute('value')
-        self.assertEqual(slug1, 'here-stacked-inline-2011-12-17')
-        self.assertEqual(slug2, 'option-one-here-stacked-inline')
+        self.assertEqual(slug1, 'here-is-a-stacked-inline-2011-12-17')
+        self.assertEqual(slug2, 'option-one-here-is-a-stacked-inline')
         initial_select2_inputs = self.selenium.find_elements_by_class_name('select2-selection')
         # Inline formsets have empty/invisible forms.
         # Only the 4 visible select2 inputs are initialized.
@@ -4494,9 +4493,9 @@ class SeleniumTests(AdminSeleniumTestCase):
         slug1 = self.selenium.find_element_by_id('id_relatedprepopulated_set-1-slug1').get_attribute('value')
         slug2 = self.selenium.find_element_by_id('id_relatedprepopulated_set-1-slug2').get_attribute('value')
         # 50 characters maximum for slug1 field
-        self.assertEqual(slug1, 'now-you-have-another-stacked-inline-very-loooooooo')
+        self.assertEqual(slug1, 'now-you-have-another-stacked-inline-with-a-very-lo')
         # 60 characters maximum for slug2 field
-        self.assertEqual(slug2, 'option-two-now-you-have-another-stacked-inline-very-looooooo')
+        self.assertEqual(slug2, 'option-two-now-you-have-another-stacked-inline-with-a-very-l')
 
         # Tabular inlines ----------------------------------------------------
         # Initial inline
@@ -4507,8 +4506,8 @@ class SeleniumTests(AdminSeleniumTestCase):
         )
         slug1 = self.selenium.find_element_by_id('id_relatedprepopulated_set-2-0-slug1').get_attribute('value')
         slug2 = self.selenium.find_element_by_id('id_relatedprepopulated_set-2-0-slug2').get_attribute('value')
-        self.assertEqual(slug1, 'and-now-tabular-inline-1234-12-07')
-        self.assertEqual(slug2, 'option-two-and-now-tabular-inline')
+        self.assertEqual(slug1, 'and-now-with-a-tabular-inline-1234-12-07')
+        self.assertEqual(slug2, 'option-two-and-now-with-a-tabular-inline')
 
         # Add an inline
         # Button may be outside the browser frame.
@@ -4522,12 +4521,12 @@ class SeleniumTests(AdminSeleniumTestCase):
         self.selenium.find_element_by_id('id_relatedprepopulated_set-2-1-pubdate').send_keys('1981-08-22')
         self.select_option('#id_relatedprepopulated_set-2-1-status', 'option one')
         self.selenium.find_element_by_id('id_relatedprepopulated_set-2-1-name').send_keys(
-            r'a tÃbűlaŘ inline with ignored ;"&*^\%$#@-/`~ characters'
+            r'tÃbűlaŘ inline with ignored ;"&*^\%$#@-/`~ characters'
         )
         slug1 = self.selenium.find_element_by_id('id_relatedprepopulated_set-2-1-slug1').get_attribute('value')
         slug2 = self.selenium.find_element_by_id('id_relatedprepopulated_set-2-1-slug2').get_attribute('value')
-        self.assertEqual(slug1, 'tabular-inline-ignored-characters-1981-08-22')
-        self.assertEqual(slug2, 'option-one-tabular-inline-ignored-characters')
+        self.assertEqual(slug1, 'tabular-inline-with-ignored-characters-1981-08-22')
+        self.assertEqual(slug2, 'option-one-tabular-inline-with-ignored-characters')
         # Add an inline without an initial inline.
         # The button is outside of the browser frame.
         self.selenium.execute_script("window.scrollTo(0, document.body.scrollHeight);")
@@ -4541,42 +4540,42 @@ class SeleniumTests(AdminSeleniumTestCase):
             self.selenium.find_element_by_xpath('//input[@value="Save"]').click()
         self.assertEqual(MainPrepopulated.objects.all().count(), 1)
         MainPrepopulated.objects.get(
-            name=' this is the mAin nÀMë and it\'s awεšomeıııİ',
+            name=' the mAin nÀMë and it\'s awεšomeıııİ',
             pubdate='2012-02-18',
             status='option two',
-            slug1='main-name-and-its-awesomeiiii-2012-02-18',
-            slug2='option-two-main-name-and-its-awesomeiiii',
-            slug3='this-is-the-main-nàmë-and-its-awεšomeıııi',
+            slug1='the-main-name-and-its-awesomeiiii-2012-02-18',
+            slug2='option-two-the-main-name-and-its-awesomeiiii',
+            slug3='the-main-nàmë-and-its-awεšomeıııi',
         )
         self.assertEqual(RelatedPrepopulated.objects.all().count(), 4)
         RelatedPrepopulated.objects.get(
             name=' here is a sŤāÇkeð   inline !  ',
             pubdate='2011-12-17',
             status='option one',
-            slug1='here-stacked-inline-2011-12-17',
-            slug2='option-one-here-stacked-inline',
+            slug1='here-is-a-stacked-inline-2011-12-17',
+            slug2='option-one-here-is-a-stacked-inline',
         )
         RelatedPrepopulated.objects.get(
             # 75 characters in name field
             name=' now you haVe anöther   sŤāÇkeð  inline with a very ... loooooooooooooooooo',
             pubdate='1999-01-25',
             status='option two',
-            slug1='now-you-have-another-stacked-inline-very-loooooooo',
-            slug2='option-two-now-you-have-another-stacked-inline-very-looooooo',
+            slug1='now-you-have-another-stacked-inline-with-a-very-lo',
+            slug2='option-two-now-you-have-another-stacked-inline-with-a-very-l',
         )
         RelatedPrepopulated.objects.get(
             name='And now, with a tÃbűlaŘ inline !!!',
             pubdate='1234-12-07',
             status='option two',
-            slug1='and-now-tabular-inline-1234-12-07',
-            slug2='option-two-and-now-tabular-inline',
+            slug1='and-now-with-a-tabular-inline-1234-12-07',
+            slug2='option-two-and-now-with-a-tabular-inline',
         )
         RelatedPrepopulated.objects.get(
-            name=r'a tÃbűlaŘ inline with ignored ;"&*^\%$#@-/`~ characters',
+            name=r'tÃbűlaŘ inline with ignored ;"&*^\%$#@-/`~ characters',
             pubdate='1981-08-22',
             status='option one',
-            slug1='tabular-inline-ignored-characters-1981-08-22',
-            slug2='option-one-tabular-inline-ignored-characters',
+            slug1='tabular-inline-with-ignored-characters-1981-08-22',
+            slug2='option-one-tabular-inline-with-ignored-characters',
         )
 
     def test_populate_existing_object(self):
@@ -4602,8 +4601,8 @@ class SeleniumTests(AdminSeleniumTestCase):
         # The slugs got prepopulated since they were originally empty
         slug1 = self.selenium.find_element_by_id('id_slug1').get_attribute('value')
         slug2 = self.selenium.find_element_by_id('id_slug2').get_attribute('value')
-        self.assertEqual(slug1, 'main-name-best-2012-02-18')
-        self.assertEqual(slug2, 'option-two-main-name-best')
+        self.assertEqual(slug1, 'this-is-the-main-name-the-best-2012-02-18')
+        self.assertEqual(slug2, 'option-two-this-is-the-main-name-the-best')
 
         # Save the object
         with self.wait_page_loaded():
@@ -4615,8 +4614,8 @@ class SeleniumTests(AdminSeleniumTestCase):
         # The slugs got prepopulated didn't change since they were originally not empty
         slug1 = self.selenium.find_element_by_id('id_slug1').get_attribute('value')
         slug2 = self.selenium.find_element_by_id('id_slug2').get_attribute('value')
-        self.assertEqual(slug1, 'main-name-best-2012-02-18')
-        self.assertEqual(slug2, 'option-two-main-name-best')
+        self.assertEqual(slug1, 'this-is-the-main-name-the-best-2012-02-18')
+        self.assertEqual(slug2, 'option-two-this-is-the-main-name-the-best')
 
     def test_collapsible_fieldset(self):
         """
