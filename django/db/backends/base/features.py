@@ -20,6 +20,8 @@ class BaseDatabaseFeatures:
     # Does the backend allow inserting duplicate rows when a unique_together
     # constraint exists and some fields are nullable but not all of them?
     supports_partially_nullable_unique_constraints = True
+    # Does the backend support initially deferrable unique constraints?
+    supports_deferrable_unique_constraints = False
 
     can_use_chunked_reads = True
     can_return_columns_from_insert = False
@@ -297,6 +299,15 @@ class BaseDatabaseFeatures:
 
     # Does the backend support boolean expressions in the SELECT clause?
     supports_boolean_expr_in_select_clause = True
+
+    # Does the backend support JSONField?
+    supports_json_field = True
+    # Can the backend introspect a JSONField?
+    can_introspect_json_field = True
+    # Does the backend support primitives in JSONField?
+    supports_primitives_in_json_field = True
+    # Is there a true datatype for JSON?
+    has_native_json_field = False
 
     def __init__(self, connection):
         self.connection = connection
