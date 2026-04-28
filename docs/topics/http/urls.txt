@@ -2,7 +2,7 @@
 URL dispatcher
 ==============
 
-A clean, elegant URL scheme is an important detail in a high-quality Web
+A clean, elegant URL scheme is an important detail in a high-quality web
 application. Django lets you design URLs however you want, with no framework
 limitations.
 
@@ -60,11 +60,6 @@ algorithm the system follows to determine which Python code to execute:
      path expression that are provided, overridden by any arguments specified
      in the optional ``kwargs`` argument to :func:`django.urls.path` or
      :func:`django.urls.re_path`.
-
-     .. versionchanged:: 3.0
-
-          In older versions, the keyword arguments with ``None`` values are
-          made up also for not provided named parts.
 
 #. If no URL pattern matches, or if an exception is raised during any
    point in this process, Django invokes an appropriate
@@ -124,7 +119,7 @@ The following path converters are available by default:
 * ``str`` - Matches any non-empty string, excluding the path separator, ``'/'``.
   This is the default if a converter isn't included in the expression.
 
-* ``int`` - Matches zero or any positive integer. Returns an `int`.
+* ``int`` - Matches zero or any positive integer. Returns an ``int``.
 
 * ``slug`` - Matches any slug string consisting of ASCII letters or numbers,
   plus the hyphen and underscore characters. For example,
@@ -161,10 +156,6 @@ A converter is a class that includes the following:
   can't convert the given value. A ``ValueError`` is interpreted as no match
   and as a consequence :func:`~django.urls.reverse` will raise
   :class:`~django.urls.NoReverseMatch` unless another URL pattern matches.
-
-  .. versionchanged:: 3.1
-
-    Support for raising ``ValueError`` to indicate no match was added.
 
 For example::
 
@@ -255,8 +246,8 @@ following URL patterns which optionally take a page argument::
     from django.urls import re_path
 
     urlpatterns = [
-        re_path(r'^blog/(page-(\d+)/)?$', blog_articles),                  # bad
-        re_path(r'^comments/(?:page-(?P<page_number>\d+)/)?$', comments),  # good
+        re_path(r'^blog/(page-([0-9]+)/)?$', blog_articles),                  # bad
+        re_path(r'^comments/(?:page-(?P<page_number>[0-9]+)/)?$', comments),  # good
     ]
 
 Both patterns use nested arguments and will resolve: for example,
@@ -326,8 +317,9 @@ default argument for ``num``, ``1``. If the second pattern matches,
 Performance
 ===========
 
-Each regular expression in a ``urlpatterns`` is compiled the first time it's
-accessed. This makes the system blazingly fast.
+Django processes regular expressions in the ``urlpatterns`` list which is
+compiled the first time it's accessed. Subsequent requests use the cached
+configuration via the URL resolver.
 
 Syntax of the ``urlpatterns`` variable
 ======================================
@@ -776,7 +768,7 @@ so that it takes the instance namespace into consideration when creating and
 displaying polls.
 
 .. code-block:: python
-    :caption: urls.py
+    :caption: ``urls.py``
 
     from django.urls import include, path
 
@@ -786,7 +778,7 @@ displaying polls.
     ]
 
 .. code-block:: python
-    :caption: polls/urls.py
+    :caption: ``polls/urls.py``
 
     from django.urls import path
 
@@ -845,7 +837,7 @@ module, or a string reference to the module, to :func:`~django.urls.include`,
 not the list of ``urlpatterns`` itself.
 
 .. code-block:: python
-    :caption: polls/urls.py
+    :caption: ``polls/urls.py``
 
     from django.urls import path
 
@@ -859,7 +851,7 @@ not the list of ``urlpatterns`` itself.
     ]
 
 .. code-block:: python
-    :caption: urls.py
+    :caption: ``urls.py``
 
     from django.urls import include, path
 

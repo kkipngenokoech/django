@@ -111,7 +111,7 @@ Customizing widget instances
 When Django renders a widget as HTML, it only renders very minimal markup -
 Django doesn't add class names, or any other widget-specific attributes. This
 means, for example, that all :class:`TextInput` widgets will appear the same
-on your Web pages.
+on your web pages.
 
 There are two ways to customize widgets: :ref:`per widget instance
 <styling-widget-instances>` and :ref:`per widget class <styling-widget-classes>`.
@@ -145,7 +145,7 @@ provided for each widget will be rendered exactly the same::
     <tr><th>Url:</th><td><input type="url" name="url" required></td></tr>
     <tr><th>Comment:</th><td><input type="text" name="comment" required></td></tr>
 
-On a real Web page, you probably don't want every widget to look the same. You
+On a real web page, you probably don't want every widget to look the same. You
 might want a larger input element for the comment, and you might want the
 'name' widget to have some special CSS class. It is also possible to specify
 the 'type' attribute to take advantage of the new HTML5 input types.  To do
@@ -277,7 +277,8 @@ foundation for custom widgets.
     .. method:: id_for_label(id_)
 
         Returns the HTML ID attribute of this widget for use by a ``<label>``,
-        given the ID of the field. Returns ``None`` if an ID isn't available.
+        given the ID of the field. Returns an empty string if an ID isn't
+        available.
 
         This hook is necessary because some widgets have multiple HTML
         elements and, thus, multiple IDs. In that case, this method should
@@ -315,6 +316,17 @@ foundation for custom widgets.
         ``<select multiple>`` don't appear in the data of an HTML form
         submission, so it's unknown whether or not the user submitted a value.
 
+    .. attribute:: Widget.use_fieldset
+
+        An attribute to identify if the widget should be grouped in a
+        ``<fieldset>`` with a ``<legend>`` when rendered. Defaults to ``False``
+        but is ``True`` when the widget contains multiple ``<input>`` tags such as
+        :class:`~django.forms.CheckboxSelectMultiple`,
+        :class:`~django.forms.RadioSelect`,
+        :class:`~django.forms.MultiWidget`,
+        :class:`~django.forms.SplitDateTimeWidget`, and
+        :class:`~django.forms.SelectDateWidget`.
+
     .. method:: use_required_attribute(initial)
 
         Given a form field's ``initial`` value, returns whether or not the
@@ -336,11 +348,6 @@ foundation for custom widgets.
         a hidden ``textarea`` element may want to always return ``False`` to
         avoid browser validation on the hidden field.
 
-        .. versionchanged:: 3.1
-
-            In older versions, ``True`` was returned for
-            :class:`~django.forms.FileInput` when ``initial`` was set.
-
 ``MultiWidget``
 ---------------
 
@@ -354,7 +361,23 @@ foundation for custom widgets.
 
     .. attribute:: MultiWidget.widgets
 
-        An iterable containing the widgets needed.
+        An iterable containing the widgets needed. For example::
+
+            >>> from django.forms import MultiWidget, TextInput
+            >>> widget = MultiWidget(widgets=[TextInput, TextInput])
+            >>> widget.render('name', ['john', 'paul'])
+            '<input type="text" name="name_0" value="john"><input type="text" name="name_1" value="paul">'
+
+        You may provide a dictionary in order to specify custom suffixes for
+        the ``name`` attribute on each subwidget. In this case, for each
+        ``(key, widget)`` pair, the key will be appended to the ``name`` of the
+        widget in order to generate the attribute value. You may provide the
+        empty string (``''``) for a single key, in order to suppress the suffix
+        for one widget. For example::
+
+            >>> widget = MultiWidget(widgets={'': TextInput, 'last': TextInput})
+            >>> widget.render('name', ['john', 'paul'])
+            '<input type="text" name="name" value="john"><input type="text" name="name_last" value="paul">'
 
     And one required method:
 
@@ -397,7 +420,7 @@ foundation for custom widgets.
     .. method:: get_context(name, value, attrs)
 
         In addition to the ``'widget'`` key described in
-        :meth:`Widget.get_context`, ``MultiValueWidget`` adds a
+        :meth:`Widget.get_context`, ``MultiWidget`` adds a
         ``widget['subwidgets']`` key.
 
         These can be looped over in the widget template:
@@ -443,7 +466,7 @@ foundation for custom widgets.
                 return '{}-{}-{}'.format(year, month, day)
 
     The constructor creates several :class:`Select` widgets in a list. The
-    ``super()`` method uses this list to setup the widget.
+    ``super()`` method uses this list to set up the widget.
 
     The required method :meth:`~MultiWidget.decompress` breaks up a
     ``datetime.date`` value into the day, month, and year values corresponding
@@ -692,14 +715,14 @@ that specifies the template used to render each choice. For example, for the
     * ``option_template_name``: ``'django/forms/widgets/radio_option.html'``
 
     Similar to :class:`Select`, but rendered as a list of radio buttons within
-    ``<li>`` tags:
+    ``<div>`` tags:
 
     .. code-block:: html
 
-        <ul>
-          <li><input type="radio" name="..."></li>
+        <div>
+          <div><input type="radio" name="..."></div>
           ...
-        </ul>
+        </div>
 
     For more granular control over the generated markup, you can loop over the
     radio buttons in the template. Assuming a form ``myform`` with a field
@@ -707,28 +730,34 @@ that specifies the template used to render each choice. For example, for the
 
     .. code-block:: html+django
 
-        {% for radio in myform.beatles %}
-        <div class="myradio">
-            {{ radio }}
-        </div>
-        {% endfor %}
+        <fieldset>
+            <legend>{{ myform.beatles.label }}</legend>
+            {% for radio in myform.beatles %}
+            <div class="myradio">
+                {{ radio }}
+            </div>
+            {% endfor %}
+        </fieldset>
 
     This would generate the following HTML:
 
     .. code-block:: html
 
-        <div class="myradio">
-            <label for="id_beatles_0"><input id="id_beatles_0" name="beatles" type="radio" value="john" required> John</label>
-        </div>
-        <div class="myradio">
-            <label for="id_beatles_1"><input id="id_beatles_1" name="beatles" type="radio" value="paul" required> Paul</label>
-        </div>
-        <div class="myradio">
-            <label for="id_beatles_2"><input id="id_beatles_2" name="beatles" type="radio" value="george" required> George</label>
-        </div>
-        <div class="myradio">
-            <label for="id_beatles_3"><input id="id_beatles_3" name="beatles" type="radio" value="ringo" required> Ringo</label>
-        </div>
+        <fieldset>
+            <legend>Radio buttons</legend>
+            <div class="myradio">
+                <label for="id_beatles_0"><input id="id_beatles_0" name="beatles" type="radio" value="john" required> John</label>
+            </div>
+            <div class="myradio">
+                <label for="id_beatles_1"><input id="id_beatles_1" name="beatles" type="radio" value="paul" required> Paul</label>
+            </div>
+            <div class="myradio">
+                <label for="id_beatles_2"><input id="id_beatles_2" name="beatles" type="radio" value="george" required> George</label>
+            </div>
+            <div class="myradio">
+                <label for="id_beatles_3"><input id="id_beatles_3" name="beatles" type="radio" value="ringo" required> Ringo</label>
+            </div>
+        </fieldset>
 
     That included the ``<label>`` tags. To get more granular, you can use each
     radio button's ``tag``, ``choice_label`` and ``id_for_label`` attributes.
@@ -736,42 +765,45 @@ that specifies the template used to render each choice. For example, for the
 
     .. code-block:: html+django
 
-        {% for radio in myform.beatles %}
+        <fieldset>
+            <legend>{{ myform.beatles.label }}</legend>
+            {% for radio in myform.beatles %}
             <label for="{{ radio.id_for_label }}">
                 {{ radio.choice_label }}
                 <span class="radio">{{ radio.tag }}</span>
             </label>
-        {% endfor %}
+            {% endfor %}
+        </fieldset>
 
     ...will result in the following HTML:
 
     .. code-block:: html
 
-        <label for="id_beatles_0">
-            John
-            <span class="radio"><input id="id_beatles_0" name="beatles" type="radio" value="john" required></span>
-        </label>
-
-        <label for="id_beatles_1">
-            Paul
-            <span class="radio"><input id="id_beatles_1" name="beatles" type="radio" value="paul" required></span>
-        </label>
-
-        <label for="id_beatles_2">
-            George
-            <span class="radio"><input id="id_beatles_2" name="beatles" type="radio" value="george" required></span>
-        </label>
-
-        <label for="id_beatles_3">
-            Ringo
-            <span class="radio"><input id="id_beatles_3" name="beatles" type="radio" value="ringo" required></span>
-        </label>
+        <fieldset>
+            <legend>Radio buttons</legend>
+            <label for="id_beatles_0">
+                John
+                <span class="radio"><input id="id_beatles_0" name="beatles" type="radio" value="john" required></span>
+            </label>
+            <label for="id_beatles_1">
+                Paul
+                <span class="radio"><input id="id_beatles_1" name="beatles" type="radio" value="paul" required></span>
+            </label>
+            <label for="id_beatles_2">
+                George
+                <span class="radio"><input id="id_beatles_2" name="beatles" type="radio" value="george" required></span>
+            </label>
+            <label for="id_beatles_3">
+                Ringo
+                <span class="radio"><input id="id_beatles_3" name="beatles" type="radio" value="ringo" required></span>
+            </label>
+        </fieldset>
 
     If you decide not to loop over the radio buttons -- e.g., if your template
-    includes ``{{ myform.beatles }}`` -- they'll be output in a ``<ul>`` with
-    ``<li>`` tags, as above.
+    includes ``{{ myform.beatles }}`` -- they'll be output in a ``<div>`` with
+    ``<div>`` tags, as above.
 
-    The outer ``<ul>`` container receives the ``id`` attribute of the widget,
+    The outer ``<div>`` container receives the ``id`` attribute of the widget,
     if defined, or :attr:`BoundField.auto_id` otherwise.
 
     When looping over the radio buttons, the ``label`` and ``input`` tags include
@@ -790,12 +822,12 @@ that specifies the template used to render each choice. For example, for the
 
     .. code-block:: html
 
-        <ul>
-          <li><input type="checkbox" name="..." ></li>
+        <div>
+          <div><input type="checkbox" name="..." ></div>
           ...
-        </ul>
+        </div>
 
-    The outer ``<ul>`` container receives the ``id`` attribute of the widget,
+    The outer ``<div>`` container receives the ``id`` attribute of the widget,
     if defined, or :attr:`BoundField.auto_id` otherwise.
 
 Like :class:`RadioSelect`, you can loop over the individual checkboxes for the
@@ -845,12 +877,6 @@ Composite widgets
 
     A widget that handles multiple hidden widgets for fields that have a list
     of values.
-
-    .. attribute:: MultipleHiddenInput.choices
-
-        This attribute is optional when the form field does not have a
-        ``choices`` attribute. If it does, it will override anything you set
-        here when the attribute is updated on the :class:`Field`.
 
 ``SplitDateTimeWidget``
 ~~~~~~~~~~~~~~~~~~~~~~~
