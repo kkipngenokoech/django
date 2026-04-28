@@ -955,6 +955,7 @@ class CharField(Field):
         return [
             *super().check(**kwargs),
             *self._check_max_length_attribute(**kwargs),
+            *self._check_choices_max_length(),
         ]
 
     def _check_max_length_attribute(self, **kwargs):
@@ -977,6 +978,56 @@ class CharField(Field):
             ]
         else:
             return []
+
+    def _check_choices_max_length(self):
+        if not self.choices or self.max_length is None:
+            return []
+
+        errors = []
+        
+        def check_choice_value(value):
+            if isinstance(value, str) and len(value) > self.max_length:
+                return checks.Error(
+                    "'max_length' is too small to fit the longest value "
+                    "in 'choices' (%d characters)." % len(value),
+                    obj=self,
+                    id='fields.E009',
+                )
+            return None
+
+        for choice in self.choices:
+            try:
+                # Check if this is a named group: (group_name, [(value, label), ...])
+                group_name, group_choices = choice
+                if isinstance(group_choices, (list, tuple)):
+                    # This is a named group
+                    for group_choice in group_choices:
+                        try:
+                            value, label = group_choice
+                            error = check_choice_value(value)
+                            if error:
+                                errors.append(error)
+                        except (TypeError, ValueError):
+                            # Invalid choice format, but that's handled by _check_choices
+                            pass
+                else:
+                    # This might be a simple choice: (value, label)
+                    value, label = choice
+                    error = check_choice_value(value)
+                    if error:
+                        errors.append(error)
+            except (TypeError, ValueError):
+                # This might be a simple choice: (value, label)
+                try:
+                    value, label = choice
+                    error = check_choice_value(value)
+                    if error:
+                        errors.append(error)
+                except (TypeError, ValueError):
+                    # Invalid choice format, but that's handled by _check_choices
+                    pass
+
+        return errors
 
     def cast_db_type(self, connection):
         if self.max_length is None:
