@@ -189,6 +189,7 @@ class Query(BaseExpression):
         self.select_for_update_nowait = False
         self.select_for_update_skip_locked = False
         self.select_for_update_of = ()
+        self.select_for_no_key_update = False
 
         self.select_related = False
         # Arbitrary limit for select_related to prevents infinite recursion.
@@ -390,7 +391,7 @@ class Query(BaseExpression):
             else:
                 # Reuse aliases of expressions already selected in subquery.
                 for col_alias, selected_annotation in self.annotation_select.items():
-                    if selected_annotation == expr:
+                    if selected_annotation is expr:
                         new_expr = Ref(col_alias, expr)
                         break
                 else:
@@ -1123,7 +1124,10 @@ class Query(BaseExpression):
 
     def check_filterable(self, expression):
         """Raise an error if expression cannot be used in a WHERE clause."""
-        if not getattr(expression, 'filterable', True):
+        if (
+            hasattr(expression, 'resolve_expression') and
+            not getattr(expression, 'filterable', True)
+        ):
             raise NotSupportedError(
                 expression.__class__.__name__ + ' is disallowed in the filter '
                 'clause.'
@@ -1320,9 +1324,7 @@ class Query(BaseExpression):
         require_outer = lookup_type == 'isnull' and condition.rhs is True and not current_negated
         if current_negated and (lookup_type != 'isnull' or condition.rhs is False) and condition.rhs is not None:
             require_outer = True
-            if (lookup_type != 'isnull' and (
-                    self.is_nullable(targets[0]) or
-                    self.alias_map[join_list[-1]].join_type == LOUTER)):
+            if lookup_type != 'isnull':
                 # The condition added here will be SQL like this:
                 # NOT (col IS NOT NULL), where the first NOT is added in
                 # upper layers of code. The reason for addition is that if col
@@ -1332,9 +1334,18 @@ class Query(BaseExpression):
                 # (col IS NULL OR col != someval)
                 #   <=>
                 # NOT (col IS NOT NULL AND col = someval).
-                lookup_class = targets[0].get_lookup('isnull')
-                col = self._get_col(targets[0], join_info.targets[0], alias)
-                clause.add(lookup_class(col, False), AND)
+                if (
+                    self.is_nullable(targets[0]) or
+                    self.alias_map[join_list[-1]].join_type == LOUTER
+                ):
+                    lookup_class = targets[0].get_lookup('isnull')
+                    col = self._get_col(targets[0], join_info.targets[0], alias)
+                    clause.add(lookup_class(col, False), AND)
+                # If someval is a nullable column, someval IS NOT NULL is
+                # added.
+                if isinstance(value, Col) and self.is_nullable(value.target):
+                    lookup_class = value.target.get_lookup('isnull')
+                    clause.add(lookup_class(value, False), AND)
         return clause, used_joins if not require_outer else ()
 
     def add_filter(self, filter_clause):
@@ -2155,6 +2166,15 @@ class Query(BaseExpression):
             # SELECT clause which is about to be cleared.
             self.set_group_by(allow_aliases=False)
             self.clear_select_fields()
+        elif self.group_by:
+            # Resolve GROUP BY annotation references if they are not part of
+            # the selected fields anymore.
+            group_by = []
+            for expr in self.group_by:
+                if isinstance(expr, Ref) and expr.refs not in field_names:
+                    expr = self.annotations[expr.refs]
+                group_by.append(expr)
+            self.group_by = tuple(group_by)
 
         self.values_select = tuple(field_names)
         self.add_fields(field_names, True)

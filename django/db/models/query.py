@@ -918,6 +918,10 @@ class QuerySet:
 
     def none(self):
         """Return an empty QuerySet."""
+        if self.query.combinator:
+            # For combined queries (union, intersection, difference),
+            # we need to return an EmptyQuerySet to ensure no results
+            return self._clone(klass=EmptyQuerySet)
         clone = self._chain()
         clone.query.set_empty()
         return clone
@@ -1018,7 +1022,7 @@ class QuerySet:
             return self
         return self._combinator_query('difference', *other_qs)
 
-    def select_for_update(self, nowait=False, skip_locked=False, of=()):
+    def select_for_update(self, nowait=False, skip_locked=False, of=(), no_key=False):
         """
         Return a new QuerySet instance that will select objects with a
         FOR UPDATE lock.
@@ -1031,6 +1035,7 @@ class QuerySet:
         obj.query.select_for_update_nowait = nowait
         obj.query.select_for_update_skip_locked = skip_locked
         obj.query.select_for_update_of = of
+        obj.query.select_for_no_key_update = no_key
         return obj
 
     def select_related(self, *fields):
@@ -1138,6 +1143,7 @@ class QuerySet:
         """
         Return a new QuerySet instance that will select only distinct results.
         """
+        self._not_support_combined_queries('distinct')
         assert not self.query.is_sliced, \
             "Cannot create distinct fields once a slice has been taken."
         obj = self._chain()

@@ -3,7 +3,6 @@ import uuid
 from django.conf import settings
 from django.db.backends.base.operations import BaseDatabaseOperations
 from django.utils import timezone
-from django.utils.duration import duration_microseconds
 from django.utils.encoding import force_str
 
 
@@ -139,9 +138,6 @@ class DatabaseOperations(BaseDatabaseOperations):
             return "CAST(DATE_FORMAT(%s, '%s') AS TIME)" % (field_name, format_str)
         else:
             return "TIME(%s)" % (field_name)
-
-    def date_interval_sql(self, timedelta):
-        return 'INTERVAL %s MICROSECOND' % duration_microseconds(timedelta)
 
     def fetch_returned_insert_rows(self, cursor):
         """
@@ -350,14 +346,11 @@ class DatabaseOperations(BaseDatabaseOperations):
         if format and not (analyze and not self.connection.mysql_is_mariadb):
             # Only MariaDB supports the analyze option with formats.
             prefix += ' FORMAT=%s' % format
-        if self.connection.features.needs_explain_extended and not analyze and format is None:
-            # ANALYZE, EXTENDED, and FORMAT are mutually exclusive options.
-            prefix += ' EXTENDED'
         return prefix
 
     def regex_lookup(self, lookup_type):
         # REGEXP BINARY doesn't work correctly in MySQL 8+ and REGEXP_LIKE
-        # doesn't exist in MySQL 5.6 or in MariaDB.
+        # doesn't exist in MySQL 5.x or in MariaDB.
         if self.connection.mysql_version < (8, 0, 0) or self.connection.mysql_is_mariadb:
             if lookup_type == 'regex':
                 return '%s REGEXP BINARY %s'
