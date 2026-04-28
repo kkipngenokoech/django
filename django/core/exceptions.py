@@ -182,6 +182,63 @@ class ValidationError(Exception):
     def __repr__(self):
         return 'ValidationError(%s)' % self
 
+    def __eq__(self, other):
+        if not isinstance(other, ValidationError):
+            return False
+        
+        # Compare error_dict if both have it
+        if hasattr(self, 'error_dict') and hasattr(other, 'error_dict'):
+            if set(self.error_dict.keys()) != set(other.error_dict.keys()):
+                return False
+            for field in self.error_dict:
+                # Convert error lists to sets of normalized error tuples for comparison
+                self_errors = self._normalize_error_list(self.error_dict[field])
+                other_errors = self._normalize_error_list(other.error_dict[field])
+                if set(self_errors) != set(other_errors):
+                    return False
+            return True
+        
+        # Compare error_list if both have it (but not error_dict)
+        elif hasattr(self, 'error_dict') != hasattr(other, 'error_dict'):
+            return False
+        
+        # Both should have error_list at this point
+        self_errors = self._normalize_error_list(self.error_list)
+        other_errors = self._normalize_error_list(other.error_list)
+        return set(self_errors) == set(other_errors)
+
+    def _normalize_error_list(self, error_list):
+        """Convert a list of ValidationError instances to normalized tuples for comparison."""
+        normalized = []
+        for error in error_list:
+            if hasattr(error, 'message'):
+                # Single error with message, code, params
+                message = error.message
+                code = getattr(error, 'code', None)
+                params = getattr(error, 'params', None)
+                # Convert params dict to sorted tuple of items for hashability
+                if params:
+                    params = tuple(sorted(params.items()))
+                normalized.append((message, code, params))
+            else:
+                # This shouldn't happen in normal usage, but handle it gracefully
+                normalized.append((str(error), None, None))
+        return normalized
+
+    def __hash__(self):
+        """Make ValidationError hashable based on its normalized content."""
+        if hasattr(self, 'error_dict'):
+            # For dict-based errors, create a hash from sorted field items
+            items = []
+            for field in sorted(self.error_dict.keys()):
+                field_errors = tuple(sorted(self._normalize_error_list(self.error_dict[field])))
+                items.append((field, field_errors))
+            return hash(tuple(items))
+        else:
+            # For list-based errors, create a hash from sorted normalized errors
+            normalized_errors = tuple(sorted(self._normalize_error_list(self.error_list)))
+            return hash(normalized_errors)
+
 
 class EmptyResultSet(Exception):
     """A database query predicate is impossible."""
