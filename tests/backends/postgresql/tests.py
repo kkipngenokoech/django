@@ -68,6 +68,36 @@ class Tests(TestCase):
         with self.assertRaisesMessage(ImproperlyConfigured, msg):
             DatabaseWrapper(settings).get_connection_params()
 
+    def test_database_name_empty(self):
+        from django.db.backends.postgresql.base import DatabaseWrapper
+        settings = connection.settings_dict.copy()
+        settings['NAME'] = ''
+        msg = (
+            "settings.DATABASES is improperly configured. Please supply the "
+            "NAME or OPTIONS['service'] value."
+        )
+        with self.assertRaisesMessage(ImproperlyConfigured, msg):
+            DatabaseWrapper(settings).get_connection_params()
+
+    def test_service_name(self):
+        from django.db.backends.postgresql.base import DatabaseWrapper
+        settings = connection.settings_dict.copy()
+        settings['OPTIONS'] = {'service': 'my_service'}
+        settings['NAME'] = ''
+        params = DatabaseWrapper(settings).get_connection_params()
+        self.assertEqual(params['service'], 'my_service')
+        self.assertNotIn('database', params)
+
+    def test_service_name_default_db(self):
+        # None is used to connect to the default 'postgres' db.
+        from django.db.backends.postgresql.base import DatabaseWrapper
+        settings = connection.settings_dict.copy()
+        settings['NAME'] = None
+        settings['OPTIONS'] = {'service': 'django_test'}
+        params = DatabaseWrapper(settings).get_connection_params()
+        self.assertEqual(params['database'], 'postgres')
+        self.assertNotIn('service', params)
+
     def test_connect_and_rollback(self):
         """
         PostgreSQL shouldn't roll back SET TIME ZONE, even if the first
@@ -129,10 +159,10 @@ class Tests(TestCase):
             ISOLATION_LEVEL_READ_COMMITTED as read_committed,
             ISOLATION_LEVEL_SERIALIZABLE as serializable,
         )
+
         # Since this is a django.test.TestCase, a transaction is in progress
         # and the isolation level isn't reported as 0. This test assumes that
         # PostgreSQL is configured with the default isolation level.
-
         # Check the level on the psycopg2 connection, not the Django wrapper.
         default_level = read_committed if psycopg2.__version__ < '2.7' else None
         self.assertEqual(connection.connection.isolation_level, default_level)

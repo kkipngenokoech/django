@@ -1,11 +1,9 @@
 import html.entities
 import re
 import unicodedata
-import warnings
 from gzip import GzipFile
 from io import BytesIO
 
-from django.utils.deprecation import RemovedInDjango40Warning
 from django.utils.functional import SimpleLazyObject, keep_lazy_text, lazy
 from django.utils.regex_helper import _lazy_re_compile
 from django.utils.translation import gettext as _, gettext_lazy, pgettext
@@ -360,16 +358,6 @@ _entity_re = _lazy_re_compile(r"&(#?[xX]?(?:[0-9a-fA-F]+|\w{1,8}));")
 
 
 @keep_lazy_text
-def unescape_entities(text):
-    warnings.warn(
-        'django.utils.text.unescape_entities() is deprecated in favor of '
-        'html.unescape().',
-        RemovedInDjango40Warning, stacklevel=2,
-    )
-    return _entity_re.sub(_replace_entity, str(text))
-
-
-@keep_lazy_text
 def unescape_string_literal(s):
     r"""
     Convert quoted string literals to unquoted strings with escaped quotes and
@@ -393,17 +381,18 @@ def unescape_string_literal(s):
 @keep_lazy_text
 def slugify(value, allow_unicode=False):
     """
-    Convert to ASCII if 'allow_unicode' is False. Convert spaces to hyphens.
-    Remove characters that aren't alphanumerics, underscores, or hyphens.
-    Convert to lowercase. Also strip leading and trailing whitespace.
+    Convert to ASCII if 'allow_unicode' is False. Convert spaces or repeated
+    dashes to single dashes. Remove characters that aren't alphanumerics,
+    underscores, or hyphens. Convert to lowercase. Also strip leading and
+    trailing whitespace, dashes, and underscores.
     """
     value = str(value)
     if allow_unicode:
         value = unicodedata.normalize('NFKC', value)
     else:
         value = unicodedata.normalize('NFKD', value).encode('ascii', 'ignore').decode('ascii')
-    value = re.sub(r'[^\w\s-]', '', value.lower()).strip()
-    return re.sub(r'[-\s]+', '-', value)
+    value = re.sub(r'[^\w\s-]', '', value.lower())
+    return re.sub(r'[-\s]+', '-', value).strip('-_')
 
 
 def camel_case_to_spaces(value):

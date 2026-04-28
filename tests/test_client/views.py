@@ -102,7 +102,7 @@ def json_view(request):
 def view_with_header(request):
     "A view that has a custom header"
     response = HttpResponse()
-    response['X-DJANGO-TEST'] = 'Slartibartfast'
+    response.headers['X-DJANGO-TEST'] = 'Slartibartfast'
     return response
 
 
@@ -129,6 +129,14 @@ def redirect_view(request):
     else:
         query = ''
     return HttpResponseRedirect('/get_view/' + query)
+
+
+def method_saving_307_redirect_query_string_view(request):
+    return HttpResponseRedirect('/post_view/?hello=world', status=307)
+
+
+def method_saving_308_redirect_query_string_view(request):
+    return HttpResponseRedirect('/post_view/?hello=world', status=308)
 
 
 def _post_view_redirect(request, status_code):
@@ -229,8 +237,7 @@ class BaseTestFormSet(BaseFormSet):
             return
 
         emails = []
-        for i in range(0, self.total_form_count()):
-            form = self.forms[i]
+        for form in self.forms:
             email = form.cleaned_data['email']
             if email in emails:
                 raise ValidationError(

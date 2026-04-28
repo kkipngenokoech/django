@@ -11,9 +11,7 @@ from django.template import Context, Engine
 from django.urls import translate_url
 from django.utils.formats import get_format
 from django.utils.http import url_has_allowed_host_and_scheme
-from django.utils.translation import (
-    LANGUAGE_SESSION_KEY, check_for_language, get_language,
-)
+from django.utils.translation import check_for_language, get_language
 from django.utils.translation.trans_real import DjangoTranslation
 from django.views.generic import View
 
@@ -57,10 +55,6 @@ def set_language(request):
                 next_trans = translate_url(next_url, lang_code)
                 if next_trans != next_url:
                     response = HttpResponseRedirect(next_trans)
-            if hasattr(request, 'session'):
-                # Storing the language in the session is deprecated.
-                # (RemovedInDjango40Warning)
-                request.session[LANGUAGE_SESSION_KEY] = lang_code
             response.set_cookie(
                 settings.LANGUAGE_COOKIE_NAME, lang_code,
                 max_age=settings.LANGUAGE_COOKIE_AGE,
@@ -87,14 +81,15 @@ def get_formats():
 
 js_catalog_template = r"""
 {% autoescape off %}
-(function(globals) {
-
-  var django = globals.django || (globals.django = {});
+'use strict';
+{
+  const globals = this;
+  const django = globals.django || (globals.django = {});
 
   {% if plural %}
   django.pluralidx = function(n) {
-    var v={{ plural }};
-    if (typeof(v) == 'boolean') {
+    const v = {{ plural }};
+    if (typeof v === 'boolean') {
       return v ? 1 : 0;
     } else {
       return v;
@@ -108,25 +103,25 @@ js_catalog_template = r"""
 
   django.catalog = django.catalog || {};
   {% if catalog_str %}
-  var newcatalog = {{ catalog_str }};
-  for (var key in newcatalog) {
+  const newcatalog = {{ catalog_str }};
+  for (const key in newcatalog) {
     django.catalog[key] = newcatalog[key];
   }
   {% endif %}
 
   if (!django.jsi18n_initialized) {
     django.gettext = function(msgid) {
-      var value = django.catalog[msgid];
-      if (typeof(value) == 'undefined') {
+      const value = django.catalog[msgid];
+      if (typeof value === 'undefined') {
         return msgid;
       } else {
-        return (typeof(value) == 'string') ? value : value[0];
+        return (typeof value === 'string') ? value : value[0];
       }
     };
 
     django.ngettext = function(singular, plural, count) {
-      var value = django.catalog[singular];
-      if (typeof(value) == 'undefined') {
+      const value = django.catalog[singular];
+      if (typeof value === 'undefined') {
         return (count == 1) ? singular : plural;
       } else {
         return value.constructor === Array ? value[django.pluralidx(count)] : value;
@@ -136,16 +131,16 @@ js_catalog_template = r"""
     django.gettext_noop = function(msgid) { return msgid; };
 
     django.pgettext = function(context, msgid) {
-      var value = django.gettext(context + '\x04' + msgid);
-      if (value.indexOf('\x04') != -1) {
+      let value = django.gettext(context + '\x04' + msgid);
+      if (value.includes('\x04')) {
         value = msgid;
       }
       return value;
     };
 
     django.npgettext = function(context, singular, plural, count) {
-      var value = django.ngettext(context + '\x04' + singular, context + '\x04' + plural, count);
-      if (value.indexOf('\x04') != -1) {
+      let value = django.ngettext(context + '\x04' + singular, context + '\x04' + plural, count);
+      if (value.includes('\x04')) {
         value = django.ngettext(singular, plural, count);
       }
       return value;
@@ -165,8 +160,8 @@ js_catalog_template = r"""
     django.formats = {{ formats_str }};
 
     django.get_format = function(format_type) {
-      var value = django.formats[format_type];
-      if (typeof(value) == 'undefined') {
+      const value = django.formats[format_type];
+      if (typeof value === 'undefined') {
         return format_type;
       } else {
         return value;
@@ -185,8 +180,7 @@ js_catalog_template = r"""
 
     django.jsi18n_initialized = true;
   }
-
-}(this));
+};
 {% endautoescape %}
 """
 
