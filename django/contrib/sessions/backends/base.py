@@ -334,6 +334,7 @@ class SessionBase:
         self.clear()
         self.delete()
         self._session_key = None
+        self.modified = True
 
     def cycle_key(self):
         """
