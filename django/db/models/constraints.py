@@ -95,6 +95,37 @@ class UniqueConstraint(BaseConstraint):
         self.deferrable = deferrable
         super().__init__(name)
 
+    def check(self, **kwargs):
+        from django.core import checks
+        errors = []
+        errors.extend(self._check_fields(**kwargs))
+        return errors
+
+    def _check_fields(self, **kwargs):
+        from django.core import checks
+        errors = []
+        
+        # Get the model from kwargs
+        model = kwargs.get('model')
+        if not model:
+            return errors
+            
+        # Check that all fields in the constraint exist on the model
+        for field_name in self.fields:
+            try:
+                model._meta.get_field(field_name)
+            except Exception:
+                errors.append(
+                    checks.Error(
+                        "'%s' refers to the nonexistent field '%s'." % (
+                            self.name, field_name,
+                        ),
+                        obj=model,
+                        id='models.E012',
+                    )
+                )
+        return errors
+
     def _get_condition_sql(self, model, schema_editor):
         if self.condition is None:
             return None
