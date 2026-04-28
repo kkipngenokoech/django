@@ -413,11 +413,27 @@ class BaseDatabaseSchemaEditor:
             **constraint_kwargs
         )
         if len(constraint_names) != 1:
-            raise ValueError("Found wrong number (%s) of constraints for %s(%s)" % (
-                len(constraint_names),
-                model._meta.db_table,
-                ", ".join(columns),
-            ))
+            # If we're looking for an index constraint and found multiple constraints,
+            # filter to only index constraints (exclude unique constraints)
+            if constraint_kwargs.get('index') and len(constraint_names) > 1:
+                # Get all constraint names and filter out unique constraints
+                all_constraint_names = self._constraint_names(
+                    model, columns, exclude=meta_constraint_names | meta_index_names
+                )
+                unique_constraint_names = self._constraint_names(
+                    model, columns, exclude=meta_constraint_names | meta_index_names,
+                    unique=True
+                )
+                # Keep only non-unique constraints (i.e., index constraints)
+                constraint_names = [name for name in all_constraint_names if name not in unique_constraint_names]
+            
+            # If we still don't have exactly one constraint, raise the error
+            if len(constraint_names) != 1:
+                raise ValueError("Found wrong number (%s) of constraints for %s(%s)" % (
+                    len(constraint_names),
+                    model._meta.db_table,
+                    ", ".join(columns),
+                ))
         self.execute(self._delete_constraint_sql(sql, model, constraint_names[0]))
 
     def alter_db_table(self, model, old_db_table, new_db_table):
