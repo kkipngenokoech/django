@@ -8,7 +8,7 @@ from django import forms
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
-from django.db.models.deletion import CASCADE
+from django.db.models import CASCADE
 from django.urls import reverse
 from django.urls.exceptions import NoReverseMatch
 from django.utils.html import smart_urlquote
@@ -410,6 +410,7 @@ class AutocompleteMixin:
         attrs.setdefault('class', '')
         attrs.update({
             'data-ajax--cache': 'true',
+            'data-ajax--delay': 250,
             'data-ajax--type': 'GET',
             'data-ajax--url': self.get_url(),
             'data-theme': 'admin-autocomplete',

@@ -3,11 +3,10 @@ import unittest
 from django.conf import settings
 from django.core.checks import Error, Warning
 from django.core.checks.model_checks import _check_lazy_references
-from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, connections, models
 from django.db.models.functions import Lower
 from django.db.models.signals import post_init
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps, override_settings, register_lookup
 
 
@@ -814,6 +813,26 @@ class OtherModelTests(SimpleTestCase):
             )
         ])
 
+    def test_ordering_pointing_multiple_times_to_model_fields(self):
+        class Parent(models.Model):
+            field1 = models.CharField(max_length=100)
+            field2 = models.CharField(max_length=100)
+
+        class Child(models.Model):
+            parent = models.ForeignKey(Parent, models.CASCADE)
+
+            class Meta:
+                ordering = ('parent__field1__field2',)
+
+        self.assertEqual(Child.check(), [
+            Error(
+                "'ordering' refers to the nonexistent field, related field, "
+                "or lookup 'parent__field1__field2'.",
+                obj=Child,
+                id='models.E015',
+            )
+        ])
+
     def test_ordering_allows_registered_lookups(self):
         class Model(models.Model):
             test = models.CharField(max_length=100)
@@ -823,6 +842,18 @@ class OtherModelTests(SimpleTestCase):
 
         with register_lookup(models.CharField, Lower):
             self.assertEqual(Model.check(), [])
+
+    def test_ordering_pointing_to_related_model_pk(self):
+        class Parent(models.Model):
+            pass
+
+        class Child(models.Model):
+            parent = models.ForeignKey(Parent, models.CASCADE)
+
+            class Meta:
+                ordering = ('parent__pk',)
+
+        self.assertEqual(Child.check(), [])
 
     def test_ordering_pointing_to_foreignkey_field(self):
         class Parent(models.Model):
@@ -974,14 +1005,24 @@ class OtherModelTests(SimpleTestCase):
 
         self.assertEqual(ShippingMethod.check(), [])
 
-    def test_missing_parent_link(self):
-        msg = 'Add parent_link=True to invalid_models_tests.ParkingLot.parent.'
-        with self.assertRaisesMessage(ImproperlyConfigured, msg):
-            class Place(models.Model):
-                pass
+    def test_onetoone_with_parent_model(self):
+        class Place(models.Model):
+            pass
 
-            class ParkingLot(Place):
-                parent = models.OneToOneField(Place, models.CASCADE)
+        class ParkingLot(Place):
+            other_place = models.OneToOneField(Place, models.CASCADE, related_name='other_parking')
+
+        self.assertEqual(ParkingLot.check(), [])
+
+    def test_onetoone_with_explicit_parent_link_parent_model(self):
+        class Place(models.Model):
+            pass
+
+        class ParkingLot(Place):
+            place = models.OneToOneField(Place, models.CASCADE, parent_link=True, primary_key=True)
+            other_place = models.OneToOneField(Place, models.CASCADE, related_name='other_parking')
+
+        self.assertEqual(ParkingLot.check(), [])
 
     def test_m2m_table_name_clash(self):
         class Foo(models.Model):
@@ -1171,7 +1212,7 @@ class OtherModelTests(SimpleTestCase):
 
 
 @isolate_apps('invalid_models_tests')
-class ConstraintsTests(SimpleTestCase):
+class ConstraintsTests(TestCase):
     def test_check_constraints(self):
         class Model(models.Model):
             age = models.IntegerField()
@@ -1179,7 +1220,7 @@ class ConstraintsTests(SimpleTestCase):
             class Meta:
                 constraints = [models.CheckConstraint(check=models.Q(age__gte=18), name='is_adult')]
 
-        errors = Model.check()
+        errors = Model.check(databases=self.databases)
         warn = Warning(
             '%s does not support check constraints.' % connection.display_name,
             hint=(
@@ -1189,5 +1230,15 @@ class ConstraintsTests(SimpleTestCase):
             obj=Model,
             id='models.W027',
         )
-        expected = [] if connection.features.supports_table_check_constraints else [warn, warn]
+        expected = [] if connection.features.supports_table_check_constraints else [warn]
         self.assertCountEqual(errors, expected)
+
+    def test_check_constraints_required_db_features(self):
+        class Model(models.Model):
+            age = models.IntegerField()
+
+            class Meta:
+                required_db_features = {'supports_table_check_constraints'}
+                constraints = [models.CheckConstraint(check=models.Q(age__gte=18), name='is_adult')]
+
+        self.assertEqual(Model.check(databases=self.databases), [])

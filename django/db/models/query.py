@@ -12,18 +12,17 @@ from itertools import chain
 from django.conf import settings
 from django.core import exceptions
 from django.db import (
-    DJANGO_VERSION_PICKLE_KEY, IntegrityError, connections, router,
-    transaction,
+    DJANGO_VERSION_PICKLE_KEY, IntegrityError, NotSupportedError, connections,
+    router, transaction,
 )
-from django.db.models import DateField, DateTimeField, sql
+from django.db.models import AutoField, DateField, DateTimeField, sql
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.deletion import Collector
 from django.db.models.expressions import Case, Expression, F, Value, When
-from django.db.models.fields import AutoField
 from django.db.models.functions import Cast, Trunc
-from django.db.models.query_utils import FilteredRelation, InvalidQuery, Q
+from django.db.models.query_utils import FilteredRelation, Q
 from django.db.models.sql.constants import CURSOR, GET_ITERATOR_CHUNK_SIZE
-from django.db.utils import NotSupportedError
+from django.db.models.utils import resolve_callables
 from django.utils import timezone
 from django.utils.functional import cached_property, partition
 from django.utils.version import get_version
@@ -33,9 +32,6 @@ MAX_GET_RESULTS = 21
 
 # The maximum number of items to display in a QuerySet.__repr__
 REPR_OUTPUT_SIZE = 20
-
-# Pull into this namespace for backwards compatibility.
-EmptyResultSet = sql.EmptyResultSet
 
 
 class BaseIterable:
@@ -192,7 +188,7 @@ class QuerySet:
         self.model = model
         self._db = using
         self._hints = hints or {}
-        self.query = query or sql.Query(self.model)
+        self._query = query or sql.Query(self.model)
         self._result_cache = None
         self._sticky_filter = False
         self._for_write = False
@@ -201,6 +197,20 @@ class QuerySet:
         self._known_related_objects = {}  # {rel_field: {pk: rel_obj}}
         self._iterable_class = ModelIterable
         self._fields = None
+        self._defer_next_filter = False
+        self._deferred_filter = None
+
+    @property
+    def query(self):
+        if self._deferred_filter:
+            negate, args, kwargs = self._deferred_filter
+            self._filter_or_exclude_inplace(negate, *args, **kwargs)
+            self._deferred_filter = None
+        return self._query
+
+    @query.setter
+    def query(self, value):
+        self._query = value
 
     def as_manager(cls):
         # Address the circular dependency between `Queryset` and `Manager`.
@@ -470,23 +480,33 @@ class QuerySet:
             return objs
         self._for_write = True
         connection = connections[self.db]
-        fields = self.model._meta.concrete_fields
+        opts = self.model._meta
+        fields = opts.concrete_fields
         objs = list(objs)
         self._populate_pk_values(objs)
         with transaction.atomic(using=self.db, savepoint=False):
             objs_with_pk, objs_without_pk = partition(lambda o: o.pk is None, objs)
             if objs_with_pk:
-                self._batched_insert(objs_with_pk, fields, batch_size, ignore_conflicts=ignore_conflicts)
+                returned_columns = self._batched_insert(
+                    objs_with_pk, fields, batch_size, ignore_conflicts=ignore_conflicts,
+                )
+                for obj_with_pk, results in zip(objs_with_pk, returned_columns):
+                    for result, field in zip(results, opts.db_returning_fields):
+                        if field != opts.pk:
+                            setattr(obj_with_pk, field.attname, result)
                 for obj_with_pk in objs_with_pk:
                     obj_with_pk._state.adding = False
                     obj_with_pk._state.db = self.db
             if objs_without_pk:
                 fields = [f for f in fields if not isinstance(f, AutoField)]
-                ids = self._batched_insert(objs_without_pk, fields, batch_size, ignore_conflicts=ignore_conflicts)
+                returned_columns = self._batched_insert(
+                    objs_without_pk, fields, batch_size, ignore_conflicts=ignore_conflicts,
+                )
                 if connection.features.can_return_rows_from_bulk_insert and not ignore_conflicts:
-                    assert len(ids) == len(objs_without_pk)
-                for obj_without_pk, pk in zip(objs_without_pk, ids):
-                    obj_without_pk.pk = pk
+                    assert len(returned_columns) == len(objs_without_pk)
+                for obj_without_pk, results in zip(objs_without_pk, returned_columns):
+                    for result, field in zip(results, opts.db_returning_fields):
+                        setattr(obj_without_pk, field.attname, result)
                     obj_without_pk._state.adding = False
                     obj_without_pk._state.db = self.db
 
@@ -570,8 +590,8 @@ class QuerySet:
                 obj, created = self._create_object_from_params(kwargs, params, lock=True)
                 if created:
                     return obj, created
-            for k, v in defaults.items():
-                setattr(obj, k, v() if callable(v) else v)
+            for k, v in resolve_callables(defaults):
+                setattr(obj, k, v)
             obj.save(using=self.db)
         return obj, False
 
@@ -582,16 +602,16 @@ class QuerySet:
         """
         try:
             with transaction.atomic(using=self.db):
-                params = {k: v() if callable(v) else v for k, v in params.items()}
+                params = dict(resolve_callables(params))
                 obj = self.create(**params)
             return obj, True
-        except IntegrityError as e:
+        except IntegrityError:
             try:
                 qs = self.select_for_update() if lock else self
                 return qs.get(**lookup), False
             except self.model.DoesNotExist:
                 pass
-            raise e
+            raise
 
     def _extract_model_params(self, defaults, **kwargs):
         """
@@ -689,6 +709,7 @@ class QuerySet:
 
     def delete(self):
         """Delete the records in the current QuerySet."""
+        self._not_support_combined_queries('delete')
         assert not self.query.is_sliced, \
             "Cannot use 'limit' or 'offset' with delete."
 
@@ -723,7 +744,13 @@ class QuerySet:
         Delete objects found from the given queryset in single direct SQL
         query. No signals are sent and there is no protection for cascades.
         """
-        return sql.DeleteQuery(self.model).delete_qs(self, using)
+        query = self.query.clone()
+        query.__class__ = sql.DeleteQuery
+        cursor = query.get_compiler(using).execute_sql(CURSOR)
+        if cursor:
+            with cursor:
+                return cursor.rowcount
+        return 0
     _raw_delete.alters_data = True
 
     def update(self, **kwargs):
@@ -731,6 +758,7 @@ class QuerySet:
         Update all elements in the current QuerySet, setting all the given
         fields to the appropriate values.
         """
+        self._not_support_combined_queries('update')
         assert not self.query.is_sliced, \
             "Cannot update a query once a slice has been taken."
         self._for_write = True
@@ -907,11 +935,18 @@ class QuerySet:
                 "Cannot filter a query once a slice has been taken."
 
         clone = self._chain()
-        if negate:
-            clone.query.add_q(~Q(*args, **kwargs))
+        if self._defer_next_filter:
+            self._defer_next_filter = False
+            clone._deferred_filter = negate, args, kwargs
         else:
-            clone.query.add_q(Q(*args, **kwargs))
+            clone._filter_or_exclude_inplace(negate, *args, **kwargs)
         return clone
+
+    def _filter_or_exclude_inplace(self, negate, *args, **kwargs):
+        if negate:
+            self._query.add_q(~Q(*args, **kwargs))
+        else:
+            self._query.add_q(Q(*args, **kwargs))
 
     def complex_filter(self, filter_obj):
         """
@@ -928,7 +963,7 @@ class QuerySet:
             clone.query.add_q(filter_obj)
             return clone
         else:
-            return self._filter_or_exclude(None, **filter_obj)
+            return self._filter_or_exclude(False, **filter_obj)
 
     def _combinator_query(self, combinator, *other_qs, all=False):
         # Clone the query to inherit the select list and everything
@@ -1181,7 +1216,7 @@ class QuerySet:
     # PRIVATE METHODS #
     ###################
 
-    def _insert(self, objs, fields, return_id=False, raw=False, using=None, ignore_conflicts=False):
+    def _insert(self, objs, fields, returning_fields=None, raw=False, using=None, ignore_conflicts=False):
         """
         Insert a new record for the given model. This provides an interface to
         the InsertQuery class and is how Model.save() is implemented.
@@ -1191,7 +1226,7 @@ class QuerySet:
             using = self.db
         query = sql.InsertQuery(self.model, ignore_conflicts=ignore_conflicts)
         query.insert_values(fields, objs, raw=raw)
-        return query.get_compiler(using=using).execute_sql(return_id)
+        return query.get_compiler(using=using).execute_sql(returning_fields)
     _insert.alters_data = True
     _insert.queryset_only = False
 
@@ -1202,22 +1237,24 @@ class QuerySet:
         if ignore_conflicts and not connections[self.db].features.supports_ignore_conflicts:
             raise NotSupportedError('This database backend does not support ignoring conflicts.')
         ops = connections[self.db].ops
-        batch_size = (batch_size or max(ops.bulk_batch_size(fields, objs), 1))
-        inserted_ids = []
+        max_batch_size = max(ops.bulk_batch_size(fields, objs), 1)
+        batch_size = min(batch_size, max_batch_size) if batch_size else max_batch_size
+        inserted_rows = []
         bulk_return = connections[self.db].features.can_return_rows_from_bulk_insert
         for item in [objs[i:i + batch_size] for i in range(0, len(objs), batch_size)]:
             if bulk_return and not ignore_conflicts:
-                inserted_id = self._insert(
-                    item, fields=fields, using=self.db, return_id=True,
+                inserted_columns = self._insert(
+                    item, fields=fields, using=self.db,
+                    returning_fields=self.model._meta.db_returning_fields,
                     ignore_conflicts=ignore_conflicts,
                 )
-                if isinstance(inserted_id, list):
-                    inserted_ids.extend(inserted_id)
+                if isinstance(inserted_columns, list):
+                    inserted_rows.extend(inserted_columns)
                 else:
-                    inserted_ids.append(inserted_id)
+                    inserted_rows.append(inserted_columns)
             else:
                 self._insert(item, fields=fields, using=self.db, ignore_conflicts=ignore_conflicts)
-        return inserted_ids
+        return inserted_rows
 
     def _chain(self, **kwargs):
         """
@@ -1422,7 +1459,9 @@ class RawQuerySet:
         try:
             model_init_names, model_init_pos, annotation_fields = self.resolve_model_init_order()
             if self.model._meta.pk.attname not in model_init_names:
-                raise InvalidQuery('Raw query must include the primary key')
+                raise exceptions.FieldDoesNotExist(
+                    'Raw query must include the primary key'
+                )
             model_cls = self.model
             fields = [self.model_fields.get(c) for c in self.columns]
             converters = compiler.get_converters([
@@ -1498,8 +1537,16 @@ class Prefetch:
         self.prefetch_through = lookup
         # `prefetch_to` is the path to the attribute that stores the result.
         self.prefetch_to = lookup
-        if queryset is not None and not issubclass(queryset._iterable_class, ModelIterable):
-            raise ValueError('Prefetch querysets cannot use values().')
+        if queryset is not None and (
+            isinstance(queryset, RawQuerySet) or (
+                hasattr(queryset, '_iterable_class') and
+                not issubclass(queryset._iterable_class, ModelIterable)
+            )
+        ):
+            raise ValueError(
+                'Prefetch querysets cannot use raw(), values(), and '
+                'values_list().'
+            )
         if to_attr:
             self.prefetch_to = LOOKUP_SEP.join(lookup.split(LOOKUP_SEP)[:-1] + [to_attr])
 
@@ -1535,7 +1582,9 @@ class Prefetch:
         return None
 
     def __eq__(self, other):
-        return isinstance(other, Prefetch) and self.prefetch_to == other.prefetch_to
+        if not isinstance(other, Prefetch):
+            return NotImplemented
+        return self.prefetch_to == other.prefetch_to
 
     def __hash__(self):
         return hash((self.__class__, self.prefetch_to))

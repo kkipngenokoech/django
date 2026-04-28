@@ -1,28 +1,37 @@
 import datetime
-import re
 import uuid
 from functools import lru_cache
 
 from django.conf import settings
+from django.db import DatabaseError
 from django.db.backends.base.operations import BaseDatabaseOperations
 from django.db.backends.utils import strip_quotes, truncate_name
-from django.db.utils import DatabaseError
+from django.db.models import AutoField, Exists, ExpressionWrapper
+from django.db.models.expressions import RawSQL
+from django.db.models.sql.where import WhereNode
 from django.utils import timezone
 from django.utils.encoding import force_bytes, force_str
 from django.utils.functional import cached_property
+from django.utils.regex_helper import _lazy_re_compile
 
 from .base import Database
 from .utils import BulkInsertMapper, InsertVar, Oracle_datetime
 
 
 class DatabaseOperations(BaseDatabaseOperations):
-    # Oracle uses NUMBER(11) and NUMBER(19) for integer fields.
+    # Oracle uses NUMBER(5), NUMBER(11), and NUMBER(19) for integer fields.
+    # SmallIntegerField uses NUMBER(11) instead of NUMBER(5), which is used by
+    # SmallAutoField, to preserve backward compatibility.
     integer_field_ranges = {
         'SmallIntegerField': (-99999999999, 99999999999),
         'IntegerField': (-99999999999, 99999999999),
         'BigIntegerField': (-9999999999999999999, 9999999999999999999),
+        'PositiveBigIntegerField': (0, 9999999999999999999),
         'PositiveSmallIntegerField': (0, 99999999999),
         'PositiveIntegerField': (0, 99999999999),
+        'SmallAutoField': (-99999, 99999),
+        'AutoField': (-99999999999, 99999999999),
+        'BigAutoField': (-9999999999999999999, 9999999999999999999),
     }
     set_operators = {**BaseDatabaseOperations.set_operators, 'difference': 'MINUS'}
 
@@ -67,6 +76,8 @@ END;
         if lookup_type == 'week_day':
             # TO_CHAR(field, 'D') returns an integer from 1-7, where 1=Sunday.
             return "TO_CHAR(%s, 'D')" % field_name
+        elif lookup_type == 'iso_week_day':
+            return "TO_CHAR(%s - 1, 'D')" % field_name
         elif lookup_type == 'week':
             # IW = ISO week number
             return "TO_CHAR(%s, 'IW')" % field_name
@@ -93,7 +104,7 @@ END;
     # if the time zone name is passed in parameter. Use interpolation instead.
     # https://groups.google.com/forum/#!msg/django-developers/zwQju7hbG78/9l934yelwfsJ
     # This regexp matches all time zone names from the zoneinfo database.
-    _tzname_re = re.compile(r'^[\w/:+-]+$')
+    _tzname_re = _lazy_re_compile(r'^[\w/:+-]+$')
 
     def _prepare_tzname_delta(self, tzname):
         if '+' in tzname:
@@ -241,17 +252,19 @@ END;
     def deferrable_sql(self):
         return " DEFERRABLE INITIALLY DEFERRED"
 
-    def fetch_returned_insert_id(self, cursor):
-        value = cursor._insert_id_var.getvalue()
-        if value is None or value == []:
-            # cx_Oracle < 6.3 returns None, >= 6.3 returns empty list.
-            raise DatabaseError(
-                'The database did not return a new row id. Probably "ORA-1403: '
-                'no data found" was raised internally but was hidden by the '
-                'Oracle OCI library (see https://code.djangoproject.com/ticket/28859).'
-            )
-        # cx_Oracle < 7 returns value, >= 7 returns list with single value.
-        return value[0] if isinstance(value, list) else value
+    def fetch_returned_insert_columns(self, cursor, returning_params):
+        for param in returning_params:
+            value = param.get_value()
+            if value is None or value == []:
+                # cx_Oracle < 6.3 returns None, >= 6.3 returns empty list.
+                raise DatabaseError(
+                    'The database did not return a new row id. Probably '
+                    '"ORA-1403: no data found" was raised internally but was '
+                    'hidden by the Oracle OCI library (see '
+                    'https://code.djangoproject.com/ticket/28859).'
+                )
+            # cx_Oracle < 7 returns value, >= 7 returns list with single value.
+            yield value[0] if isinstance(value, list) else value
 
     def field_cast_sql(self, db_type, internal_type):
         if db_type and db_type.endswith('LOB'):
@@ -334,8 +347,21 @@ END;
             match_option = "'i'"
         return 'REGEXP_LIKE(%%s, %%s, %s)' % match_option
 
-    def return_insert_id(self, field):
-        return 'RETURNING %s INTO %%s', (InsertVar(field),)
+    def return_insert_columns(self, fields):
+        if not fields:
+            return '', ()
+        field_names = []
+        params = []
+        for field in fields:
+            field_names.append('%s.%s' % (
+                self.quote_name(field.model._meta.db_table),
+                self.quote_name(field.column),
+            ))
+            params.append(InsertVar(field))
+        return 'RETURNING %s INTO %s' % (
+            ', '.join(field_names),
+            ', '.join(['%s'] * len(params)),
+        ), tuple(params)
 
     def __foreign_key_constraints(self, table_name, recursive):
         with self.connection.cursor() as cursor:
@@ -441,12 +467,11 @@ END;
         return sql
 
     def sequence_reset_sql(self, style, model_list):
-        from django.db import models
         output = []
         query = self._sequence_reset_sql
         for model in model_list:
             for f in model._meta.local_fields:
-                if isinstance(f, models.AutoField):
+                if isinstance(f, AutoField):
                     no_autofield_sequence_name = self._get_no_autofield_sequence_name(model._meta.db_table)
                     table = self.quote_name(model._meta.db_table)
                     column = self.quote_name(f.column)
@@ -594,7 +619,8 @@ END;
         if internal_type == 'DateField':
             lhs_sql, lhs_params = lhs
             rhs_sql, rhs_params = rhs
-            return "NUMTODSINTERVAL(TO_NUMBER(%s - %s), 'DAY')" % (lhs_sql, rhs_sql), lhs_params + rhs_params
+            params = (*lhs_params, *rhs_params)
+            return "NUMTODSINTERVAL(TO_NUMBER(%s - %s), 'DAY')" % (lhs_sql, rhs_sql), params
         return super().subtract_temporals(internal_type, lhs, rhs)
 
     def bulk_batch_size(self, fields, objs):
@@ -602,3 +628,16 @@ END;
         if fields:
             return self.connection.features.max_query_params // len(fields)
         return len(objs)
+
+    def conditional_expression_supported_in_where_clause(self, expression):
+        """
+        Oracle supports only EXISTS(...) or filters in the WHERE clause, others
+        must be compared with True.
+        """
+        if isinstance(expression, (Exists, WhereNode)):
+            return True
+        if isinstance(expression, ExpressionWrapper) and expression.conditional:
+            return self.conditional_expression_supported_in_where_clause(expression.expression)
+        if isinstance(expression, RawSQL) and expression.conditional:
+            return True
+        return False

@@ -7,9 +7,8 @@ from django.core import exceptions
 from django.db.models import (
     Field, TextField, Transform, lookups as builtin_lookups,
 )
+from django.db.models.fields.mixins import CheckFieldDefaultMixin
 from django.utils.translation import gettext_lazy as _
-
-from .mixins import CheckFieldDefaultMixin
 
 __all__ = ['JSONField']
 
@@ -107,12 +106,12 @@ class KeyTransform(Transform):
             previous = previous.lhs
         lhs, params = compiler.compile(previous)
         if len(key_transforms) > 1:
-            return "(%s %s %%s)" % (lhs, self.nested_operator), [key_transforms] + params
+            return '(%s %s %%s)' % (lhs, self.nested_operator), params + [key_transforms]
         try:
             lookup = int(self.key_name)
         except ValueError:
             lookup = self.key_name
-        return '(%s %s %%s)' % (lhs, self.operator), [lookup] + params
+        return '(%s %s %%s)' % (lhs, self.operator), tuple(params) + (lookup,)
 
 
 class KeyTextTransform(KeyTransform):

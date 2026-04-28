@@ -16,7 +16,7 @@ except ImportError:
     crypt = None
 else:
     # On some platforms (e.g. OpenBSD), crypt.crypt() always return None.
-    if crypt.crypt('', '') is None:
+    if crypt.crypt('') is None:
         crypt = None
 
 try:
@@ -52,7 +52,7 @@ class TestUtilsHashPass(SimpleTestCase):
 
     def test_pbkdf2(self):
         encoded = make_password('lètmein', 'seasalt', 'pbkdf2_sha256')
-        self.assertEqual(encoded, 'pbkdf2_sha256$180000$seasalt$gH56uAM9k5UGHuCzAYqLtJQ7AFgnXEZ4LMzt71ldHoc=')
+        self.assertEqual(encoded, 'pbkdf2_sha256$216000$seasalt$youGZxOw6ZOcfrXv2i8/AhrnpZflJJ9EshS9XmUJTUg=')
         self.assertTrue(is_password_usable(encoded))
         self.assertTrue(check_password('lètmein', encoded))
         self.assertFalse(check_password('lètmeinz', encoded))
@@ -285,13 +285,13 @@ class TestUtilsHashPass(SimpleTestCase):
     def test_low_level_pbkdf2(self):
         hasher = PBKDF2PasswordHasher()
         encoded = hasher.encode('lètmein', 'seasalt2')
-        self.assertEqual(encoded, 'pbkdf2_sha256$180000$seasalt2$42TW7RGTT6FJUY+hv/VNLy7/3F0KbOcvoKmvB6TAnGU=')
+        self.assertEqual(encoded, 'pbkdf2_sha256$216000$seasalt2$gHyszNJ9lwTG5y3MQUjZe+OJmYVTBPl/y7bYq9dtk8M=')
         self.assertTrue(hasher.verify('lètmein', encoded))
 
     def test_low_level_pbkdf2_sha1(self):
         hasher = PBKDF2SHA1PasswordHasher()
         encoded = hasher.encode('lètmein', 'seasalt2')
-        self.assertEqual(encoded, 'pbkdf2_sha1$180000$seasalt2$y3RFPd5ZY+yJ8pv4soGPYtg2tZo=')
+        self.assertEqual(encoded, 'pbkdf2_sha1$216000$seasalt2$E1KH89wMKuPXrrQzifVcG4cBtiA=')
         self.assertTrue(hasher.verify('lètmein', encoded))
 
     @override_settings(
@@ -462,7 +462,7 @@ class BasePasswordHasherTests(SimpleTestCase):
 
     def test_harden_runtime(self):
         msg = 'subclasses of BasePasswordHasher should provide a harden_runtime() method'
-        with self.assertWarns(Warning, msg=msg):
+        with self.assertWarnsMessage(Warning, msg):
             self.hasher.harden_runtime('password', 'encoded')
 
     def test_must_update(self):

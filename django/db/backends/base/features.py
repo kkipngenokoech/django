@@ -1,4 +1,4 @@
-from django.db.utils import ProgrammingError
+from django.db import ProgrammingError
 from django.utils.functional import cached_property
 
 
@@ -87,6 +87,9 @@ class BaseDatabaseFeatures:
 
     # Does the backend order NULL values as largest or smallest?
     nulls_order_largest = False
+
+    # Does the backend support NULLS FIRST and NULLS LAST in ORDER BY?
+    supports_order_by_nulls_modifier = True
 
     # The database's limit on the number of query parameters.
     max_query_params = None
@@ -243,6 +246,7 @@ class BaseDatabaseFeatures:
     # Does the backend support window expressions (expression OVER (...))?
     supports_over_clause = False
     supports_frame_range_fixed_distance = False
+    only_supports_unbounded_with_preceding_and_following = False
 
     # Does the backend support CAST with precision?
     supports_cast_with_precision = True
@@ -288,6 +292,9 @@ class BaseDatabaseFeatures:
     # field(s)?
     allows_multiple_constraints_on_same_fields = True
 
+    # Does the backend support boolean expressions in the SELECT clause?
+    supports_boolean_expr_in_select_clause = True
+
     def __init__(self, connection):
         self.connection = connection
 
@@ -309,3 +316,8 @@ class BaseDatabaseFeatures:
             count, = cursor.fetchone()
             cursor.execute('DROP TABLE ROLLBACK_TEST')
         return count == 0
+
+    def allows_group_by_selected_pks_on_model(self, model):
+        if not self.allows_group_by_selected_pks:
+            return False
+        return model._meta.managed

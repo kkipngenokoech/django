@@ -116,6 +116,7 @@ conf
 config
 contenttypes
 contrib
+coroutine
 coroutines
 covariance
 criticals
@@ -193,6 +194,7 @@ elidable
 encodings
 Endian
 Enero
+enum
 environ
 esque
 Ess
@@ -307,6 +309,7 @@ ize
 JavaScript
 Jinja
 jQuery
+Jupyter
 jython
 Kaplan
 Kessler
@@ -663,6 +666,7 @@ th
 that'll
 Thejaswi
 This'll
+threadpool
 timeframe
 timeline
 timelines

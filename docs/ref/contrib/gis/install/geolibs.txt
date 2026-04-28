@@ -39,7 +39,7 @@ totally fine with GeoDjango. Your mileage may vary.
 
     The GeoDjango interfaces to GEOS, GDAL, and GeoIP may be used
     independently of Django.  In other words, no database or settings file
-    required -- just import them as normal from :mod:`django.contrib.gis`.
+    required -- import them as normal from :mod:`django.contrib.gis`.
 
 .. _PROJ.4: https://github.com/OSGeo/proj.4/wiki/
 __ https://postgis.net/
@@ -231,9 +231,10 @@ the GDAL library.  For example::
 .. [#] The datum shifting files are needed for converting data to and from
        certain projections.
        For example, the PROJ.4 string for the `Google projection (900913 or 3857)
-       <http://spatialreference.org/ref/sr-org/6864/prj/>`_ requires the
+       <https://spatialreference.org/ref/sr-org/6864/prj/>`_ requires the
        ``null`` grid file only included in the extra datum shifting files.
        It is easier to install the shifting files now, then to have debug a
        problem caused by their absence later.
 .. [#] Specifically, GeoDjango provides support for the `OGR
-       <https://gdal.org/ogr_arch.html>`_ library, a component of GDAL.
+       <https://gdal.org/user/vector_data_model.html>`_ library, a component of
+       GDAL.

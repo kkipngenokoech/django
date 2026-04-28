@@ -24,9 +24,7 @@ else:
     from django.test.runner import default_test_processes
     from django.test.selenium import SeleniumTestCaseBase
     from django.test.utils import get_runner
-    from django.utils.deprecation import (
-        RemovedInDjango31Warning, RemovedInDjango40Warning,
-    )
+    from django.utils.deprecation import RemovedInDjango40Warning
     from django.utils.log import DEFAULT_LOGGING
     from django.utils.version import PY37
 
@@ -40,8 +38,9 @@ else:
 
 # Make deprecation warnings errors to ensure no usage of deprecated features.
 warnings.simplefilter("error", RemovedInDjango40Warning)
-warnings.simplefilter('error', RemovedInDjango31Warning)
-# Make runtime warning errors to ensure no usage of error prone patterns.
+# Make resource and runtime warning errors to ensure no usage of error prone
+# patterns.
+warnings.simplefilter("error", ResourceWarning)
 warnings.simplefilter("error", RuntimeWarning)
 # Ignore known warnings in test dependencies.
 warnings.filterwarnings("ignore", "'U' mode is deprecated", DeprecationWarning, module='docutils.io')
@@ -284,7 +283,7 @@ class ActionSelenium(argparse.Action):
 
 def django_tests(verbosity, interactive, failfast, keepdb, reverse,
                  test_labels, debug_sql, parallel, tags, exclude_tags,
-                 test_name_patterns, start_at, start_after, pdb):
+                 test_name_patterns, start_at, start_after, pdb, buffer):
     state = setup(verbosity, test_labels, parallel, start_at, start_after)
     extra_tests = []
 
@@ -305,6 +304,7 @@ def django_tests(verbosity, interactive, failfast, keepdb, reverse,
         exclude_tags=exclude_tags,
         test_name_patterns=test_name_patterns,
         pdb=pdb,
+        buffer=buffer,
     )
     failures = test_runner.run_tests(
         test_labels or get_installed(),
@@ -355,22 +355,22 @@ def bisect_tests(bisection_label, options, test_labels, parallel, start_at, star
         test_labels_b = test_labels[midpoint:] + [bisection_label]
         print('***** Pass %da: Running the first half of the test suite' % iteration)
         print('***** Test labels: %s' % ' '.join(test_labels_a))
-        failures_a = subprocess.call(subprocess_args + test_labels_a)
+        failures_a = subprocess.run(subprocess_args + test_labels_a)
 
         print('***** Pass %db: Running the second half of the test suite' % iteration)
         print('***** Test labels: %s' % ' '.join(test_labels_b))
         print('')
-        failures_b = subprocess.call(subprocess_args + test_labels_b)
+        failures_b = subprocess.run(subprocess_args + test_labels_b)
 
-        if failures_a and not failures_b:
+        if failures_a.returncode and not failures_b.returncode:
             print("***** Problem found in first half. Bisecting again...")
             iteration += 1
             test_labels = test_labels_a[:-1]
-        elif failures_b and not failures_a:
+        elif failures_b.returncode and not failures_a.returncode:
             print("***** Problem found in second half. Bisecting again...")
             iteration += 1
             test_labels = test_labels_b[:-1]
-        elif failures_a and failures_b:
+        elif failures_a.returncode and failures_b.returncode:
             print("***** Multiple sources of failure found")
             break
         else:
@@ -500,6 +500,10 @@ if __name__ == "__main__":
         '--pdb', action='store_true',
         help='Runs the PDB debugger on error or failure.'
     )
+    parser.add_argument(
+        '-b', '--buffer', action='store_true',
+        help='Discard output of passing tests.',
+    )
     if PY37:
         parser.add_argument(
             '-k', dest='test_name_patterns', action='append',
@@ -566,7 +570,7 @@ if __name__ == "__main__":
             options.debug_sql, options.parallel, options.tags,
             options.exclude_tags,
             getattr(options, 'test_name_patterns', None),
-            options.start_at, options.start_after, options.pdb,
+            options.start_at, options.start_after, options.pdb, options.buffer,
         )
         if failures:
             sys.exit(1)

@@ -452,6 +452,12 @@ class ConditionalGetMiddlewareTest(SimpleTestCase):
         res = StreamingHttpResponse(['content'])
         self.assertFalse(ConditionalGetMiddleware().process_response(self.req, res).has_header('ETag'))
 
+    def test_no_etag_response_empty_content(self):
+        res = HttpResponse()
+        self.assertFalse(
+            ConditionalGetMiddleware().process_response(self.req, res).has_header('ETag')
+        )
+
     def test_no_etag_no_store_cache(self):
         self.resp['Cache-Control'] = 'No-Cache, No-Store, Max-age=0'
         self.assertFalse(ConditionalGetMiddleware().process_response(self.req, self.resp).has_header('ETag'))
@@ -621,12 +627,12 @@ class XFrameOptionsMiddlewareTest(SimpleTestCase):
     def test_defaults_sameorigin(self):
         """
         If the X_FRAME_OPTIONS setting is not set then it defaults to
-        SAMEORIGIN.
+        DENY.
         """
         with override_settings(X_FRAME_OPTIONS=None):
             del settings.X_FRAME_OPTIONS    # restored by override_settings
             r = XFrameOptionsMiddleware().process_response(HttpRequest(), HttpResponse())
-            self.assertEqual(r['X-Frame-Options'], 'SAMEORIGIN')
+            self.assertEqual(r['X-Frame-Options'], 'DENY')
 
     def test_dont_set_if_set(self):
         """

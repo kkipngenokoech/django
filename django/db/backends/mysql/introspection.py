@@ -6,7 +6,7 @@ from MySQLdb.constants import FIELD_TYPE
 from django.db.backends.base.introspection import (
     BaseDatabaseIntrospection, FieldInfo as BaseFieldInfo, TableInfo,
 )
-from django.db.models.indexes import Index
+from django.db.models import Index
 from django.utils.datastructures import OrderedSet
 
 FieldInfo = namedtuple('FieldInfo', BaseFieldInfo._fields + ('extra', 'is_unsigned'))
@@ -47,7 +47,9 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
             elif field_type == 'SmallIntegerField':
                 return 'SmallAutoField'
         if description.is_unsigned:
-            if field_type == 'IntegerField':
+            if field_type == 'BigIntegerField':
+                return 'PositiveBigIntegerField'
+            elif field_type == 'IntegerField':
                 return 'PositiveIntegerField'
             elif field_type == 'SmallIntegerField':
                 return 'PositiveSmallIntegerField'
@@ -207,18 +209,40 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
                 constraints[constraint]['unique'] = True
         # Add check constraints.
         if self.connection.features.can_introspect_check_constraints:
+            unnamed_constraints_index = 0
             columns = {info.name for info in self.get_table_description(cursor, table_name)}
-            type_query = """
-                SELECT c.constraint_name, c.check_clause
-                FROM information_schema.check_constraints AS c
-                WHERE
-                    c.constraint_schema = DATABASE() AND
-                    c.table_name = %s
-            """
+            if self.connection.mysql_is_mariadb:
+                type_query = """
+                    SELECT c.constraint_name, c.check_clause
+                    FROM information_schema.check_constraints AS c
+                    WHERE
+                        c.constraint_schema = DATABASE() AND
+                        c.table_name = %s
+                """
+            else:
+                type_query = """
+                    SELECT cc.constraint_name, cc.check_clause
+                    FROM
+                        information_schema.check_constraints AS cc,
+                        information_schema.table_constraints AS tc
+                    WHERE
+                        cc.constraint_schema = DATABASE() AND
+                        tc.table_schema = cc.constraint_schema AND
+                        cc.constraint_name = tc.constraint_name AND
+                        tc.constraint_type = 'CHECK' AND
+                        tc.table_name = %s
+                """
             cursor.execute(type_query, [table_name])
             for constraint, check_clause in cursor.fetchall():
+                constraint_columns = self._parse_constraint_columns(check_clause, columns)
+                # Ensure uniqueness of unnamed constraints. Unnamed unique
+                # and check columns constraints have the same name as
+                # a column.
+                if set(constraint_columns) == {constraint}:
+                    unnamed_constraints_index += 1
+                    constraint = '__unnamed_constraint_%s__' % unnamed_constraints_index
                 constraints[constraint] = {
-                    'columns': self._parse_constraint_columns(check_clause, columns),
+                    'columns': constraint_columns,
                     'primary_key': False,
                     'unique': False,
                     'index': False,

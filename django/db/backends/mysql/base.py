@@ -3,14 +3,13 @@ MySQL database backend for Django.
 
 Requires mysqlclient: https://pypi.org/project/mysqlclient/
 """
-import re
-
 from django.core.exceptions import ImproperlyConfigured
-from django.db import utils
+from django.db import IntegrityError
 from django.db.backends import utils as backend_utils
 from django.db.backends.base.base import BaseDatabaseWrapper
 from django.utils.asyncio import async_unsafe
 from django.utils.functional import cached_property
+from django.utils.regex_helper import _lazy_re_compile
 
 try:
     import MySQLdb as Database
@@ -47,7 +46,7 @@ django_conversions = {
 
 # This should match the numerical portion of the version numbers (we can treat
 # versions like 5.0.24 and 5.0.24a as the same).
-server_version_re = re.compile(r'(\d{1,2})\.(\d{1,2})\.(\d{1,2})')
+server_version_re = _lazy_re_compile(r'(\d{1,2})\.(\d{1,2})\.(\d{1,2})')
 
 
 class CursorWrapper:
@@ -61,6 +60,7 @@ class CursorWrapper:
     codes_for_integrityerror = (
         1048,  # Column cannot be null
         1690,  # BIGINT UNSIGNED value is out of range
+        3819,  # CHECK constraint is violated
         4025,  # CHECK constraint failed
     )
 
@@ -75,7 +75,7 @@ class CursorWrapper:
             # Map some error codes to IntegrityError, since they seem to be
             # misclassified and Django would prefer the more logical place.
             if e.args[0] in self.codes_for_integrityerror:
-                raise utils.IntegrityError(*tuple(e.args))
+                raise IntegrityError(*tuple(e.args))
             raise
 
     def executemany(self, query, args):
@@ -85,7 +85,7 @@ class CursorWrapper:
             # Map some error codes to IntegrityError, since they seem to be
             # misclassified and Django would prefer the more logical place.
             if e.args[0] in self.codes_for_integrityerror:
-                raise utils.IntegrityError(*tuple(e.args))
+                raise IntegrityError(*tuple(e.args))
             raise
 
     def __getattr__(self, attr):
@@ -120,6 +120,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         'GenericIPAddressField': 'char(39)',
         'NullBooleanField': 'bool',
         'OneToOneField': 'integer',
+        'PositiveBigIntegerField': 'bigint UNSIGNED',
         'PositiveIntegerField': 'integer UNSIGNED',
         'PositiveSmallIntegerField': 'smallint UNSIGNED',
         'SlugField': 'varchar(%(max_length)s)',
@@ -130,9 +131,11 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         'UUIDField': 'char(32)',
     }
 
-    # For these columns, MySQL doesn't:
-    # - accept default values and implicitly treats these columns as nullable
-    # - support a database index
+    # For these data types:
+    # - MySQL < 8.0.13 and MariaDB < 10.2.1 don't accept default values and
+    #   implicitly treat them as nullable
+    # - all versions of MySQL and MariaDB don't support full width database
+    #   indexes
     _limited_data_types = (
         'tinyblob', 'blob', 'mediumblob', 'longblob', 'tinytext', 'text',
         'mediumtext', 'longtext', 'json',
@@ -266,7 +269,8 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         forward references. Always return True to indicate constraint checks
         need to be re-enabled.
         """
-        self.cursor().execute('SET foreign_key_checks=0')
+        with self.cursor() as cursor:
+            cursor.execute('SET foreign_key_checks=0')
         return True
 
     def enable_constraint_checking(self):
@@ -277,7 +281,8 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         # nested inside transaction.atomic.
         self.needs_rollback, needs_rollback = False, self.needs_rollback
         try:
-            self.cursor().execute('SET foreign_key_checks=1')
+            with self.cursor() as cursor:
+                cursor.execute('SET foreign_key_checks=1')
         finally:
             self.needs_rollback = needs_rollback
 
@@ -311,7 +316,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
                         )
                     )
                     for bad_row in cursor.fetchall():
-                        raise utils.IntegrityError(
+                        raise IntegrityError(
                             "The row in table '%s' with primary key '%s' has an invalid "
                             "foreign key: %s.%s contains a value '%s' that does not "
                             "have a corresponding value in %s.%s."
@@ -337,6 +342,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
     def data_type_check_constraints(self):
         if self.features.supports_column_check_constraints:
             return {
+                'PositiveBigIntegerField': '`%(column)s` >= 0',
                 'PositiveIntegerField': '`%(column)s` >= 0',
                 'PositiveSmallIntegerField': '`%(column)s` >= 0',
             }

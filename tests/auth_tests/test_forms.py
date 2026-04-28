@@ -423,6 +423,7 @@ class AuthenticationFormTest(TestDataMixin, TestCase):
         CustomEmailField.objects.create_user(**data)
         form = AuthenticationForm(None, data)
         self.assertEqual(form.fields['username'].max_length, 255)
+        self.assertEqual(form.fields['username'].widget.attrs.get('maxlength'), 255)
         self.assertEqual(form.errors, {})
 
     @override_settings(AUTH_USER_MODEL='auth_tests.IntegerUsernameUser')
@@ -435,6 +436,7 @@ class AuthenticationFormTest(TestDataMixin, TestCase):
         IntegerUsernameUser.objects.create_user(**data)
         form = AuthenticationForm(None, data)
         self.assertEqual(form.fields['username'].max_length, 254)
+        self.assertEqual(form.fields['username'].widget.attrs.get('maxlength'), 254)
         self.assertEqual(form.errors, {})
 
     def test_username_field_label(self):
@@ -801,6 +803,42 @@ class PasswordResetFormTest(TestDataMixin, TestCase):
         form = PasswordResetForm(data)
         self.assertFalse(form.is_valid())
         self.assertEqual(form['email'].errors, [_('Enter a valid email address.')])
+
+    def test_user_email_unicode_collision(self):
+        User.objects.create_user('mike123', 'mike@example.org', 'test123')
+        User.objects.create_user('mike456', 'mıke@example.org', 'test123')
+        data = {'email': 'mıke@example.org'}
+        form = PasswordResetForm(data)
+        self.assertTrue(form.is_valid())
+        form.save()
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['mıke@example.org'])
+
+    def test_user_email_domain_unicode_collision(self):
+        User.objects.create_user('mike123', 'mike@ixample.org', 'test123')
+        User.objects.create_user('mike456', 'mike@ıxample.org', 'test123')
+        data = {'email': 'mike@ıxample.org'}
+        form = PasswordResetForm(data)
+        self.assertTrue(form.is_valid())
+        form.save()
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['mike@ıxample.org'])
+
+    def test_user_email_unicode_collision_nonexistent(self):
+        User.objects.create_user('mike123', 'mike@example.org', 'test123')
+        data = {'email': 'mıke@example.org'}
+        form = PasswordResetForm(data)
+        self.assertTrue(form.is_valid())
+        form.save()
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_user_email_domain_unicode_collision_nonexistent(self):
+        User.objects.create_user('mike123', 'mike@ixample.org', 'test123')
+        data = {'email': 'mike@ıxample.org'}
+        form = PasswordResetForm(data)
+        self.assertTrue(form.is_valid())
+        form.save()
+        self.assertEqual(len(mail.outbox), 0)
 
     def test_nonexistent_email(self):
         """

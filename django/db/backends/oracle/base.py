@@ -11,7 +11,7 @@ from contextlib import contextmanager
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.db import utils
+from django.db import IntegrityError
 from django.db.backends.base.base import BaseDatabaseWrapper
 from django.utils.asyncio import async_unsafe
 from django.utils.encoding import force_bytes, force_str
@@ -74,7 +74,7 @@ def wrap_oracle_errors():
         # Convert that case to Django's IntegrityError exception.
         x = e.args[0]
         if hasattr(x, 'code') and hasattr(x, 'message') and x.code == 2091 and 'ORA-02291' in x.message:
-            raise utils.IntegrityError(*tuple(e.args))
+            raise IntegrityError(*tuple(e.args))
         raise
 
 
@@ -120,6 +120,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         'GenericIPAddressField': 'VARCHAR2(39)',
         'NullBooleanField': 'NUMBER(1)',
         'OneToOneField': 'NUMBER(11)',
+        'PositiveBigIntegerField': 'NUMBER(19)',
         'PositiveIntegerField': 'NUMBER(11)',
         'PositiveSmallIntegerField': 'NUMBER(11)',
         'SlugField': 'NVARCHAR2(%(max_length)s)',
@@ -133,6 +134,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
     data_type_check_constraints = {
         'BooleanField': '%(qn_column)s IN (0,1)',
         'NullBooleanField': '%(qn_column)s IN (0,1)',
+        'PositiveBigIntegerField': '%(qn_column)s >= 0',
         'PositiveIntegerField': '%(qn_column)s >= 0',
         'PositiveSmallIntegerField': '%(qn_column)s >= 0',
     }
@@ -299,8 +301,9 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         Check constraints by setting them to immediate. Return them to deferred
         afterward.
         """
-        self.cursor().execute('SET CONSTRAINTS ALL IMMEDIATE')
-        self.cursor().execute('SET CONSTRAINTS ALL DEFERRED')
+        with self.cursor() as cursor:
+            cursor.execute('SET CONSTRAINTS ALL IMMEDIATE')
+            cursor.execute('SET CONSTRAINTS ALL DEFERRED')
 
     def is_usable(self):
         try:
