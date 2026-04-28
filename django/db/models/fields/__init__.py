@@ -81,6 +81,40 @@ def return_None():
     return None
 
 
+class EnumConvertingDescriptor:
+    """
+    A descriptor that converts TextChoices/IntegerChoices enum instances 
+    to their primitive values when setting field values.
+    """
+    def __init__(self, field):
+        self.field = field
+
+    def __get__(self, instance, owner):
+        if instance is None:
+            return self.field
+        try:
+            return instance.__dict__[self.field.attname]
+        except KeyError:
+            # Field not set, check for default
+            if self.field.has_default():
+                return self.field.get_default()
+            return None
+
+    def __set__(self, instance, value):
+        # Convert enum instances to primitive values
+        if (value is not None and 
+            hasattr(value, 'value') and hasattr(value, '_name_') and 
+            hasattr(value.__class__, 'choices')):
+            value = value.value
+        instance.__dict__[self.field.attname] = value
+
+    def __delete__(self, instance):
+        try:
+            del instance.__dict__[self.field.attname]
+        except KeyError:
+            pass
+
+
 @total_ordering
 class Field(RegisterLookupMixin):
     """Base class for all field types"""
@@ -120,6 +154,77 @@ class Field(RegisterLookupMixin):
     related_model = None
 
     descriptor_class = DeferredAttribute
+
+    def _convert_enum_to_value(self, value):
+        """
+        Convert TextChoices or IntegerChoices enum instances to their primitive values.
+        """
+        if not self.choices or value is None:
+            return value
+        
+        # Check if value is an enum instance by looking for the 'value' attribute
+        # and checking if it has the expected enum characteristics
+        if hasattr(value, 'value') and hasattr(value, '_name_') and hasattr(value, '__class__'):
+            # Additional check to see if this looks like a Django choices enum
+            if hasattr(value.__class__, 'choices'):
+                return value.value
+        
+        return value
+
+    def contribute_to_class(self, cls, name, **kwargs):
+        """
+        Register the field with the model class it belongs to.
+        """
+        super().contribute_to_class(cls, name, **kwargs)
+        
+        # Override the descriptor to handle enum conversion
+        setattr(cls, self.name, FieldDescriptor(self))
+
+class FieldDescriptor:
+    """
+    Custom descriptor that handles enum conversion for fields with choices.
+    """
+    def __init__(self, field):
+        self.field = field
+
+    def __get__(self, instance, owner):
+        if instance is None:
+            return self.field
+        return instance.__dict__.get(self.field.attname)
+
+    def __set__(self, instance, value):
+        # Convert enum instances to their primitive values
+        converted_value = self.field._convert_enum_to_value(value)
+        instance.__dict__[self.field.attname] = converted_value
+
+    def __delete__(self, instance):
+        try:
+            del instance.__dict__[self.field.attname]
+        except KeyError:
+            pass
+
+    def _is_choices_enum_instance(self, value):
+        """
+        Check if the value is an instance of TextChoices or IntegerChoices enum.
+        """
+        if not self.choices:
+            return False
+        
+        # Import here to avoid circular imports
+        try:
+            from django.db import models
+            return isinstance(value, (models.TextChoices, models.IntegerChoices))
+        except ImportError:
+            return False
+
+    def to_python(self, value):
+        """
+        Convert the value to the appropriate Python type. If the value is a
+        TextChoices or IntegerChoices enum instance, convert it to its primitive value.
+        """
+        if self._is_choices_enum_instance(value):
+            return value.value
+        return value
 
     # Generic field type description, usually overridden by subclasses
     def _description(self):
@@ -387,6 +492,25 @@ class Field(RegisterLookupMixin):
                 )
             ]
         return []
+
+    def contribute_to_class(self, cls, name, **kwargs):
+        """
+        Register the field with the model class it belongs to.
+        
+        If not provided, the name of the field will be set to the name it was
+        given in the model class. To prevent that, add an explicit name via
+        the "name" keyword. The name can also be explicitly set after the
+        fact by setting the field's name attribute.
+        """
+        self.set_attributes_from_name(name)
+        self.model = cls
+        cls._meta.add_field(self, private=not self.editable)
+        if self.choices:
+            # Override the descriptor to handle enum conversion
+            setattr(cls, name, EnumConvertingDescriptor(self))
+        else:
+            # Use the default descriptor
+            setattr(cls, name, self.descriptor_class(self))
 
     def get_col(self, alias, output_field=None):
         if output_field is None:
