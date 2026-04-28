@@ -1,5 +1,6 @@
 from enum import Enum
 
+from django.core import checks
 from django.db.models.query_utils import Q
 from django.db.models.sql.query import Query
 
@@ -107,31 +108,19 @@ class UniqueConstraint(BaseConstraint):
     def constraint_sql(self, model, schema_editor):
         fields = [model._meta.get_field(field_name).column for field_name in self.fields]
         condition = self._get_condition_sql(model, schema_editor)
-        return schema_editor._unique_sql(
-            model, fields, self.name, condition=condition,
-            deferrable=self.deferrable,
-        )
+        return schema_editor._unique_sql(fields, self.name, condition)
 
     def create_sql(self, model, schema_editor):
         fields = [model._meta.get_field(field_name).column for field_name in self.fields]
         condition = self._get_condition_sql(model, schema_editor)
-        return schema_editor._create_unique_sql(
-            model, fields, self.name, condition=condition,
-            deferrable=self.deferrable,
-        )
+        return schema_editor._create_unique_sql(model, fields, self.name, condition, deferrable=self.deferrable)
 
     def remove_sql(self, model, schema_editor):
         condition = self._get_condition_sql(model, schema_editor)
-        return schema_editor._delete_unique_sql(
-            model, self.name, condition=condition, deferrable=self.deferrable,
-        )
+        return schema_editor._delete_unique_sql(model, self.name, condition)
 
     def __repr__(self):
-        return '<%s: fields=%r name=%r%s%s>' % (
-            self.__class__.__name__, self.fields, self.name,
-            '' if self.condition is None else ' condition=%s' % self.condition,
-            '' if self.deferrable is None else ' deferrable=%s' % self.deferrable,
-        )
+        return '<%s: fields=%r name=%r>' % (self.__class__.__name__, self.fields, self.name)
 
     def __eq__(self, other):
         if isinstance(other, UniqueConstraint):
@@ -151,3 +140,32 @@ class UniqueConstraint(BaseConstraint):
         if self.deferrable:
             kwargs['deferrable'] = self.deferrable
         return path, args, kwargs
+
+    def check(self, **kwargs):
+        errors = super().check(**kwargs) if hasattr(super(), 'check') else []
+        errors.extend(self._check_fields(**kwargs))
+        return errors
+
+    def _check_fields(self, **kwargs):
+        from django.core import checks
+        errors = []
+        # Get the model from kwargs or try to infer it
+        model = kwargs.get('model')
+        if model is None:
+            return errors
+            
+        # Check that all fields exist on the model
+        for field_name in self.fields:
+            try:
+                model._meta.get_field(field_name)
+            except Exception:
+                errors.append(
+                    checks.Error(
+                        "'%s' refers to the nonexistent field '%s'." % (
+                            self.name, field_name,
+                        ),
+                        obj=model,
+                        id='models.E012',
+                    )
+                )
+        return errors
