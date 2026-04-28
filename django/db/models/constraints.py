@@ -98,6 +98,10 @@ class UniqueConstraint(BaseConstraint):
         self.include = tuple(include) if include else ()
         super().__init__(name)
 
+    def check(self, model):
+        """Check that the constraint's fields exist on the model."""
+        return model._check_local_fields(self.fields, 'constraints')
+
     def _get_condition_sql(self, model, schema_editor):
         if self.condition is None:
             return None
