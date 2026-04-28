@@ -5,7 +5,7 @@ from io import StringIO
 from django.apps import apps
 from django.conf import settings
 from django.core import serializers
-from django.db import router
+from django.db import router, transaction
 
 # The prefix to put on the default database name when creating
 # the test database.
@@ -83,39 +83,59 @@ class BaseDatabaseCreation:
 
         return test_database_name
 
-    def set_as_test_mirror(self, primary_settings_dict):
-        """
-        Set this database up to be used in testing as a mirror of a primary
-        database whose settings are given.
-        """
-        self.connection.settings_dict['NAME'] = primary_settings_dict['NAME']
-
     def serialize_db_to_string(self):
         """
         Serialize all data in the database into a JSON string.
         Designed only for test runner usage; will not handle large
         amounts of data.
         """
-        # Build list of all apps to serialize
-        from django.db.migrations.loader import MigrationLoader
-        loader = MigrationLoader(self.connection)
-        app_list = []
-        for app_config in apps.get_app_configs():
-            if (
-                app_config.models_module is not None and
-                app_config.label in loader.migrated_apps and
-                app_config.name not in settings.TEST_NON_SERIALIZED_APPS
-            ):
-                app_list.append((app_config, None))
-
-        # Make a function to iteratively return every object
+        # Iteratively return every object for all models to serialize.
         def get_objects():
-            for model in serializers.sort_dependencies(app_list):
-                if (model._meta.can_migrate(self.connection) and
-                        router.allow_migrate_model(self.connection.alias, model)):
-                    queryset = model._default_manager.using(self.connection.alias).order_by(model._meta.pk.name)
-                    yield from queryset.iterator()
-        # Serialize to a string
+            from django.db.migrations.loader import MigrationLoader
+            loader = MigrationLoader(self.connection)
+            for app_config in apps.get_app_configs():
+                if (
+                    app_config.models_module is not None and
+                    app_config.label in loader.migrated_apps and
+                    app_config.name not in settings.TEST_NON_SERIALIZED_APPS
+                ):
+                    # Get all models for this app and sort them by dependencies
+                    models = list(app_config.get_models())
+                    
+                    # Sort models to handle foreign key dependencies
+                    # Models with no dependencies come first
+                    sorted_models = []
+                    remaining_models = models[:]
+                    
+                    while remaining_models:
+                        # Find models with no unresolved dependencies
+                        models_to_add = []
+                        for model in remaining_models:
+                            dependencies_resolved = True
+                            for field in model._meta.get_fields():
+                                if (hasattr(field, 'remote_field') and 
+                                    field.remote_field and 
+                                    field.remote_field.model and
+                                    field.remote_field.model != model and
+                                    field.remote_field.model in remaining_models):
+                                    dependencies_resolved = False
+                                    break
+                            if dependencies_resolved:
+                                models_to_add.append(model)
+                        
+                        if not models_to_add:
+                            # Circular dependency or other issue, add remaining models
+                            models_to_add = remaining_models[:]
+                        
+                        sorted_models.extend(models_to_add)
+                        for model in models_to_add:
+                            remaining_models.remove(model)
+                    
+                    for model in sorted_models:
+                        if (not model._meta.proxy and router.allow_migrate_model(self.connection.alias, model)):
+                            queryset = model._base_manager.using(self.connection.alias).order_by(model._meta.pk.name)
+                            yield from queryset.iterator()
+        
         out = StringIO()
         serializers.serialize("json", get_objects(), indent=None, stream=out)
         return out.getvalue()
@@ -126,8 +146,45 @@ class BaseDatabaseCreation:
         the serialize_db_to_string() method.
         """
         data = StringIO(data)
+        
+        # Load all objects first to handle dependencies
+        objects_to_save = []
         for obj in serializers.deserialize("json", data, using=self.connection.alias):
-            obj.save()
+            objects_to_save.append(obj)
+        
+        # Sort objects by model dependencies before saving
+        # This ensures foreign key constraints are satisfied
+        saved_models = set()
+        remaining_objects = objects_to_save[:]
+        
+        while remaining_objects:
+            objects_to_save_now = []
+            for obj in remaining_objects:
+                model = obj.object.__class__
+                dependencies_satisfied = True
+                
+                # Check if all foreign key dependencies are satisfied
+                for field in model._meta.get_fields():
+                    if (hasattr(field, 'remote_field') and 
+                        field.remote_field and 
+                        field.remote_field.model and
+                        field.remote_field.model != model and
+                        field.remote_field.model not in saved_models):
+                        dependencies_satisfied = False
+                        break
+                
+                if dependencies_satisfied:
+                    objects_to_save_now.append(obj)
+            
+            if not objects_to_save_now:
+                # Handle circular dependencies or remaining objects
+                objects_to_save_now = remaining_objects[:]
+            
+            # Save objects and track saved models
+            for obj in objects_to_save_now:
+                obj.save()
+                saved_models.add(obj.object.__class__)
+                remaining_objects.remove(obj)
 
     def _get_database_display_str(self, verbosity, database_name):
         """
@@ -170,12 +227,13 @@ class BaseDatabaseCreation:
                 # just return and skip it all.
                 if keepdb:
                     return test_database_name
-
+                
                 self.log('Got an error creating the test database: %s' % e)
                 if not autoclobber:
                     confirm = input(
                         "Type 'yes' if you would like to try deleting the test "
-                        "database '%s', or 'no' to cancel: " % test_database_name)
+                        "database '%s', or 'no' to cancel: " % test_database_name
+                    )
                 if autoclobber or confirm == 'yes':
                     try:
                         if verbosity >= 1:
@@ -193,54 +251,13 @@ class BaseDatabaseCreation:
 
         return test_database_name
 
-    def clone_test_db(self, suffix, verbosity=1, autoclobber=False, keepdb=False):
-        """
-        Clone a test database.
-        """
-        source_database_name = self.connection.settings_dict['NAME']
-
-        if verbosity >= 1:
-            action = 'Cloning test database'
-            if keepdb:
-                action = 'Using existing clone'
-            self.log('%s for alias %s...' % (
-                action,
-                self._get_database_display_str(verbosity, source_database_name),
-            ))
-
-        # We could skip this call if keepdb is True, but we instead
-        # give it the keepdb param. See create_test_db for details.
-        self._clone_test_db(suffix, verbosity, keepdb)
-
-    def get_test_db_clone_settings(self, suffix):
-        """
-        Return a modified connection settings dict for the n-th clone of a DB.
-        """
-        # When this function is called, the test database has been created
-        # already and its name has been copied to settings_dict['NAME'] so
-        # we don't need to call _get_test_db_name.
-        orig_settings_dict = self.connection.settings_dict
-        return {**orig_settings_dict, 'NAME': '{}_{}'.format(orig_settings_dict['NAME'], suffix)}
-
-    def _clone_test_db(self, suffix, verbosity, keepdb=False):
-        """
-        Internal implementation - duplicate the test db tables.
-        """
-        raise NotImplementedError(
-            "The database backend doesn't support cloning databases. "
-            "Disable the option to run tests in parallel processes.")
-
-    def destroy_test_db(self, old_database_name=None, verbosity=1, keepdb=False, suffix=None):
+    def destroy_test_db(self, old_database_name, verbosity=1, keepdb=False, suffix=None):
         """
         Destroy a test database, prompting the user for confirmation if the
         database already exists.
         """
         self.connection.close()
-        if suffix is None:
-            test_database_name = self.connection.settings_dict['NAME']
-        else:
-            test_database_name = self.get_test_db_clone_settings(suffix)['NAME']
-
+        test_database_name = self.connection.settings_dict['NAME']
         if verbosity >= 1:
             action = 'Destroying'
             if keepdb:
@@ -256,9 +273,8 @@ class BaseDatabaseCreation:
             self._destroy_test_db(test_database_name, verbosity)
 
         # Restore the original database name
-        if old_database_name is not None:
-            settings.DATABASES[self.connection.alias]["NAME"] = old_database_name
-            self.connection.settings_dict["NAME"] = old_database_name
+        settings.DATABASES[self.connection.alias]["NAME"] = old_database_name
+        self.connection.settings_dict["NAME"] = old_database_name
 
     def _destroy_test_db(self, test_database_name, verbosity):
         """
