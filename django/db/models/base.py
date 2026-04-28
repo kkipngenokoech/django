@@ -346,6 +346,33 @@ class ModelBase(type):
                 remote = wrt.remote_field.model
                 lazy_related_operation(make_foreign_order_accessors, cls, remote)
 
+        # Fix get_FOO_display() methods for fields with choices that may be overridden in child classes
+        for field in opts.fields:
+            if hasattr(field, 'choices') and field.choices:
+                # Check if this model class has redefined choices for this field
+                field_name = field.name
+                choices_attr_name = field_name + '_choice'
+                if hasattr(cls, choices_attr_name):
+                    # Create a custom get_FOO_display method that uses the model's choices
+                    def make_get_display(field_name, choices_attr_name):
+                        def get_display(self):
+                            value = getattr(self, field_name)
+                            # Get choices from the model class, not the field
+                            choices = getattr(self.__class__, choices_attr_name, None)
+                            if choices:
+                                choices_dict = dict(choices)
+                                return choices_dict.get(value, value)
+                            # Fallback to field choices if model doesn't have custom choices
+                            field_obj = self._meta.get_field(field_name)
+                            if hasattr(field_obj, 'choices') and field_obj.choices:
+                                choices_dict = dict(field_obj.choices)
+                                return choices_dict.get(value, value)
+                            return value
+                        return get_display
+                    
+                    display_method_name = 'get_%s_display' % field_name
+                    setattr(cls, display_method_name, make_get_display(field_name, choices_attr_name))
+
         # Give the class a docstring -- its definition.
         if cls.__doc__ is None:
             cls.__doc__ = "%s(%s)" % (cls.__name__, ", ".join(f.name for f in opts.fields))
