@@ -5,15 +5,15 @@ import warnings
 from asgiref.sync import sync_to_async
 
 
-class RemovedInDjango40Warning(DeprecationWarning):
+class RemovedInDjango41Warning(DeprecationWarning):
     pass
 
 
-class RemovedInDjango41Warning(PendingDeprecationWarning):
+class RemovedInDjango50Warning(PendingDeprecationWarning):
     pass
 
 
-RemovedInNextVersionWarning = RemovedInDjango40Warning
+RemovedInNextVersionWarning = RemovedInDjango41Warning
 
 
 class warn_about_renamed_method:
@@ -89,10 +89,9 @@ class MiddlewareMixin:
     sync_capable = True
     async_capable = True
 
-    # RemovedInDjango40Warning: when the deprecation ends, replace with:
-    #   def __init__(self, get_response):
-    def __init__(self, get_response=None):
-        self._get_response_none_deprecation(get_response)
+    def __init__(self, get_response):
+        if get_response is None:
+            raise ValueError('get_response must be provided.')
         self.get_response = get_response
         self._async_check()
         super().__init__()
@@ -126,16 +125,14 @@ class MiddlewareMixin:
         """
         response = None
         if hasattr(self, 'process_request'):
-            response = await sync_to_async(self.process_request)(request)
+            response = await sync_to_async(
+                self.process_request,
+                thread_sensitive=True,
+            )(request)
         response = response or await self.get_response(request)
         if hasattr(self, 'process_response'):
-            response = await sync_to_async(self.process_response)(request, response)
+            response = await sync_to_async(
+                self.process_response,
+                thread_sensitive=True,
+            )(request, response)
         return response
-
-    def _get_response_none_deprecation(self, get_response):
-        if get_response is None:
-            warnings.warn(
-                'Passing None for the middleware get_response argument is '
-                'deprecated.',
-                RemovedInDjango40Warning, stacklevel=3,
-            )

@@ -8,7 +8,6 @@ import warnings
 from collections import defaultdict
 from itertools import chain
 
-from django.conf import settings
 from django.forms.utils import to_current_timezone
 from django.templatetags.static import static
 from django.utils import datetime_safe, formats
@@ -147,8 +146,14 @@ class Media:
 
     def __add__(self, other):
         combined = Media()
-        combined._css_lists = self._css_lists + other._css_lists
-        combined._js_lists = self._js_lists + other._js_lists
+        combined._css_lists = self._css_lists[:]
+        combined._js_lists = self._js_lists[:]
+        for item in other._css_lists:
+            if item and item not in self._css_lists:
+                combined._css_lists.append(item)
+        for item in other._js_lists:
+            if item and item not in self._js_lists:
+                combined._js_lists.append(item)
         return combined
 
 
@@ -601,8 +606,8 @@ class ChoiceWidget(Widget):
 
             for subvalue, sublabel in choices:
                 selected = (
-                    str(subvalue) in value and
-                    (not has_selected or self.allow_multiple_selected)
+                    (not has_selected or self.allow_multiple_selected) and
+                    str(subvalue) in value
                 )
                 has_selected |= selected
                 subgroup.append(self.create_option(
@@ -615,8 +620,6 @@ class ChoiceWidget(Widget):
 
     def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
         index = str(index) if subindex is None else "%s_%s" % (index, subindex)
-        if attrs is None:
-            attrs = {}
         option_attrs = self.build_attrs(self.attrs, attrs) if self.option_inherits_attrs else {}
         if selected:
             option_attrs.update(self.checked_attribute)
@@ -777,7 +780,7 @@ class CheckboxSelectMultiple(ChoiceWidget):
         return False
 
     def id_for_label(self, id_, index=None):
-        """"
+        """
         Don't include for="field_0" in <label> because clicking such a label
         would toggle the first checkbox.
         """
@@ -1028,7 +1031,7 @@ class SelectDateWidget(Widget):
                 # Convert any zeros in the date to empty strings to match the
                 # empty option value.
                 year, month, day = [int(val) or '' for val in match.groups()]
-            elif settings.USE_L10N:
+            else:
                 input_format = get_format('DATE_INPUT_FORMATS')[0]
                 try:
                     d = datetime.datetime.strptime(value, input_format)

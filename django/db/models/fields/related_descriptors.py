@@ -247,14 +247,24 @@ class ForwardManyToOneDescriptor:
             # hasn't been accessed yet.
             if related is not None:
                 remote_field.set_cached_value(related, None)
+                # Remove any tracking for primary key changes
+                self._remove_pk_tracker(instance, related)
 
             for lh_field, rh_field in self.field.related_fields:
                 setattr(instance, lh_field.attname, None)
 
         # Set the values of the related field.
         else:
+            # Remove tracking from any previously related object
+            old_related = self.field.get_cached_value(instance, default=None)
+            if old_related is not None and old_related != value:
+                self._remove_pk_tracker(instance, old_related)
+            
             for lh_field, rh_field in self.field.related_fields:
                 setattr(instance, lh_field.attname, getattr(value, rh_field.attname))
+            
+            # Set up tracking for primary key changes on the related object
+            self._setup_pk_tracker(instance, value)
 
         # Set the related instance cache used by __get__ to avoid an SQL query
         # when accessing the attribute we just set.
@@ -265,6 +275,73 @@ class ForwardManyToOneDescriptor:
         # query if it's accessed later on.
         if value is not None and not remote_field.multiple:
             remote_field.set_cached_value(value, instance)
+
+    def _setup_pk_tracker(self, instance, related_obj):
+        """
+        Set up tracking for primary key changes on the related object.
+        This ensures that when the related object's primary key changes,
+        the foreign key field on this instance is updated accordingly.
+        """
+        if related_obj is None:
+            return
+        
+        # Store a reference to track primary key changes
+        if not hasattr(instance, '_fk_pk_trackers'):
+            instance._fk_pk_trackers = {}
+        
+        # Create a tracker function that will update the foreign key field
+        # when the related object's primary key changes
+        def pk_change_tracker():
+            # Update the foreign key field values when called
+            for lh_field, rh_field in self.field.related_fields:
+                current_fk_value = getattr(instance, lh_field.attname)
+                new_pk_value = getattr(related_obj, rh_field.attname)
+                if current_fk_value != new_pk_value:
+                    setattr(instance, lh_field.attname, new_pk_value)
+        
+        # Store the tracker
+        tracker_key = (self.field.name, id(related_obj))
+        instance._fk_pk_trackers[tracker_key] = {
+            'related_obj': related_obj,
+            'tracker': pk_change_tracker
+        }
+        
+        # Hook into the related object's save method to update foreign key
+        if not hasattr(related_obj, '_original_save'):
+            related_obj._original_save = related_obj.save
+            
+            def save_with_fk_update(*args, **kwargs):
+                # Call all trackers before saving
+                for obj_id, tracker_info in getattr(instance, '_fk_pk_trackers', {}).items():
+                    if tracker_info['related_obj'] is related_obj:
+                        tracker_info['tracker']()
+                return related_obj._original_save(*args, **kwargs)
+            
+            related_obj.save = save_with_fk_update
+    
+    def _remove_pk_tracker(self, instance, related_obj):
+        """
+        Remove tracking for primary key changes on the related object.
+        """
+        if related_obj is None or not hasattr(instance, '_fk_pk_trackers'):
+            return
+        
+        tracker_key = (self.field.name, id(related_obj))
+        if tracker_key in instance._fk_pk_trackers:
+            del instance._fk_pk_trackers[tracker_key]
+        
+        # If no more trackers, restore original save method
+        if hasattr(related_obj, '_original_save'):
+            # Check if any other instances are still tracking this object
+            still_tracked = False
+            for tracker_info in instance._fk_pk_trackers.values():
+                if tracker_info['related_obj'] is related_obj:
+                    still_tracked = True
+                    break
+            
+            if not still_tracked:
+                related_obj.save = related_obj._original_save
+                delattr(related_obj, '_original_save')
 
     def __reduce__(self):
         """
@@ -581,6 +658,7 @@ def create_reverse_many_to_one_manager(superclass, rel):
             queryset._add_hints(instance=self.instance)
             if self._db:
                 queryset = queryset.using(self._db)
+            queryset._defer_next_filter = True
             queryset = queryset.filter(**self.core_filters)
             for field in self.field.foreign_related_fields:
                 val = getattr(self.instance, field.attname)
@@ -641,7 +719,6 @@ def create_reverse_many_to_one_manager(superclass, rel):
 
         def add(self, *objs, bulk=True):
             self._remove_prefetched_objects()
-            objs = list(objs)
             db = router.db_for_write(self.model, instance=self.instance)
 
             def check_and_update_obj(obj):

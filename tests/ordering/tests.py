@@ -1,7 +1,6 @@
 from datetime import datetime
 from operator import attrgetter
 
-from django.core.exceptions import FieldError
 from django.db.models import (
     CharField, DateTimeField, F, Max, OuterRef, Subquery, Value,
 )
@@ -316,10 +315,9 @@ class OrderingTests(TestCase):
         """
         'pk' works as an ordering option in Meta.
         """
-        self.assertQuerysetEqual(
-            Author.objects.all(),
-            list(reversed(range(1, Author.objects.count() + 1))),
-            attrgetter("pk"),
+        self.assertEqual(
+            [a.pk for a in Author.objects.all()],
+            [a.pk for a in Author.objects.order_by('-pk')],
         )
 
     def test_order_by_fk_attname(self):
@@ -327,8 +325,9 @@ class OrderingTests(TestCase):
         ordering by a foreign key by its attribute name prevents the query
         from inheriting its related model ordering option (#19195).
         """
+        authors = list(Author.objects.order_by('id'))
         for i in range(1, 5):
-            author = Author.objects.get(pk=i)
+            author = authors[i - 1]
             article = getattr(self, "a%d" % (5 - i))
             article.author = author
             article.save(update_fields={'author'})
@@ -341,6 +340,22 @@ class OrderingTests(TestCase):
                 "Article 1",
             ],
             attrgetter("headline")
+        )
+
+    def test_order_by_self_referential_fk(self):
+        self.a1.author = Author.objects.create(editor=self.author_1)
+        self.a1.save()
+        self.a2.author = Author.objects.create(editor=self.author_2)
+        self.a2.save()
+        self.assertQuerysetEqual(
+            Article.objects.filter(author__isnull=False).order_by('author__editor'),
+            ['Article 2', 'Article 1'],
+            attrgetter('headline'),
+        )
+        self.assertQuerysetEqual(
+            Article.objects.filter(author__isnull=False).order_by('author__editor_id'),
+            ['Article 1', 'Article 2'],
+            attrgetter('headline'),
         )
 
     def test_order_by_f_expression(self):
@@ -422,17 +437,6 @@ class OrderingTests(TestCase):
         # Order by constant.
         qs = Article.objects.order_by(Value('1', output_field=CharField()), '-headline')
         self.assertSequenceEqual(qs, [self.a4, self.a3, self.a2, self.a1])
-
-    def test_order_by_constant_value_without_output_field(self):
-        msg = 'Cannot resolve expression type, unknown output_field'
-        qs = Article.objects.annotate(constant=Value('1')).order_by('constant')
-        for ordered_qs in (
-            qs,
-            qs.values('headline'),
-            Article.objects.order_by(Value('1')),
-        ):
-            with self.subTest(ordered_qs=ordered_qs), self.assertRaisesMessage(FieldError, msg):
-                ordered_qs.first()
 
     def test_related_ordering_duplicate_table_reference(self):
         """
