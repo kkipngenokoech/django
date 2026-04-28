@@ -48,6 +48,12 @@ class PrefixNode(template.Node):
 
     def render(self, context):
         prefix = self.handle_simple(self.name)
+        # Add SCRIPT_NAME support for prefix nodes
+        request = context.get('request')
+        if request and hasattr(request, 'META'):
+            script_name = request.META.get('SCRIPT_NAME', '')
+            if script_name:
+                prefix = script_name.rstrip('/') + prefix
         if self.varname is None:
             return prefix
         context[self.varname] = prefix
@@ -104,6 +110,12 @@ class StaticNode(template.Node):
 
     def render(self, context):
         url = self.url(context)
+        # Add SCRIPT_NAME support for static URLs
+        request = context.get('request')
+        if request and hasattr(request, 'META'):
+            script_name = request.META.get('SCRIPT_NAME', '')
+            if script_name:
+                url = script_name.rstrip('/') + url
         if context.autoescape:
             url = conditional_escape(url)
         if self.varname is None:
