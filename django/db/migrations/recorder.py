@@ -1,7 +1,7 @@
 from django.apps.registry import Apps
 from django.db import models
 from django.db.utils import DatabaseError
-from django.utils.decorators import classproperty
+from django.utils.functional import classproperty
 from django.utils.timezone import now
 
 from .exceptions import MigrationSchemaMissing
@@ -69,13 +69,16 @@ class MigrationRecorder:
             raise MigrationSchemaMissing("Unable to create the django_migrations table (%s)" % exc)
 
     def applied_migrations(self):
-        """Return a set of (app, name) of applied migrations."""
+        """
+        Return a dict mapping (app_name, migration_name) to Migration instances
+        for all applied migrations.
+        """
         if self.has_table():
-            return {tuple(x) for x in self.migration_qs.values_list('app', 'name')}
+            return {(migration.app, migration.name): migration for migration in self.migration_qs}
         else:
             # If the django_migrations table doesn't exist, then no migrations
             # are applied.
-            return set()
+            return {}
 
     def record_applied(self, app, name):
         """Record that a migration was applied."""

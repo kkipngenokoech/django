@@ -67,6 +67,7 @@ class SpatiaLiteOperations(BaseSpatialOperations, DatabaseOperations):
     select = 'CAST (AsEWKB(%s) AS BLOB)'
 
     function_names = {
+        'AsWKB': 'St_AsBinary',
         'ForcePolygonCW': 'ST_ForceLHR',
         'Length': 'ST_Length',
         'LineLocatePoint': 'ST_Line_Locate_Point',
@@ -79,7 +80,7 @@ class SpatiaLiteOperations(BaseSpatialOperations, DatabaseOperations):
 
     @cached_property
     def unsupported_functions(self):
-        unsupported = {'BoundingCircle', 'MemSize'}
+        unsupported = {'BoundingCircle', 'GeometryDistance', 'MemSize'}
         if not self.lwgeom_version():
             unsupported |= {'Azimuth', 'GeoHash', 'IsValid', 'MakeValid'}
         return unsupported

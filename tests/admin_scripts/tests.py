@@ -14,7 +14,6 @@ import unittest
 from io import StringIO
 from unittest import mock
 
-import django
 from django import conf, get_version
 from django.conf import settings
 from django.core.management import (
@@ -46,8 +45,6 @@ class AdminScriptTestCase(SimpleTestCase):
         # where `/var` is a symlink to `/private/var`.
         self.test_dir = os.path.realpath(os.path.join(tmpdir.name, 'test_project'))
         os.mkdir(self.test_dir)
-        with open(os.path.join(self.test_dir, '__init__.py'), 'w'):
-            pass
 
     def write_settings(self, filename, apps=None, is_dir=False, sdict=None, extra=None):
         if is_dir:
@@ -95,7 +92,7 @@ class AdminScriptTestCase(SimpleTestCase):
                 paths.append(os.path.dirname(backend_dir))
         return paths
 
-    def run_test(self, script, args, settings_file=None, apps=None):
+    def run_test(self, args, settings_file=None, apps=None):
         base_dir = os.path.dirname(self.test_dir)
         # The base dir for Django's tests is one level up.
         tests_dir = os.path.dirname(os.path.dirname(__file__))
@@ -118,16 +115,16 @@ class AdminScriptTestCase(SimpleTestCase):
         test_environ['PYTHONPATH'] = os.pathsep.join(python_path)
         test_environ['PYTHONWARNINGS'] = ''
 
-        return subprocess.Popen(
-            [sys.executable, script] + args,
+        p = subprocess.run(
+            [sys.executable, *args],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             cwd=self.test_dir,
             env=test_environ, universal_newlines=True,
-        ).communicate()
+        )
+        return p.stdout, p.stderr
 
     def run_django_admin(self, args, settings_file=None):
-        script_dir = os.path.abspath(os.path.join(os.path.dirname(django.__file__), 'bin'))
-        return self.run_test(os.path.join(script_dir, 'django-admin.py'), args, settings_file)
+        return self.run_test(['-m', 'django', *args], settings_file)
 
     def run_manage(self, args, settings_file=None, manage_py=None):
         template_manage_py = (
@@ -145,7 +142,7 @@ class AdminScriptTestCase(SimpleTestCase):
         with open(test_manage_py, 'w') as fp:
             fp.write(manage_py_contents)
 
-        return self.run_test('./manage.py', args, settings_file)
+        return self.run_test(['./manage.py', *args], settings_file)
 
     def assertNoOutput(self, stream):
         "Utility assertion: assert that the given stream is empty"
@@ -633,6 +630,15 @@ class DjangoAdminSettingsDirectory(AdminScriptTestCase):
 # of the generated manage.py script
 ##########################################################################
 
+class ManageManuallyConfiguredSettings(AdminScriptTestCase):
+    """Customized manage.py calling settings.configure()."""
+    def test_non_existent_command_output(self):
+        out, err = self.run_manage(['invalid_command'], manage_py='configured_settings_manage.py')
+        self.assertNoOutput(out)
+        self.assertOutput(err, "Unknown command: 'invalid_command'")
+        self.assertNotInOutput(err, 'No Django settings specified')
+
+
 class ManageNoSettings(AdminScriptTestCase):
     "A series of tests for manage.py when there is no settings.py file."
 
@@ -1103,13 +1109,13 @@ class ManageCheck(AdminScriptTestCase):
                 'django.contrib.auth',
                 'django.contrib.contenttypes',
                 'django.contrib.messages',
-                'django.contrib.sessions',
             ],
             sdict={
                 'DEBUG': True,
                 'MIDDLEWARE': [
                     'django.contrib.messages.middleware.MessageMiddleware',
                     'django.contrib.auth.middleware.AuthenticationMiddleware',
+                    'django.contrib.sessions.middleware.SessionMiddleware',
                 ],
                 'TEMPLATES': [
                     {
@@ -1890,7 +1896,12 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         # running again..
         out, err = self.run_django_admin(args)
         self.assertNoOutput(out)
-        self.assertOutput(err, "already exists")
+        self.assertOutput(
+            err,
+            "CommandError: 'testproject' conflicts with the name of an "
+            "existing Python module and cannot be used as a project name. "
+            "Please try another name.",
+        )
 
     def test_invalid_project_name(self):
         "Make sure the startproject management command validates a project name"
@@ -1938,7 +1949,11 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         # running again..
         out, err = self.run_django_admin(args)
         self.assertNoOutput(out)
-        self.assertOutput(err, "already exists")
+        self.assertOutput(
+            err,
+            "already exists. Overlaying a project into an existing directory "
+            "won't replace conflicting files."
+        )
 
     def test_custom_project_template(self):
         "Make sure the startproject management command is able to use a different project template"
@@ -2128,6 +2143,36 @@ class StartApp(AdminScriptTestCase):
         )
         self.assertFalse(os.path.exists(testproject_dir))
 
+    def test_invalid_target_name(self):
+        for bad_target in ('invalid.dir_name', '7invalid_dir_name', '.invalid_dir_name'):
+            with self.subTest(bad_target):
+                _, err = self.run_django_admin(['startapp', 'app', bad_target])
+                self.assertOutput(
+                    err,
+                    "CommandError: '%s' is not a valid app directory. Please "
+                    "make sure the directory is a valid identifier." % bad_target
+                )
+
+    def test_importable_target_name(self):
+        _, err = self.run_django_admin(['startapp', 'app', 'os'])
+        self.assertOutput(
+            err,
+            "CommandError: 'os' conflicts with the name of an existing Python "
+            "module and cannot be used as an app directory. Please try "
+            "another directory."
+        )
+
+    def test_overlaying_app(self):
+        # Use a subdirectory so it is outside the PYTHONPATH.
+        os.makedirs(os.path.join(self.test_dir, 'apps/app1'))
+        self.run_django_admin(['startapp', 'app1', 'apps/app1'])
+        out, err = self.run_django_admin(['startapp', 'app2', 'apps/app1'])
+        self.assertOutput(
+            err,
+            "already exists. Overlaying an app into an existing directory "
+            "won't replace conflicting files."
+        )
+
 
 class DiffSettings(AdminScriptTestCase):
     """Tests for diffsettings management command."""
@@ -2221,13 +2266,8 @@ class Dumpdata(AdminScriptTestCase):
 class MainModule(AdminScriptTestCase):
     """python -m django works like django-admin."""
 
-    def test_runs_django_admin(self):
-        cmd_out, _ = self.run_django_admin(['--version'])
-        mod_out, _ = self.run_test('-m', ['django', '--version'])
-        self.assertEqual(mod_out, cmd_out)
-
     def test_program_name_in_help(self):
-        out, err = self.run_test('-m', ['django', 'help'])
+        out, err = self.run_test(['-m', 'django', 'help'])
         self.assertOutput(out, "Type 'python -m django help <subcommand>' for help on a specific subcommand.")
 
 

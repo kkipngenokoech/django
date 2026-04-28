@@ -8,6 +8,7 @@ transcript.
 from django.contrib.postgres.search import (
     SearchQuery, SearchRank, SearchVector,
 )
+from django.db import connection
 from django.db.models import F
 from django.test import SimpleTestCase, modify_settings, skipUnlessDBFeature
 
@@ -112,6 +113,10 @@ class SearchVectorFieldTest(GrailTestData, PostgreSQLTestCase):
         searched = Line.objects.filter(dialogue_search_vector=SearchQuery('cadeaux', config='french'))
         self.assertSequenceEqual(searched, [self.french])
 
+    def test_single_coalesce_expression(self):
+        searched = Line.objects.annotate(search=SearchVector('dialogue')).filter(search='cadeaux')
+        self.assertNotIn('COALESCE(COALESCE', str(searched.query))
+
 
 class MultipleFieldsTest(GrailTestData, PostgreSQLTestCase):
 
@@ -194,6 +199,45 @@ class MultipleFieldsTest(GrailTestData, PostgreSQLTestCase):
         line_qs = Line.objects.annotate(search=SearchVector('dialogue', config='french'))
         searched = line_qs.filter(
             search=SearchQuery("'cadeaux' & 'beaux'", search_type='raw', config='french'),
+        )
+        self.assertSequenceEqual(searched, [self.french])
+
+    @skipUnlessDBFeature('has_websearch_to_tsquery')
+    def test_web_search(self):
+        line_qs = Line.objects.annotate(search=SearchVector('dialogue'))
+        searched = line_qs.filter(
+            search=SearchQuery(
+                '"burned body" "split kneecaps"',
+                search_type='websearch',
+            ),
+        )
+        self.assertSequenceEqual(searched, [])
+        searched = line_qs.filter(
+            search=SearchQuery(
+                '"body burned" "kneecaps split" -"nostrils"',
+                search_type='websearch',
+            ),
+        )
+        self.assertSequenceEqual(searched, [self.verse1])
+        searched = line_qs.filter(
+            search=SearchQuery(
+                '"Sir Robin" ("kneecaps" OR "Camelot")',
+                search_type='websearch',
+            ),
+        )
+        self.assertSequenceEqual(searched, [self.verse0, self.verse1])
+
+    @skipUnlessDBFeature('has_websearch_to_tsquery')
+    def test_web_search_with_config(self):
+        line_qs = Line.objects.annotate(
+            search=SearchVector('scene__setting', 'dialogue', config='french'),
+        )
+        searched = line_qs.filter(
+            search=SearchQuery('cadeau -beau', search_type='websearch', config='french'),
+        )
+        self.assertSequenceEqual(searched, [])
+        searched = line_qs.filter(
+            search=SearchQuery('beau cadeau', search_type='websearch', config='french'),
         )
         self.assertSequenceEqual(searched, [self.french])
 
@@ -344,6 +388,23 @@ class TestRankingAndWeights(GrailTestData, PostgreSQLTestCase):
             rank=SearchRank(SearchVector('dialogue'), SearchQuery('brave sir robin')),
         ).filter(rank__gt=0.3)
         self.assertSequenceEqual(searched, [self.verse0])
+
+
+class SearchVectorIndexTests(PostgreSQLTestCase):
+    def test_search_vector_index(self):
+        """SearchVector generates IMMUTABLE SQL in order to be indexable."""
+        # This test should be moved to test_indexes and use a functional
+        # index instead once support lands (see #26167).
+        query = Line.objects.all().query
+        resolved = SearchVector('id', 'dialogue', config='english').resolve_expression(query)
+        compiler = query.get_compiler(connection.alias)
+        sql, params = resolved.as_sql(compiler, connection)
+        # Indexed function must be IMMUTABLE.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'CREATE INDEX search_vector_index ON %s USING GIN (%s)' % (Line._meta.db_table, sql),
+                params,
+            )
 
 
 class SearchQueryTests(SimpleTestCase):

@@ -24,8 +24,12 @@ class BaseDatabaseOperations:
         'SmallIntegerField': (-32768, 32767),
         'IntegerField': (-2147483648, 2147483647),
         'BigIntegerField': (-9223372036854775808, 9223372036854775807),
+        'PositiveBigIntegerField': (0, 9223372036854775807),
         'PositiveSmallIntegerField': (0, 32767),
         'PositiveIntegerField': (0, 2147483647),
+        'SmallAutoField': (-32768, 32767),
+        'AutoField': (-2147483648, 2147483647),
+        'BigAutoField': (-9223372036854775808, 9223372036854775807),
     }
     set_operators = {
         'union': 'UNION',
@@ -173,13 +177,12 @@ class BaseDatabaseOperations:
         else:
             return ['DISTINCT'], []
 
-    def fetch_returned_insert_id(self, cursor):
+    def fetch_returned_insert_columns(self, cursor, returning_params):
         """
         Given a cursor object that has just performed an INSERT...RETURNING
-        statement into a table that has an auto-incrementing ID, return the
-        newly created ID.
+        statement into a table, return the newly created data.
         """
-        return cursor.fetchone()[0]
+        return cursor.fetchone()
 
     def field_cast_sql(self, db_type, internal_type):
         """
@@ -218,10 +221,10 @@ class BaseDatabaseOperations:
     def limit_offset_sql(self, low_mark, high_mark):
         """Return LIMIT/OFFSET SQL clause."""
         limit, offset = self._get_limit_offset_params(low_mark, high_mark)
-        return '%s%s' % (
-            (' LIMIT %d' % limit) if limit else '',
-            (' OFFSET %d' % offset) if offset else '',
-        )
+        return ' '.join(sql for sql in (
+            ('LIMIT %d' % limit) if limit else None,
+            ('OFFSET %d' % offset) if offset else None,
+        ) if sql)
 
     def last_executed_query(self, cursor, sql, params):
         """
@@ -311,12 +314,11 @@ class BaseDatabaseOperations:
         """
         return value
 
-    def return_insert_id(self):
+    def return_insert_columns(self, fields):
         """
-        For backends that support returning the last insert ID as part of an
-        insert query, return the SQL and params to append to the INSERT query.
-        The returned fragment should contain a format string to hold the
-        appropriate column.
+        For backends that support returning columns as part of an insert query,
+        return the SQL and params to append to the INSERT query. The returned
+        fragment should contain a format string to hold the appropriate column.
         """
         pass
 
@@ -394,7 +396,7 @@ class BaseDatabaseOperations:
         to tables with foreign keys pointing the tables being truncated.
         PostgreSQL requires a cascade even if these tables are empty.
         """
-        raise NotImplementedError('subclasses of BaseDatabaseOperations must provide an sql_flush() method')
+        raise NotImplementedError('subclasses of BaseDatabaseOperations must provide a sql_flush() method')
 
     def execute_sql_flush(self, using, sql_list):
         """Execute a list of SQL statements to flush the database."""
@@ -578,6 +580,13 @@ class BaseDatabaseOperations:
         """
         pass
 
+    def conditional_expression_supported_in_where_clause(self, expression):
+        """
+        Return True, if the conditional expression is supported in the WHERE
+        clause.
+        """
+        return True
+
     def combine_expression(self, connector, sub_expressions):
         """
         Combine a list of subexpressions into a single expression, using
@@ -617,7 +626,7 @@ class BaseDatabaseOperations:
         if self.connection.features.supports_temporal_subtraction:
             lhs_sql, lhs_params = lhs
             rhs_sql, rhs_params = rhs
-            return "(%s - %s)" % (lhs_sql, rhs_sql), lhs_params + rhs_params
+            return '(%s - %s)' % (lhs_sql, rhs_sql), (*lhs_params, *rhs_params)
         raise NotSupportedError("This backend does not support %s subtraction." % internal_type)
 
     def window_frame_start(self, start):

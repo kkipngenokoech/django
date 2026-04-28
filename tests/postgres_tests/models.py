@@ -46,6 +46,7 @@ class IntegerArrayModel(PostgreSQLModel):
 
 class NullableIntegerArrayModel(PostgreSQLModel):
     field = ArrayField(models.IntegerField(), blank=True, null=True)
+    field_nested = ArrayField(ArrayField(models.IntegerField(null=True)), null=True)
 
 
 class CharArrayModel(PostgreSQLModel):
@@ -92,6 +93,14 @@ class TextFieldModel(models.Model):
         return self.field
 
 
+class SmallAutoFieldModel(models.Model):
+    id = models.SmallAutoField(primary_key=True)
+
+
+class BigAutoFieldModel(models.Model):
+    id = models.BigAutoField(primary_key=True)
+
+
 # Scene/Character/Line models are used to test full text search. They're
 # populated with content from Monty Python and the Holy Grail.
 class Scene(models.Model):
@@ -135,7 +144,9 @@ class RangesModel(PostgreSQLModel):
     bigints = BigIntegerRangeField(blank=True, null=True)
     decimals = DecimalRangeField(blank=True, null=True)
     timestamps = DateTimeRangeField(blank=True, null=True)
+    timestamps_inner = DateTimeRangeField(blank=True, null=True)
     dates = DateRangeField(blank=True, null=True)
+    dates_inner = DateRangeField(blank=True, null=True)
 
 
 class RangeLookupsModel(PostgreSQLModel):
@@ -145,6 +156,8 @@ class RangeLookupsModel(PostgreSQLModel):
     float = models.FloatField(blank=True, null=True)
     timestamp = models.DateTimeField(blank=True, null=True)
     date = models.DateField(blank=True, null=True)
+    small_integer = models.SmallIntegerField(blank=True, null=True)
+    decimal_field = models.DecimalField(max_digits=5, decimal_places=2, blank=True, null=True)
 
 
 class JSONModel(PostgreSQLModel):
@@ -181,3 +194,15 @@ class NowTestModel(models.Model):
 
 class UUIDTestModel(models.Model):
     uuid = models.UUIDField(default=None, null=True)
+
+
+class Room(models.Model):
+    number = models.IntegerField(unique=True)
+
+
+class HotelReservation(PostgreSQLModel):
+    room = models.ForeignKey('Room', on_delete=models.CASCADE)
+    datespan = DateRangeField()
+    start = models.DateTimeField()
+    end = models.DateTimeField()
+    cancelled = models.BooleanField(default=False)
