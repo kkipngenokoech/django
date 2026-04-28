@@ -198,6 +198,7 @@ class Field(RegisterLookupMixin):
         return [
             *self._check_field_name(),
             *self._check_choices(),
+            *self._check_max_length_choices(),
             *self._check_db_index(),
             *self._check_null_allowed_for_primary_keys(),
             *self._check_backend_specific_checks(**kwargs),
@@ -304,6 +305,53 @@ class Field(RegisterLookupMixin):
                 id='fields.E005',
             )
         ]
+
+    def _check_max_length_choices(self):
+        if not self.choices or not hasattr(self, 'max_length') or self.max_length is None:
+            return []
+
+        def get_choice_values(choices):
+            """Extract all choice values from choices, handling nested groups."""
+            values = []
+            for choice in choices:
+                if isinstance(choice, (list, tuple)) and len(choice) == 2:
+                    # Check if this is a group (first element is string, second is list/tuple)
+                    if isinstance(choice[1], (list, tuple)):
+                        # This is a group: (group_name, [(value, label), ...])
+                        values.extend(get_choice_values(choice[1]))
+                    else:
+                        # This is a regular choice: (value, label)
+                        values.append(choice[0])
+                else:
+                    # Handle edge case of single values
+                    values.append(choice)
+            return values
+
+        choice_values = get_choice_values(self.choices)
+        max_choice_length = 0
+        longest_choice = None
+
+        for value in choice_values:
+            if value is not None:
+                value_str = str(value)
+                if len(value_str) > max_choice_length:
+                    max_choice_length = len(value_str)
+                    longest_choice = value_str
+
+        if max_choice_length > self.max_length:
+            return [
+                checks.Error(
+                    "'max_length' is too small to fit the longest value "
+                    "in 'choices' (%d characters)."
+                    % max_choice_length,
+                    hint="Increase 'max_length' to at least %d characters or "
+                         "shorten the choice values." % max_choice_length,
+                    obj=self,
+                    id='fields.E009',
+                )
+            ]
+
+        return []
 
     def _check_db_index(self):
         if self.db_index not in (None, True, False):
