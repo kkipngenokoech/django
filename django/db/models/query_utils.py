@@ -8,44 +8,16 @@ circular import difficulties.
 import copy
 import functools
 import inspect
-import warnings
 from collections import namedtuple
 
-from django.core.exceptions import FieldDoesNotExist, FieldError
+from django.core.exceptions import FieldError
 from django.db.models.constants import LOOKUP_SEP
 from django.utils import tree
-from django.utils.deprecation import RemovedInDjango40Warning
 
 # PathInfo is used when converting lookups (fk__somecol). The contents
 # describe the relation in Model terms (model Options and Fields for both
 # sides of the relation. The join_field is the field backing the relation.
 PathInfo = namedtuple('PathInfo', 'from_opts to_opts target_fields join_field m2m direct filtered_relation')
-
-
-class InvalidQueryType(type):
-    @property
-    def _subclasses(self):
-        return (FieldDoesNotExist, FieldError)
-
-    def __warn(self):
-        warnings.warn(
-            'The InvalidQuery exception class is deprecated. Use '
-            'FieldDoesNotExist or FieldError instead.',
-            category=RemovedInDjango40Warning,
-            stacklevel=4,
-        )
-
-    def __instancecheck__(self, instance):
-        self.__warn()
-        return isinstance(instance, self._subclasses) or super().__instancecheck__(instance)
-
-    def __subclasscheck__(self, subclass):
-        self.__warn()
-        return issubclass(subclass, self._subclasses) or super().__subclasscheck__(subclass)
-
-
-class InvalidQuery(Exception, metaclass=InvalidQueryType):
-    pass
 
 
 def subclasses(cls):
@@ -68,21 +40,80 @@ class Q(tree.Node):
     def __init__(self, *args, _connector=None, _negated=False, **kwargs):
         super().__init__(children=[*args, *sorted(kwargs.items())], connector=_connector, negated=_negated)
 
+    def _make_pickleable(self, obj):
+        """
+        Convert non-pickleable objects to pickleable equivalents.
+        """
+        if hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
+            # Handle dict_keys, dict_values, and other iterables
+            try:
+                # Test if it's pickleable by attempting to pickle it
+                import pickle
+                pickle.dumps(obj)
+                return obj
+            except (TypeError, AttributeError):
+                # Convert to list if not pickleable
+                return list(obj)
+        return obj
+
+    def _make_children_pickleable(self, children):
+        """
+        Recursively make all children pickleable.
+        """
+        new_children = []
+        for child in children:
+            if isinstance(child, Q):
+                # Recursively handle Q objects
+                new_child = Q()
+                new_child.connector = child.connector
+                new_child.negated = child.negated
+                new_child.children = self._make_children_pickleable(child.children)
+                new_children.append(new_child)
+            elif isinstance(child, tuple) and len(child) == 2:
+                # Handle (key, value) tuples
+                key, value = child
+                new_children.append((key, self._make_pickleable(value)))
+            else:
+                new_children.append(self._make_pickleable(child))
+        return new_children
+
     def _combine(self, other, conn):
         if not isinstance(other, Q):
             raise TypeError(other)
 
         # If the other Q() is empty, ignore it and just use `self`.
         if not other:
-            return copy.deepcopy(self)
+            # Make a copy with pickleable children
+            obj = type(self)()
+            obj.connector = self.connector
+            obj.negated = self.negated
+            obj.children = self._make_children_pickleable(self.children)
+            return obj
         # Or if this Q is empty, ignore it and just use `other`.
         elif not self:
-            return copy.deepcopy(other)
+            # Make a copy with pickleable children
+            obj = type(other)()
+            obj.connector = other.connector
+            obj.negated = other.negated
+            obj.children = self._make_children_pickleable(other.children)
+            return obj
 
         obj = type(self)()
         obj.connector = conn
-        obj.add(self, conn)
-        obj.add(other, conn)
+        
+        # Create copies with pickleable children
+        self_copy = type(self)()
+        self_copy.connector = self.connector
+        self_copy.negated = self.negated
+        self_copy.children = self._make_children_pickleable(self.children)
+        
+        other_copy = type(other)()
+        other_copy.connector = other.connector
+        other_copy.negated = other.negated
+        other_copy.children = self._make_children_pickleable(other.children)
+        
+        obj.add(self_copy, conn)
+        obj.add(other_copy, conn)
         return obj
 
     def __or__(self, other):
@@ -93,7 +124,12 @@ class Q(tree.Node):
 
     def __invert__(self):
         obj = type(self)()
-        obj.add(self, self.AND)
+        # Create a copy with pickleable children
+        self_copy = type(self)()
+        self_copy.connector = self.connector
+        self_copy.negated = self.negated
+        self_copy.children = self._make_children_pickleable(self.children)
+        obj.add(self_copy, self.AND)
         obj.negate()
         return obj
 

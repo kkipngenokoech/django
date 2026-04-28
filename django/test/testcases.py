@@ -1040,11 +1040,29 @@ class TransactionTestCase(SimpleTestCase):
                          allow_cascade=self.available_apps is not None,
                          inhibit_post_migrate=inhibit_post_migrate)
 
-    def assertQuerysetEqual(self, qs, values, transform=repr, ordered=True, msg=None):
-        items = map(transform, qs)
+    def assertQuerysetEqual(self, qs, values, transform=None, ordered=True, msg=None):
+        values = list(values)
+        # RemovedInDjango41Warning.
+        if transform is None:
+            if (
+                values and isinstance(values[0], str) and
+                qs and not isinstance(qs[0], str)
+            ):
+                # Transform qs using repr() if the first element of values is a
+                # string and the first element of qs is not (which would be the
+                # case if qs is a flattened values_list).
+                warnings.warn(
+                    "In Django 4.1, repr() will not be called automatically "
+                    "on a queryset when compared to string values. Set an "
+                    "explicit 'transform' to silence this warning.",
+                    category=RemovedInDjango41Warning,
+                )
+                transform = repr
+        items = qs
+        if transform is not None:
+            items = map(transform, items)
         if not ordered:
             return self.assertEqual(Counter(items), Counter(values), msg=msg)
-        values = list(values)
         # For example qs.iterator() could be passed as qs, but it does not
         # have 'ordered' attribute.
         if len(values) > 1 and hasattr(qs, 'ordered') and not qs.ordered:
@@ -1163,29 +1181,37 @@ class TestCase(TransactionTestCase):
         super().setUpClass()
         if not cls._databases_support_transactions():
             return
-        cls.cls_atomics = cls._enter_atomics()
-
-        if cls.fixtures:
-            for db_name in cls._databases_names(include_mirrors=False):
-                try:
-                    call_command('loaddata', *cls.fixtures, **{'verbosity': 0, 'database': db_name})
-                except Exception:
-                    cls._rollback_atomics(cls.cls_atomics)
-                    cls._remove_databases_failures()
-                    raise
-        pre_attrs = cls.__dict__.copy()
+        # Disable the durability check to allow testing durable atomic blocks
+        # in a transaction for performance reasons.
+        transaction.Atomic._ensure_durability = False
         try:
-            cls.setUpTestData()
+            cls.cls_atomics = cls._enter_atomics()
+
+            if cls.fixtures:
+                for db_name in cls._databases_names(include_mirrors=False):
+                    try:
+                        call_command('loaddata', *cls.fixtures, **{'verbosity': 0, 'database': db_name})
+                    except Exception:
+                        cls._rollback_atomics(cls.cls_atomics)
+                        cls._remove_databases_failures()
+                        raise
+            pre_attrs = cls.__dict__.copy()
+            try:
+                cls.setUpTestData()
+            except Exception:
+                cls._rollback_atomics(cls.cls_atomics)
+                cls._remove_databases_failures()
+                raise
+            for name, value in cls.__dict__.items():
+                if value is not pre_attrs.get(name):
+                    setattr(cls, name, TestData(name, value))
         except Exception:
-            cls._rollback_atomics(cls.cls_atomics)
-            cls._remove_databases_failures()
+            transaction.Atomic._ensure_durability = True
             raise
-        for name, value in cls.__dict__.items():
-            if value is not pre_attrs.get(name):
-                setattr(cls, name, TestData(name, value))
 
     @classmethod
     def tearDownClass(cls):
+        transaction.Atomic._ensure_durability = True
         if cls._databases_support_transactions():
             cls._rollback_atomics(cls.cls_atomics)
             for conn in connections.all():
@@ -1422,6 +1448,8 @@ class _MediaFilesHandler(FSFilesHandler):
 class LiveServerThread(threading.Thread):
     """Thread for running a live http server while the tests are running."""
 
+    server_class = ThreadedWSGIServer
+
     def __init__(self, host, static_handler, connections_override=None, port=0):
         self.host = host
         self.port = port
@@ -1458,7 +1486,11 @@ class LiveServerThread(threading.Thread):
             connections.close_all()
 
     def _create_server(self):
-        return ThreadedWSGIServer((self.host, self.port), QuietWSGIRequestHandler, allow_reuse_address=False)
+        return self.server_class(
+            (self.host, self.port),
+            QuietWSGIRequestHandler,
+            allow_reuse_address=False,
+        )
 
     def terminate(self):
         if hasattr(self, 'httpd'):
@@ -1531,21 +1563,18 @@ class LiveServerTestCase(TransactionTestCase):
 
     @classmethod
     def _tearDownClassInternal(cls):
-        # There may not be a 'server_thread' attribute if setUpClass() for some
-        # reasons has raised an exception.
-        if hasattr(cls, 'server_thread'):
-            # Terminate the live server's thread
-            cls.server_thread.terminate()
+        # Terminate the live server's thread.
+        cls.server_thread.terminate()
+        # Restore sqlite in-memory database connections' non-shareability.
+        for conn in cls.server_thread.connections_override.values():
+            conn.dec_thread_sharing()
 
-            # Restore sqlite in-memory database connections' non-shareability.
-            for conn in cls.server_thread.connections_override.values():
-                conn.dec_thread_sharing()
+        cls._live_server_modified_settings.disable()
+        super().tearDownClass()
 
     @classmethod
     def tearDownClass(cls):
         cls._tearDownClassInternal()
-        cls._live_server_modified_settings.disable()
-        super().tearDownClass()
 
 
 class SerializeMixin:
