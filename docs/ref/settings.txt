@@ -90,7 +90,7 @@ list, the :meth:`django.http.HttpRequest.get_host()` method will raise
 :exc:`~django.core.exceptions.SuspiciousOperation`.
 
 When :setting:`DEBUG` is ``True`` and ``ALLOWED_HOSTS`` is empty, the host
-is validated against ``['localhost', '127.0.0.1', '[::1]']``.
+is validated against ``['.localhost', '127.0.0.1', '[::1]']``.
 
 ``ALLOWED_HOSTS`` is also :ref:`checked when running tests
 <topics-testing-advanced-multiple-hosts>`.
@@ -98,6 +98,11 @@ is validated against ``['localhost', '127.0.0.1', '[::1]']``.
 This validation only applies via :meth:`~django.http.HttpRequest.get_host()`;
 if your code accesses the ``Host`` header directly from ``request.META`` you
 are bypassing this security protection.
+
+.. versionchanged:: 3.1
+
+    If ``ALLOWED_HOSTS`` is empty and ``DEBUG=True``, subdomains of localhost
+    were allowed.
 
 .. setting:: APPEND_SLASH
 
@@ -632,23 +637,52 @@ default port. Not used with SQLite.
 
 Default: ``None``
 
-A string representing the time zone for datetimes stored in this database
-(assuming that it doesn't support time zones) or ``None``. This inner option of
-the :setting:`DATABASES` setting accepts the same values as the general
-:setting:`TIME_ZONE` setting.
+A string representing the time zone for this database connection or ``None``.
+This inner option of the :setting:`DATABASES` setting accepts the same values
+as the general :setting:`TIME_ZONE` setting.
 
-This allows interacting with third-party databases that store datetimes in
-local time rather than UTC. To avoid issues around DST changes, you shouldn't
-set this option for databases managed by Django.
-
-When :setting:`USE_TZ` is ``True`` and the database doesn't support time zones
-(e.g. SQLite, MySQL, Oracle), Django reads and writes datetimes in local time
-according to this option if it is set and in UTC if it isn't.
-
-When :setting:`USE_TZ` is ``True`` and the database supports time zones (e.g.
-PostgreSQL), it is an error to set this option.
-
+When :setting:`USE_TZ` is ``True`` and this option is set, reading datetimes
+from the database returns aware datetimes in this time zone instead of UTC.
 When :setting:`USE_TZ` is ``False``, it is an error to set this option.
+
+* If the database backend doesn't support time zones (e.g. SQLite, MySQL,
+  Oracle), Django reads and writes datetimes in local time according to this
+  option if it is set and in UTC if it isn't.
+
+  Changing the connection time zone changes how datetimes are read from and
+  written to the database.
+
+  * If Django manages the database and you don't have a strong reason to do
+    otherwise, you should leave this option unset. It's best to store datetimes
+    in UTC because it avoids ambiguous or nonexistent datetimes during daylight
+    saving time changes. Also, receiving datetimes in UTC keeps datetime
+    arithmetic simple — there's no need for the ``normalize()`` method provided
+    by pytz.
+
+  * If you're connecting to a third-party database that stores datetimes in a
+    local time rather than UTC, then you must set this option to the
+    appropriate time zone. Likewise, if Django manages the database but
+    third-party systems connect to the same database and expect to find
+    datetimes in local time, then you must set this option.
+
+* If the database backend supports time zones (e.g. PostgreSQL), the
+  ``TIME_ZONE`` option is very rarely needed. It can be changed at any time;
+  the database takes care of converting datetimes to the desired time zone.
+
+  Setting the time zone of the database connection may be useful for running
+  raw SQL queries involving date/time functions provided by the database, such
+  as ``date_trunc``, because their results depend on the time zone.
+
+  However, this has a downside: receiving all datetimes in local time makes
+  datetime arithmetic more tricky — you must call the ``normalize()`` method
+  provided by pytz after each operation.
+
+  Consider converting to local time explicitly with ``AT TIME ZONE`` in raw SQL
+  queries instead of setting the ``TIME_ZONE`` option.
+
+.. versionchanged:: 3.1
+
+  Using this option when the database backend supports time zones was allowed.
 
 .. setting:: DATABASE-DISABLE_SERVER_SIDE_CURSORS
 
@@ -2759,7 +2793,7 @@ preference to the ``Host`` header. This should only be enabled if a proxy
 which sets this header is in use.
 
 This setting takes priority over :setting:`USE_X_FORWARDED_PORT`. Per
-:rfc:`7239#page-7`, the ``X-Forwarded-Host`` header can include the port
+:rfc:`7239#section-5.3`, the ``X-Forwarded-Host`` header can include the port
 number, in which case you shouldn't use :setting:`USE_X_FORWARDED_PORT`.
 
 .. setting:: USE_X_FORWARDED_PORT
@@ -3108,8 +3142,8 @@ Whether to use ``HttpOnly`` flag on the session cookie. If this is set to
 cookie.
 
 HttpOnly_ is a flag included in a Set-Cookie HTTP response header. It's part of
-the :rfc:`6265` standard for cookies and can be a useful way to mitigate the
-risk of a client-side script accessing the protected cookie data.
+the :rfc:`6265#section-4.1.2.6` standard for cookies and can be a useful way to
+mitigate the risk of a client-side script accessing the protected cookie data.
 
 This makes it less trivial for an attacker to escalate a cross-site scripting
 vulnerability into full hijacking of a user's session. There aren't many good

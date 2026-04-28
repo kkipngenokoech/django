@@ -90,6 +90,13 @@ Minor features
   :lookup:`rangefield.upper_inc`, and :lookup:`rangefield.upper_inf` allows
   querying :class:`~django.contrib.postgres.fields.RangeField` by a bound type.
 
+* :lookup:`rangefield.contained_by` now supports
+  :class:`~django.db.models.SmallAutoField`,
+  :class:`~django.db.models.AutoField`,
+  :class:`~django.db.models.BigAutoField`,
+  :class:`~django.db.models.SmallIntegerField`, and
+  :class:`~django.db.models.DecimalField`.
+
 :mod:`django.contrib.redirects`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -209,6 +216,10 @@ Models
 
 * :attr:`.CheckConstraint.check` now supports boolean expressions.
 
+* The :meth:`.RelatedManager.add`, :meth:`~.RelatedManager.create`, and
+  :meth:`~.RelatedManager.set` methods now accept callables as values in the
+  ``through_defaults`` argument.
+
 Pagination
 ~~~~~~~~~~
 
@@ -218,7 +229,8 @@ Pagination
 Requests and Responses
 ~~~~~~~~~~~~~~~~~~~~~~
 
-* ...
+* If :setting:`ALLOWED_HOSTS` is empty and ``DEBUG=True``, subdomains of
+  localhost are now allowed in the ``Host`` header, e.g. ``static.localhost``.
 
 Serialization
 ~~~~~~~~~~~~~
@@ -256,6 +268,14 @@ Utilities
 * :func:`~django.utils.encoding.filepath_to_uri` now supports
   :class:`pathlib.Path`.
 
+* :func:`~django.utils.dateparse.parse_duration` now supports comma separators
+  for decimal fractions in the ISO 8601 format.
+
+* :func:`~django.utils.dateparse.parse_datetime`,
+  :func:`~django.utils.dateparse.parse_duration`, and
+  :func:`~django.utils.dateparse.parse_time` now support comma separators for
+  milliseconds.
+
 Validators
 ~~~~~~~~~~
 
@@ -271,6 +291,9 @@ Miscellaneous
   :class:`pathlib.Path` instead of :mod:`os.path` for building filesystem
   paths.
 
+* The :setting:`TIME_ZONE <DATABASE-TIME_ZONE>` setting is now allowed on
+  databases that support time zones.
+
 .. _backwards-incompatible-3.1:
 
 Backwards incompatible changes in 3.1
@@ -284,6 +307,11 @@ backends.
 
 * ``DatabaseOperations.fetch_returned_insert_columns()`` now requires an
   additional ``returning_params`` argument.
+
+* ``connection.timezone`` property is now ``'UTC'`` by default, or the
+  :setting:`TIME_ZONE <DATABASE-TIME_ZONE>` when :setting:`USE_TZ` is ``True``
+  on databases that support time zones. Previously, it was ``None`` on
+  databases that support time zones.
 
 Dropped support for MariaDB 10.1
 --------------------------------
