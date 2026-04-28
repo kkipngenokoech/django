@@ -23,9 +23,8 @@ __ `executing custom SQL directly`_
       :doc:`custom query expressions </ref/models/expressions/>`.
 
     Before using raw SQL, explore :doc:`the ORM </topics/db/index>`. Ask on
-    |django-users| or the `#django IRC channel
-    <https://webchat.freenode.net/#django>`_ to see if the ORM supports your
-    use case.
+    one of :doc:`the support channels </faq/help>` to see if the ORM supports
+    your use case.
 
 .. warning::
 
@@ -43,7 +42,7 @@ Performing raw queries
 The ``raw()`` manager method can be used to perform raw SQL queries that
 return model instances:
 
-.. method:: Manager.raw(raw_query, params=None, translations=None)
+.. method:: Manager.raw(raw_query, params=(), translations=None)
 
 This method takes a raw SQL query, executes it, and returns a
 ``django.db.models.query.RawQuerySet`` instance. This ``RawQuerySet`` instance
@@ -166,7 +165,7 @@ fields that are omitted from the query will be loaded on demand. For example::
 
 From outward appearances, this looks like the query has retrieved both
 the first name and last name. However, this example actually issued 3
-queries. Only the first names were retrieved by the raw() query -- the
+queries. Only the first names were retrieved by the ``raw()`` query -- the
 last names were both retrieved on demand when they were printed.
 
 There is only one field that you can't leave out - the primary key
@@ -316,15 +315,15 @@ immutable and accessible by field names or indices, which might be useful::
 
 Here is an example of the difference between the three::
 
-    >>> cursor.execute("SELECT id, parent_id FROM test LIMIT 2");
+    >>> cursor.execute("SELECT id, parent_id FROM test LIMIT 2")
     >>> cursor.fetchall()
     ((54360982, None), (54360880, None))
 
-    >>> cursor.execute("SELECT id, parent_id FROM test LIMIT 2");
+    >>> cursor.execute("SELECT id, parent_id FROM test LIMIT 2")
     >>> dictfetchall(cursor)
     [{'parent_id': None, 'id': 54360982}, {'parent_id': None, 'id': 54360880}]
 
-    >>> cursor.execute("SELECT id, parent_id FROM test LIMIT 2");
+    >>> cursor.execute("SELECT id, parent_id FROM test LIMIT 2")
     >>> results = namedtuplefetchall(cursor)
     >>> results
     [Result(id=54360982, parent_id=None), Result(id=54360880, parent_id=None)]
