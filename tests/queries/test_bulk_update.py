@@ -3,17 +3,18 @@ import datetime
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import F
 from django.db.models.functions import Lower
-from django.test import TestCase
+from django.test import TestCase, skipUnlessDBFeature
 
 from .models import (
-    Article, CustomDbColumn, CustomPk, Detail, Individual, Member, Note,
-    Number, Order, Paragraph, SpecialCategory, Tag, Valid,
+    Article, CustomDbColumn, CustomPk, Detail, Individual, JSONFieldNullable,
+    Member, Note, Number, Order, Paragraph, SpecialCategory, Tag, Valid,
 )
 
 
 class BulkUpdateNoteTests(TestCase):
-    def setUp(self):
-        self.notes = [
+    @classmethod
+    def setUpTestData(cls):
+        cls.notes = [
             Note.objects.create(note=str(i), misc=str(i))
             for i in range(10)
         ]
@@ -124,7 +125,8 @@ class BulkUpdateTests(TestCase):
 
     def test_empty_objects(self):
         with self.assertNumQueries(0):
-            Note.objects.bulk_update([], ['note'])
+            rows_updated = Note.objects.bulk_update([], ['note'])
+        self.assertEqual(rows_updated, 0)
 
     def test_large_batch(self):
         Note.objects.bulk_create([
@@ -132,7 +134,16 @@ class BulkUpdateTests(TestCase):
             for i in range(0, 2000)
         ])
         notes = list(Note.objects.all())
-        Note.objects.bulk_update(notes, ['note'])
+        rows_updated = Note.objects.bulk_update(notes, ['note'])
+        self.assertEqual(rows_updated, 2000)
+
+    def test_updated_rows_when_passing_duplicates(self):
+        note = Note.objects.create(note='test-note', misc='test')
+        rows_updated = Note.objects.bulk_update([note, note], ['note'])
+        self.assertEqual(rows_updated, 1)
+        # Duplicates in different batches.
+        rows_updated = Note.objects.bulk_update([note, note], ['note'], batch_size=1)
+        self.assertEqual(rows_updated, 2)
 
     def test_only_concrete_fields_allowed(self):
         obj = Valid.objects.create(valid='test')
@@ -228,3 +239,14 @@ class BulkUpdateTests(TestCase):
             article.created = point_in_time
         Article.objects.bulk_update(articles, ['created'])
         self.assertCountEqual(Article.objects.filter(created=point_in_time), articles)
+
+    @skipUnlessDBFeature('supports_json_field')
+    def test_json_field(self):
+        JSONFieldNullable.objects.bulk_create([
+            JSONFieldNullable(json_field={'a': i}) for i in range(10)
+        ])
+        objs = JSONFieldNullable.objects.all()
+        for obj in objs:
+            obj.json_field = {'c': obj.json_field['a'] + 1}
+        JSONFieldNullable.objects.bulk_update(objs, ['json_field'])
+        self.assertCountEqual(JSONFieldNullable.objects.filter(json_field__has_key='c'), objs)

@@ -13,7 +13,9 @@ from django.http import (
     HttpRequest, HttpResponsePermanentRedirect, HttpResponseRedirect,
 )
 from django.shortcuts import redirect
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import (
+    RequestFactory, SimpleTestCase, TestCase, override_settings,
+)
 from django.test.utils import override_script_prefix
 from django.urls import (
     NoReverseMatch, Resolver404, ResolverMatch, URLPattern, URLResolver,
@@ -180,6 +182,8 @@ test_data = (
     ('named_optional', '/optional/1/', [], {'arg1': 1}),
     ('named_optional', '/optional/1/2/', [1, 2], {}),
     ('named_optional', '/optional/1/2/', [], {'arg1': 1, 'arg2': 2}),
+    ('named_optional_terminated', '/optional/1/', [1], {}),
+    ('named_optional_terminated', '/optional/1/', [], {'arg1': 1}),
     ('named_optional_terminated', '/optional/1/2/', [1, 2], {}),
     ('named_optional_terminated', '/optional/1/2/', [], {'arg1': 1, 'arg2': 2}),
     ('hardcoded', '/hardcoded/', [], {}),
@@ -267,8 +271,9 @@ class NoURLPatternsTests(SimpleTestCase):
         with self.assertRaisesMessage(
             ImproperlyConfigured,
             "The included URLconf 'urlpatterns_reverse.no_urls' does not "
-            "appear to have any patterns in it. If you see valid patterns in "
-            "the file then the issue is probably caused by a circular import."
+            "appear to have any patterns in it. If you see the 'urlpatterns' "
+            "variable with valid patterns in the file then the issue is "
+            "probably caused by a circular import."
         ):
             getattr(resolver, 'url_patterns')
 
@@ -525,6 +530,14 @@ class ReverseLazyTest(TestCase):
         self.assertEqual(
             'Some URL: %s' % reverse_lazy('some-login-page'),
             'Some URL: /login/'
+        )
+
+    def test_build_absolute_uri(self):
+        factory = RequestFactory()
+        request = factory.get('/')
+        self.assertEqual(
+            request.build_absolute_uri(reverse_lazy('some-login-page')),
+            'http://testserver/login/',
         )
 
 
@@ -997,8 +1010,11 @@ class RequestURLconfTests(SimpleTestCase):
         Test reversing an URL from the *default* URLconf from inside
         a response middleware.
         """
-        message = "Reverse for 'outer' not found."
-        with self.assertRaisesMessage(NoReverseMatch, message):
+        msg = (
+            "Reverse for 'outer' not found. 'outer' is not a valid view "
+            "function or pattern name."
+        )
+        with self.assertRaisesMessage(NoReverseMatch, msg):
             self.client.get('/second_test/')
 
     @override_settings(
@@ -1050,16 +1066,14 @@ class ErrorHandlerResolutionTests(SimpleTestCase):
         self.callable_resolver = URLResolver(RegexPattern(r'^$'), urlconf_callables)
 
     def test_named_handlers(self):
-        handler = (empty_view, {})
         for code in [400, 404, 500]:
             with self.subTest(code=code):
-                self.assertEqual(self.resolver.resolve_error_handler(code), handler)
+                self.assertEqual(self.resolver.resolve_error_handler(code), empty_view)
 
     def test_callable_handlers(self):
-        handler = (empty_view, {})
         for code in [400, 404, 500]:
             with self.subTest(code=code):
-                self.assertEqual(self.callable_resolver.resolve_error_handler(code), handler)
+                self.assertEqual(self.callable_resolver.resolve_error_handler(code), empty_view)
 
 
 @override_settings(ROOT_URLCONF='urlpatterns_reverse.urls_without_handlers')
@@ -1070,7 +1084,8 @@ class DefaultErrorHandlerTests(SimpleTestCase):
         response = self.client.get('/test/')
         self.assertEqual(response.status_code, 404)
 
-        with self.assertRaisesMessage(ValueError, "I don't think I'm getting good"):
+        msg = "I don't think I'm getting good value for this view"
+        with self.assertRaisesMessage(ValueError, msg):
             self.client.get('/bad_view/')
 
 
@@ -1081,8 +1096,9 @@ class NoRootUrlConfTests(SimpleTestCase):
     def test_no_handler_exception(self):
         msg = (
             "The included URLconf 'None' does not appear to have any patterns "
-            "in it. If you see valid patterns in the file then the issue is "
-            "probably caused by a circular import."
+            "in it. If you see the 'urlpatterns' variable with valid patterns "
+            "in the file then the issue is probably caused by a circular "
+            "import."
         )
         with self.assertRaisesMessage(ImproperlyConfigured, msg):
             self.client.get('/test/me/')
@@ -1127,9 +1143,29 @@ class ResolverMatchTests(SimpleTestCase):
         self.assertEqual(
             repr(resolve('/no_kwargs/42/37/')),
             "ResolverMatch(func=urlpatterns_reverse.views.empty_view, "
-            "args=('42', '37'), kwargs={}, url_name=no-kwargs, app_names=[], "
-            "namespaces=[], route=^no_kwargs/([0-9]+)/([0-9]+)/$)",
+            "args=('42', '37'), kwargs={}, url_name='no-kwargs', app_names=[], "
+            "namespaces=[], route='^no_kwargs/([0-9]+)/([0-9]+)/$')",
         )
+
+    @override_settings(ROOT_URLCONF='urlpatterns_reverse.urls')
+    def test_repr_functools_partial(self):
+        tests = [
+            ('partial', 'template.html'),
+            ('partial_nested', 'nested_partial.html'),
+            ('partial_wrapped', 'template.html'),
+        ]
+        for name, template_name in tests:
+            with self.subTest(name=name):
+                func = (
+                    f"functools.partial({views.empty_view!r}, "
+                    f"template_name='{template_name}')"
+                )
+                self.assertEqual(
+                    repr(resolve(f'/{name}/')),
+                    f"ResolverMatch(func={func}, args=(), kwargs={{}}, "
+                    f"url_name='{name}', app_names=[], namespaces=[], "
+                    f"route='{name}/')",
+                )
 
 
 @override_settings(ROOT_URLCONF='urlpatterns_reverse.erroneous_urls')

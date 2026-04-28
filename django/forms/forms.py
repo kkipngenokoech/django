@@ -5,12 +5,10 @@ Form classes
 import copy
 
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
-# BoundField is imported for backwards compatibility in Django 1.9
-from django.forms.boundfield import BoundField  # NOQA
 from django.forms.fields import Field, FileField
-# pretty_name is imported for backwards compatibility in Django 1.9
-from django.forms.utils import ErrorDict, ErrorList, pretty_name  # NOQA
+from django.forms.utils import ErrorDict, ErrorList
 from django.forms.widgets import Media, MediaDefiningClass
+from django.utils.datastructures import MultiValueDict
 from django.utils.functional import cached_property
 from django.utils.html import conditional_escape, html_safe
 from django.utils.safestring import mark_safe
@@ -24,15 +22,13 @@ __all__ = ('BaseForm', 'Form')
 class DeclarativeFieldsMetaclass(MediaDefiningClass):
     """Collect Fields declared on the base classes."""
     def __new__(mcs, name, bases, attrs):
-        # Collect fields from current class.
-        current_fields = []
-        for key, value in list(attrs.items()):
-            if isinstance(value, Field):
-                current_fields.append((key, value))
-                attrs.pop(key)
-        attrs['declared_fields'] = dict(current_fields)
+        # Collect fields from current class and remove them from attrs.
+        attrs['declared_fields'] = {
+            key: attrs.pop(key) for key, value in list(attrs.items())
+            if isinstance(value, Field)
+        }
 
-        new_class = super(DeclarativeFieldsMetaclass, mcs).__new__(mcs, name, bases, attrs)
+        new_class = super().__new__(mcs, name, bases, attrs)
 
         # Walk through the MRO.
         declared_fields = {}
@@ -69,8 +65,8 @@ class BaseForm:
                  initial=None, error_class=ErrorList, label_suffix=None,
                  empty_permitted=False, field_order=None, use_required_attribute=None, renderer=None):
         self.is_bound = data is not None or files is not None
-        self.data = {} if data is None else data
-        self.files = {} if files is None else files
+        self.data = MultiValueDict() if data is None else data
+        self.files = MultiValueDict() if files is None else files
         self.auto_id = auto_id
         if prefix is not None:
             self.prefix = prefix
@@ -154,6 +150,10 @@ class BaseForm:
     def __getitem__(self, name):
         """Return a BoundField with the given name."""
         try:
+            return self._bound_fields_cache[name]
+        except KeyError:
+            pass
+        try:
             field = self.fields[name]
         except KeyError:
             raise KeyError(
@@ -163,9 +163,9 @@ class BaseForm:
                     ', '.join(sorted(self.fields)),
                 )
             )
-        if name not in self._bound_fields_cache:
-            self._bound_fields_cache[name] = field.get_bound_field(self, name)
-        return self._bound_fields_cache[name]
+        bound_field = field.get_bound_field(self, name)
+        self._bound_fields_cache[name] = bound_field
+        return bound_field
 
     @property
     def errors(self):
@@ -188,12 +188,22 @@ class BaseForm:
         return '%s-%s' % (self.prefix, field_name) if self.prefix else field_name
 
     def add_initial_prefix(self, field_name):
-        """Add a 'initial' prefix for checking dynamic initial values."""
+        """Add an 'initial' prefix for checking dynamic initial values."""
         return 'initial-%s' % self.add_prefix(field_name)
+
+    def _widget_data_value(self, widget, html_name):
+        # value_from_datadict() gets the data from the data dictionaries.
+        # Each widget type knows how to retrieve its own data, because some
+        # widgets split data over several HTML fields.
+        return widget.value_from_datadict(self.data, self.files, html_name)
+
+    def _field_data_value(self, field, html_name):
+        return self._widget_data_value(field.widget, html_name)
 
     def _html_output(self, normal_row, error_row, row_ender, help_text_html, errors_on_separate_row):
         "Output HTML. Used by as_table(), as_ul(), as_p()."
-        top_errors = self.non_field_errors()  # Errors that should be displayed above all fields.
+        # Errors that should be displayed above all fields.
+        top_errors = self.non_field_errors().copy()
         output, hidden_fields = [], []
 
         for name, field in self.fields.items():
@@ -378,13 +388,10 @@ class BaseForm:
 
     def _clean_fields(self):
         for name, field in self.fields.items():
-            # value_from_datadict() gets the data from the data dictionaries.
-            # Each widget type knows how to retrieve its own data, because some
-            # widgets split data over several HTML fields.
             if field.disabled:
                 value = self.get_initial_for_field(field, name)
             else:
-                value = field.widget.value_from_datadict(self.data, self.files, self.add_prefix(name))
+                value = self._field_data_value(field, self.add_prefix(name))
             try:
                 if isinstance(field, FileField):
                     initial = self.get_initial_for_field(field, name)
@@ -431,8 +438,7 @@ class BaseForm:
     def changed_data(self):
         data = []
         for name, field in self.fields.items():
-            prefixed_name = self.add_prefix(name)
-            data_value = field.widget.value_from_datadict(self.data, self.files, prefixed_name)
+            data_value = self._field_data_value(field, self.add_prefix(name))
             if not field.show_hidden_initial:
                 # Use the BoundField's initial as this is the value passed to
                 # the widget.
@@ -441,8 +447,9 @@ class BaseForm:
                 initial_prefixed_name = self.add_initial_prefix(name)
                 hidden_widget = field.hidden_widget()
                 try:
-                    initial_value = field.to_python(hidden_widget.value_from_datadict(
-                        self.data, self.files, initial_prefixed_name))
+                    initial_value = field.to_python(
+                        self._widget_data_value(hidden_widget, initial_prefixed_name)
+                    )
                 except ValidationError:
                     # Always assume data has changed if validation fails.
                     data.append(name)
