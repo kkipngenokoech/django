@@ -36,45 +36,68 @@ class MultiDatabaseTests(TestCase):
         cls.test_book_ids = {}
         for db in connections:
             Router.target_db = db
+            # Ensure connection is fresh to avoid SQLite locking issues
+            connections[db].close()
             cls.superusers[db] = User.objects.create_superuser(
-                username='admin', password='something', email='test@test.org',
+                username='admin', password='test_pass', email='test@test.org',
             )
             b = Book(name='Test Book')
             b.save(using=db)
             cls.test_book_ids[db] = b.id
+            # Close connection after operations to prevent SQLite file locks
+            connections[db].close()
+
+    @classmethod
+    def tearDownClass(cls):
+        # Ensure all connections are properly closed to prevent SQLite locking
+        for db in connections:
+            connections[db].close()
+        super().tearDownClass()
 
     @mock.patch('django.contrib.admin.options.transaction')
     def test_add_view(self, mock):
         for db in connections:
             with self.subTest(db=db):
                 Router.target_db = db
+                # Ensure fresh connection to avoid SQLite locking
+                connections[db].close()
                 self.client.force_login(self.superusers[db])
                 self.client.post(
                     reverse('test_adminsite:admin_views_book_add'),
                     {'name': 'Foobar: 5th edition'},
                 )
                 mock.atomic.assert_called_with(using=db)
+                # Close connection after test to prevent locks
+                connections[db].close()
 
     @mock.patch('django.contrib.admin.options.transaction')
     def test_change_view(self, mock):
         for db in connections:
             with self.subTest(db=db):
                 Router.target_db = db
+                # Ensure fresh connection to avoid SQLite locking
+                connections[db].close()
                 self.client.force_login(self.superusers[db])
                 self.client.post(
                     reverse('test_adminsite:admin_views_book_change', args=[self.test_book_ids[db]]),
                     {'name': 'Test Book 2: Test more'},
                 )
                 mock.atomic.assert_called_with(using=db)
+                # Close connection after test to prevent locks
+                connections[db].close()
 
     @mock.patch('django.contrib.admin.options.transaction')
     def test_delete_view(self, mock):
         for db in connections:
             with self.subTest(db=db):
                 Router.target_db = db
+                # Ensure fresh connection to avoid SQLite locking
+                connections[db].close()
                 self.client.force_login(self.superusers[db])
                 self.client.post(
                     reverse('test_adminsite:admin_views_book_delete', args=[self.test_book_ids[db]]),
                     {'post': 'yes'},
                 )
                 mock.atomic.assert_called_with(using=db)
+                # Close connection after test to prevent locks
+                connections[db].close()
