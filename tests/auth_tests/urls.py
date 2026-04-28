@@ -3,6 +3,7 @@ from django.contrib.auth import views
 from django.contrib.auth.decorators import login_required, permission_required
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.urls import urlpatterns as auth_urlpatterns
+from django.contrib.auth.views import LoginView
 from django.contrib.messages.api import info
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import render
@@ -78,7 +79,10 @@ def login_and_permission_required_exception(request):
     pass
 
 
-uid_token = r'(?P<uidb64>[0-9A-Za-z_\-]+)/(?P<token>[0-9A-Za-z]{1,13}-[0-9A-Za-z]{1,20})'
+class CustomDefaultRedirectURLLoginView(LoginView):
+    def get_default_redirect_url(self):
+        return '/custom/'
+
 
 # special urls for auth test cases
 urlpatterns = auth_urlpatterns + [
@@ -91,7 +95,10 @@ urlpatterns = auth_urlpatterns + [
     path('password_reset_from_email/', views.PasswordResetView.as_view(from_email='staffmember@example.com')),
     path(
         'password_reset_extra_email_context/',
-        views.PasswordResetView.as_view(extra_email_context={'greeting': 'Hello!'})),
+        views.PasswordResetView.as_view(
+            extra_email_context={'greeting': 'Hello!', 'domain': 'custom.example.com'},
+        ),
+    ),
     path(
         'password_reset/custom_redirect/',
         views.PasswordResetView.as_view(success_url='/custom/')),
@@ -103,25 +110,30 @@ urlpatterns = auth_urlpatterns + [
         views.PasswordResetView.as_view(
             html_email_template_name='registration/html_password_reset_email.html'
         )),
-    re_path(
-        '^reset/custom/{}/$'.format(uid_token),
+    path(
+        'reset/custom/<uidb64>/<token>/',
         views.PasswordResetConfirmView.as_view(success_url='/custom/'),
     ),
-    re_path(
-        '^reset/custom/named/{}/$'.format(uid_token),
+    path(
+        'reset/custom/named/<uidb64>/<token>/',
         views.PasswordResetConfirmView.as_view(success_url=reverse_lazy('password_reset')),
     ),
-    re_path(
-        '^reset/post_reset_login/{}/$'.format(uid_token),
+    path(
+        'reset/custom/token/<uidb64>/<token>/',
+        views.PasswordResetConfirmView.as_view(reset_url_token='set-passwordcustom'),
+    ),
+    path(
+        'reset/post_reset_login/<uidb64>/<token>/',
         views.PasswordResetConfirmView.as_view(post_reset_login=True),
     ),
-    re_path(
-        '^reset/post_reset_login_custom_backend/{}/$'.format(uid_token),
+    path(
+        'reset/post_reset_login_custom_backend/<uidb64>/<token>/',
         views.PasswordResetConfirmView.as_view(
             post_reset_login=True,
             post_reset_login_backend='django.contrib.auth.backends.AllowAllUsersModelBackend',
         ),
     ),
+    path('reset/missing_parameters/', views.PasswordResetConfirmView.as_view()),
     path('password_change/custom/',
          views.PasswordChangeView.as_view(success_url='/custom/')),
     path('password_change/custom/named/',
@@ -144,6 +156,9 @@ urlpatterns = auth_urlpatterns + [
          views.LoginView.as_view(redirect_authenticated_user=True)),
     path('login/allowed_hosts/',
          views.LoginView.as_view(success_url_allowed_hosts={'otherserver'})),
+    path('login/get_default_redirect_url/', CustomDefaultRedirectURLLoginView.as_view()),
+    path('login/next_page/', views.LoginView.as_view(next_page='/somewhere/')),
+    path('login/next_page/named/', views.LoginView.as_view(next_page='password_reset')),
 
     path('permission_required_redirect/', permission_required_redirect),
     path('permission_required_exception/', permission_required_exception),

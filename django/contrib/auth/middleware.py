@@ -1,4 +1,3 @@
-from django.conf import settings
 from django.contrib import auth
 from django.contrib.auth import load_backend
 from django.contrib.auth.backends import RemoteUserBackend
@@ -15,18 +14,20 @@ def get_user(request):
 
 class AuthenticationMiddleware(MiddlewareMixin):
     def process_request(self, request):
-        assert hasattr(request, 'session'), (
-            "The Django authentication middleware requires session middleware "
-            "to be installed. Edit your MIDDLEWARE%s setting to insert "
-            "'django.contrib.sessions.middleware.SessionMiddleware' before "
-            "'django.contrib.auth.middleware.AuthenticationMiddleware'."
-        ) % ("_CLASSES" if settings.MIDDLEWARE is None else "")
+        if not hasattr(request, 'session'):
+            raise ImproperlyConfigured(
+                "The Django authentication middleware requires session "
+                "middleware to be installed. Edit your MIDDLEWARE setting to "
+                "insert "
+                "'django.contrib.sessions.middleware.SessionMiddleware' before "
+                "'django.contrib.auth.middleware.AuthenticationMiddleware'."
+            )
         request.user = SimpleLazyObject(lambda: get_user(request))
 
 
 class RemoteUserMiddleware(MiddlewareMixin):
     """
-    Middleware for utilizing Web-server-provided authentication.
+    Middleware for utilizing web-server-provided authentication.
 
     If request.user is not authenticated, then this middleware attempts to
     authenticate the username passed in the ``REMOTE_USER`` request header.
@@ -112,7 +113,7 @@ class RemoteUserMiddleware(MiddlewareMixin):
 
 class PersistentRemoteUserMiddleware(RemoteUserMiddleware):
     """
-    Middleware for Web-server provided authentication on logon pages.
+    Middleware for web-server provided authentication on logon pages.
 
     Like RemoteUserMiddleware but keeps the user authenticated even if
     the header (``REMOTE_USER``) is not found in the request. Useful

@@ -1,12 +1,10 @@
 from django.db import models
-from django.db.models.fields.related import (
-    ForeignObjectRel, ReverseManyToOneDescriptor,
-)
+from django.db.models.fields.related import ReverseManyToOneDescriptor
 from django.db.models.lookups import StartsWith
 from django.db.models.query_utils import PathInfo
 
 
-class CustomForeignObjectRel(ForeignObjectRel):
+class CustomForeignObjectRel(models.ForeignObjectRel):
     """
     Define some extra Field methods so this Rel acts more like a Field, which
     lets us use ReverseManyToOneDescriptor in both directions.
@@ -45,7 +43,7 @@ class StartsWithRelation(models.ForeignObject):
         """
         return self.remote_field
 
-    def get_extra_restriction(self, where_class, alias, related_alias):
+    def get_extra_restriction(self, alias, related_alias):
         to_field = self.remote_field.model._meta.get_field(self.to_fields[0])
         from_field = self.model._meta.get_field(self.from_fields[0])
         return StartsWith(to_field.get_col(alias), from_field.get_col(related_alias))
@@ -89,7 +87,7 @@ class BrokenContainsRelation(StartsWithRelation):
     This model is designed to yield no join conditions and
     raise an exception in ``Join.as_sql()``.
     """
-    def get_extra_restriction(self, where_class, alias, related_alias):
+    def get_extra_restriction(self, alias, related_alias):
         return None
 
 
