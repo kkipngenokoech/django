@@ -322,6 +322,8 @@ Templates
   and :ttag:`blocktrans` template tags aliases continue to work, and will be
   retained for the foreseeable future.
 
+* The :ttag:`include` template tag now accepts iterables of template names.
+
 Tests
 ~~~~~
 
@@ -522,6 +524,9 @@ Miscellaneous
   If you are writing your own AJAX detection method, ``request.is_ajax()`` can
   be reproduced exactly as
   ``request.headers.get('x-requested-with') == 'XMLHttpRequest'``.
+
+* Passing ``None`` as the first argument to
+  ``django.utils.deprecation.MiddlewareMixin.__init__()`` is deprecated.
 
 * The encoding format of cookies values used by
   :class:`~django.contrib.messages.storage.cookie.CookieStorage` is different
