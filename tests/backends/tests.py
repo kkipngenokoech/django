@@ -79,6 +79,10 @@ class LastExecutedQueryTest(TestCase):
         for qs in (
             Article.objects.filter(pk=1),
             Article.objects.filter(pk__in=(1, 2), reporter__pk=3),
+            Article.objects.filter(
+                pk=1,
+                reporter__pk=9,
+            ).exclude(reporter__pk__in=[2, 1]),
         ):
             sql, params = qs.query.sql_with_params()
             with qs.query.get_compiler(DEFAULT_DB_ALIAS).execute_sql(CURSOR) as cursor:
@@ -157,16 +161,8 @@ class LongNameTest(TransactionTestCase):
             VLM._meta.db_table,
             VLM_m2m._meta.db_table,
         ]
-        sequences = [
-            {
-                'column': VLM._meta.pk.column,
-                'table': VLM._meta.db_table
-            },
-        ]
-        sql_list = connection.ops.sql_flush(no_style(), tables, sequences)
-        with connection.cursor() as cursor:
-            for statement in sql_list:
-                cursor.execute(statement)
+        sql_list = connection.ops.sql_flush(no_style(), tables, reset_sequences=True)
+        connection.ops.execute_sql_flush(sql_list)
 
 
 class SequenceResetTest(TestCase):
@@ -321,7 +317,7 @@ class BackendTestCase(TransactionTestCase):
         self.assertEqual(Square.objects.count(), 9)
 
     def test_unicode_fetches(self):
-        # fetchone, fetchmany, fetchall return strings as unicode objects #6254
+        # fetchone, fetchmany, fetchall return strings as Unicode objects.
         qn = connection.ops.quote_name
         Person(first_name="John", last_name="Doe").save()
         Person(first_name="Jane", last_name="Doe").save()
@@ -353,7 +349,7 @@ class BackendTestCase(TransactionTestCase):
             # As password is probably wrong, a database exception is expected
             pass
         except Exception as e:
-            self.fail("Unexpected error raised with unicode password: %s" % e)
+            self.fail('Unexpected error raised with Unicode password: %s' % e)
         finally:
             connection.settings_dict['PASSWORD'] = old_password
 
