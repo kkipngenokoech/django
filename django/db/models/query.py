@@ -746,6 +746,10 @@ class QuerySet:
         collector.collect(del_query)
         deleted, _rows_count = collector.delete()
 
+        # Ensure consistent result format when zero objects are deleted
+        if deleted == 0 and not _rows_count:
+            _rows_count = {self.model._meta.label: 0}
+
         # Clear the result cache, in case this QuerySet gets reused.
         self._result_cache = None
         return deleted, _rows_count
