@@ -28,7 +28,7 @@ class TemplateCommand(BaseCommand):
     :param directory: The directory to which the template should be copied.
     :param options: The additional variables passed to project or app templates
     """
-    requires_system_checks = False
+    requires_system_checks = []
     # The supported URL schemes
     url_schemes = ['http', 'https', 'ftp']
     # Rewrite the following suffixes when determining the target filename.
@@ -74,7 +74,7 @@ class TemplateCommand(BaseCommand):
                 raise CommandError(e)
         else:
             if app_or_project == 'app':
-                self.validate_name(os.path.basename(target), 'directory')
+                self.validate_name(os.path.basename(target.rstrip(os.sep)), 'directory')
             top_dir = os.path.abspath(os.path.expanduser(target))
             if not os.path.exists(top_dir):
                 raise CommandError("Destination directory '%s' does not "
@@ -307,7 +307,7 @@ class TemplateCommand(BaseCommand):
 
     def extract(self, filename):
         """
-        Extract the given file to a temporarily and return
+        Extract the given file to a temporary directory and return
         the path of the directory with the extracted content.
         """
         prefix = 'django_%s_template_' % self.app_or_project
