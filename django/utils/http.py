@@ -176,10 +176,24 @@ def parse_http_date(date):
     try:
         year = int(m.group('year'))
         if year < 100:
-            if year < 70:
-                year += 2000
-            else:
-                year += 1900
+            # RFC 7231: two-digit year more than 50 years in the future
+            # should be interpreted as the most recent year in the past
+            # that had the same last two digits.
+            current_year = datetime.datetime.now().year
+            current_century = (current_year // 100) * 100
+            
+            # Try the current century first
+            candidate_year = current_century + year
+            
+            # If that's too far in the past, try the next century
+            if candidate_year < current_year - 50:
+                candidate_year += 100
+            
+            # If that's more than 50 years in the future, use the previous century
+            if candidate_year > current_year + 50:
+                candidate_year -= 100
+                
+            year = candidate_year
         month = MONTHS.index(m.group('mon').lower()) + 1
         day = int(m.group('day'))
         hour = int(m.group('hour'))
