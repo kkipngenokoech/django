@@ -7,9 +7,6 @@ class Person(models.Model):
     birthday = models.DateField()
     defaults = models.TextField()
 
-    def __str__(self):
-        return '%s %s' % (self.first_name, self.last_name)
-
 
 class DefaultPerson(models.Model):
     first_name = models.CharField(max_length=100, default="Anonymous")
@@ -55,10 +52,10 @@ class Author(models.Model):
 
 class Book(models.Model):
     name = models.CharField(max_length=100)
-    authors = models.ManyToManyField(Author, related_name='books')
+    authors = models.ManyToManyField(Author, related_name="books")
     publisher = models.ForeignKey(
         Publisher,
         models.CASCADE,
-        related_name='books',
+        related_name="books",
         db_column="publisher_id_column",
     )
