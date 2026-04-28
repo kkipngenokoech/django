@@ -89,22 +89,21 @@ class DatesTests(TestCase):
             Article.objects.dates()
 
     def test_dates_fails_when_given_invalid_field_argument(self):
-        self.assertRaisesMessage(
+        with self.assertRaisesMessage(
             FieldError,
             "Cannot resolve keyword 'invalid_field' into field. Choices are: "
             "categories, comments, id, pub_date, pub_datetime, title",
-            Article.objects.dates,
-            "invalid_field",
-            "year",
-        )
+        ):
+            Article.objects.dates('invalid_field', 'year')
 
     def test_dates_fails_when_given_invalid_kind_argument(self):
         msg = "'kind' must be one of 'year', 'month', 'week', or 'day'."
-        with self.assertRaisesMessage(AssertionError, msg):
+        with self.assertRaisesMessage(ValueError, msg):
             Article.objects.dates("pub_date", "bad_kind")
 
     def test_dates_fails_when_given_invalid_order_argument(self):
-        with self.assertRaisesMessage(AssertionError, "'order' must be either 'ASC' or 'DESC'."):
+        msg = "'order' must be either 'ASC' or 'DESC'."
+        with self.assertRaisesMessage(ValueError, msg):
             Article.objects.dates("pub_date", "year", order="bad order")
 
     @override_settings(USE_TZ=False)

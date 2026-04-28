@@ -8,6 +8,7 @@
 """
 import sys
 from decimal import Decimal, InvalidOperation as DecimalInvalidOperation
+from pathlib import Path
 
 from django.contrib.gis.db.models import GeometryField
 from django.contrib.gis.gdal import (
@@ -61,6 +62,7 @@ class LayerMapping:
     FIELD_TYPES = {
         models.AutoField: OFTInteger,
         models.BigAutoField: OFTInteger64,
+        models.SmallAutoField: OFTInteger,
         models.BooleanField: (OFTInteger, OFTReal, OFTString),
         models.IntegerField: (OFTInteger, OFTReal, OFTString),
         models.FloatField: (OFTInteger, OFTReal),
@@ -76,6 +78,7 @@ class LayerMapping:
         models.UUIDField: OFTString,
         models.BigIntegerField: (OFTInteger, OFTReal, OFTString),
         models.SmallIntegerField: (OFTInteger, OFTReal, OFTString),
+        models.PositiveBigIntegerField: (OFTInteger, OFTReal, OFTString),
         models.PositiveIntegerField: (OFTInteger, OFTReal, OFTString),
         models.PositiveSmallIntegerField: (OFTInteger, OFTReal, OFTString),
     }
@@ -91,14 +94,15 @@ class LayerMapping:
         argument usage.
         """
         # Getting the DataSource and the associated Layer.
-        if isinstance(data, str):
+        if isinstance(data, (str, Path)):
             self.ds = DataSource(data, encoding=encoding)
         else:
             self.ds = data
         self.layer = self.ds[layer]
 
         self.using = using if using is not None else router.db_for_write(model)
-        self.spatial_backend = connections[self.using].ops
+        connection = connections[self.using]
+        self.spatial_backend = connection.ops
 
         # Setting the mapping & model attributes.
         self.mapping = mapping
@@ -110,7 +114,7 @@ class LayerMapping:
 
         # Getting the geometry column associated with the model (an
         # exception will be raised if there is no geometry column).
-        if connections[self.using].features.supports_transform:
+        if connection.features.supports_transform:
             self.geo_field = self.geometry_field()
         else:
             transform = False

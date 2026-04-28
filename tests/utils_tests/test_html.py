@@ -27,7 +27,7 @@ class TestUtilsHtml(SimpleTestCase):
             ('<', '&lt;'),
             ('>', '&gt;'),
             ('"', '&quot;'),
-            ("'", '&#39;'),
+            ("'", '&#x27;'),
         )
         # Substitution patterns for testing the above items.
         patterns = ("%s", "asdf%sfdsa", "%s1", "1%sb")
@@ -70,6 +70,8 @@ class TestUtilsHtml(SimpleTestCase):
         items = (
             ('<p>See: &#39;&eacute; is an apostrophe followed by e acute</p>',
              'See: &#39;&eacute; is an apostrophe followed by e acute'),
+            ('<p>See: &#x27;&eacute; is an apostrophe followed by e acute</p>',
+             'See: &#x27;&eacute; is an apostrophe followed by e acute'),
             ('<adf>a', 'a'),
             ('</adf>a', 'a'),
             ('<asdf><asdf>e', 'e'),
@@ -88,6 +90,8 @@ class TestUtilsHtml(SimpleTestCase):
             ('&gotcha&#;<>', '&gotcha&#;<>'),
             ('<sc<!-- -->ript>test<<!-- -->/script>', 'ript>test'),
             ('<script>alert()</script>&h', 'alert()h'),
+            ('><!' + ('&' * 16000) + 'D', '><!' + ('&' * 16000) + 'D'),
+            ('X<<<<br>br>br>br>X', 'XX'),
         )
         for value, output in items:
             with self.subTest(value=value, output=output):
@@ -245,6 +249,10 @@ class TestUtilsHtml(SimpleTestCase):
             (
                 'Search for google.com/?q=! and see.',
                 'Search for <a href="http://google.com/?q=">google.com/?q=</a>! and see.'
+            ),
+            (
+                'Search for google.com/?q=1&lt! and see.',
+                'Search for <a href="http://google.com/?q=1%3C">google.com/?q=1&lt</a>! and see.'
             ),
             (
                 lazystr('Search for google.com/?q=!'),
