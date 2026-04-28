@@ -79,7 +79,7 @@ a :class:`~django.contrib.sitemaps.Sitemap` class (e.g.,
 A :class:`~django.contrib.sitemaps.Sitemap` class is a Python class that
 represents a "section" of entries in your sitemap. For example, one
 :class:`~django.contrib.sitemaps.Sitemap` class could represent all the entries
-of your Weblog, while another could represent all of the events in your events
+of your blog, while another could represent all of the events in your events
 calendar.
 
 In the simplest case, all these sections get lumped together into one
@@ -186,6 +186,15 @@ Note:
         Django respond appropriately to requests with an ``If-Modified-Since``
         header which will prevent sending the sitemap if it hasn't changed.
 
+    .. attribute:: Sitemap.paginator
+
+        **Optional.**
+
+        This property returns a :class:`~django.core.paginator.Paginator` for
+        :attr:`~Sitemap.items()`. If you generate sitemaps in a batch you may
+        want to override this as a cached property in order to avoid multiple
+        ``items()`` calls.
+
     .. attribute:: Sitemap.changefreq
 
         **Optional.** Either a method or attribute.
@@ -235,6 +244,11 @@ Note:
         sitemap was requested is used. If the sitemap is built outside the
         context of a request, the default is ``'http'``.
 
+        .. deprecated:: 4.0
+
+            The default protocol for sitemaps built outside the context of a
+            request will change from ``'http'`` to ``'https'`` in Django 5.0.
+
     .. attribute:: Sitemap.limit
 
         **Optional.**
@@ -273,7 +287,7 @@ Note:
         links pointing to other language versions using the `hreflang
         attribute`_. The default is ``False``.
 
-        .. _hreflang attribute: https://support.google.com/webmasters/answer/189077
+        .. _hreflang attribute: https://developers.google.com/search/docs/advanced/crawling/localized-versions
 
     .. attribute:: Sitemap.x_default
 
@@ -516,7 +530,7 @@ generate a Google News compatible sitemap:
     {% endspaceless %}
     </urlset>
 
-.. _`Google news sitemaps`: https://support.google.com/news/publisher/answer/74288?hl=en
+.. _`Google news sitemaps`: https://support.google.com/news/publisher-center/answer/9606710
 
 Pinging Google
 ==============
@@ -547,9 +561,9 @@ that: :func:`django.contrib.sitemaps.ping_google()`.
 .. admonition:: Register with Google first!
 
     The :func:`ping_google` command only works if you have registered your
-    site with `Google Webmaster Tools`_.
+    site with `Google Search Console`_.
 
-.. _`Google Webmaster Tools`: https://www.google.com/webmasters/tools/
+.. _`Google Search Console`: https://search.google.com/search-console/welcome
 
 One useful way to call :func:`ping_google` is from a model's ``save()``
 method::

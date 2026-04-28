@@ -462,7 +462,8 @@ class WriterTests(SimpleTestCase):
         self.assertIn('import pathlib', imports)
 
     def test_serialize_path_like(self):
-        path_like = list(os.scandir(os.path.dirname(__file__)))[0]
+        with os.scandir(os.path.dirname(__file__)) as entries:
+            path_like = list(entries)[0]
         expected = (repr(path_like.path), {})
         self.assertSerializedResultEqual(path_like, expected)
 
@@ -479,8 +480,8 @@ class WriterTests(SimpleTestCase):
         self.serialize_round_trip(models.SET(42))
 
     def test_serialize_datetime(self):
-        self.assertSerializedEqual(datetime.datetime.utcnow())
-        self.assertSerializedEqual(datetime.datetime.utcnow)
+        self.assertSerializedEqual(datetime.datetime.now())
+        self.assertSerializedEqual(datetime.datetime.now)
         self.assertSerializedEqual(datetime.datetime.today())
         self.assertSerializedEqual(datetime.datetime.today)
         self.assertSerializedEqual(datetime.date.today())
@@ -492,13 +493,15 @@ class WriterTests(SimpleTestCase):
             datetime.datetime(2014, 1, 1, 1, 1),
             ("datetime.datetime(2014, 1, 1, 1, 1)", {'import datetime'})
         )
-        self.assertSerializedResultEqual(
-            datetime.datetime(2012, 1, 1, 1, 1, tzinfo=utc),
-            (
-                "datetime.datetime(2012, 1, 1, 1, 1, tzinfo=utc)",
-                {'import datetime', 'from django.utils.timezone import utc'},
-            )
-        )
+        for tzinfo in (utc, datetime.timezone.utc):
+            with self.subTest(tzinfo=tzinfo):
+                self.assertSerializedResultEqual(
+                    datetime.datetime(2012, 1, 1, 1, 1, tzinfo=tzinfo),
+                    (
+                        "datetime.datetime(2012, 1, 1, 1, 1, tzinfo=utc)",
+                        {'import datetime', 'from django.utils.timezone import utc'},
+                    )
+                )
 
     def test_serialize_fields(self):
         self.assertSerializedFieldEqual(models.CharField(max_length=255))
@@ -655,13 +658,20 @@ class WriterTests(SimpleTestCase):
     def test_serialize_type_none(self):
         self.assertSerializedEqual(type(None))
 
+    def test_serialize_type_model(self):
+        self.assertSerializedEqual(models.Model)
+        self.assertSerializedResultEqual(
+            MigrationWriter.serialize(models.Model),
+            ("('models.Model', {'from django.db import models'})", set()),
+        )
+
     def test_simple_migration(self):
         """
         Tests serializing a simple migration.
         """
         fields = {
-            'charfield': models.DateTimeField(default=datetime.datetime.utcnow),
-            'datetimefield': models.DateTimeField(default=datetime.datetime.utcnow),
+            'charfield': models.DateTimeField(default=datetime.datetime.now),
+            'datetimefield': models.DateTimeField(default=datetime.datetime.now),
         }
 
         options = {

@@ -1,6 +1,5 @@
-import operator
 from collections import Counter, defaultdict
-from functools import partial, reduce
+from functools import partial
 from itertools import chain
 from operator import attrgetter
 
@@ -305,7 +304,7 @@ class Collector:
                     model.__name__,
                     ', '.join(protected_objects),
                 ),
-                chain.from_iterable(protected_objects.values()),
+                set(chain.from_iterable(protected_objects.values())),
             )
         for related_model, related_fields in model_fast_deletes.items():
             batches = self.get_del_batches(new_objs, related_fields)
@@ -340,17 +339,20 @@ class Collector:
                             model.__name__,
                             ', '.join(restricted_objects),
                         ),
-                        chain.from_iterable(restricted_objects.values()),
+                        set(chain.from_iterable(restricted_objects.values())),
                     )
 
     def related_objects(self, related_model, related_fields, objs):
         """
         Get a QuerySet of the related model to objs via related fields.
         """
-        predicate = reduce(operator.or_, (
-            query_utils.Q(**{'%s__in' % related_field.name: objs})
-            for related_field in related_fields
-        ))
+        predicate = query_utils.Q(
+            *(
+                (f'{related_field.name}__in', objs)
+                for related_field in related_fields
+            ),
+            _connector=query_utils.Q.OR,
+        )
         return related_model._base_manager.using(self.using).filter(predicate)
 
     def instances_with_model(self):

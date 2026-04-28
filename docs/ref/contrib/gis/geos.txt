@@ -19,7 +19,7 @@ maintained by `Refractions Research`__ of Victoria, Canada.
 
 __ https://trac.osgeo.org/geos/
 __ https://sourceforge.net/projects/jts-topo-suite/
-__ https://www.opengeospatial.org/standards/sfs
+__ https://www.ogc.org/standards/sfs
 __ http://www.refractions.net/
 
 Features
@@ -87,7 +87,7 @@ Finally, there is the :func:`fromfile` factory method which returns a
 .. admonition:: My logs are filled with GEOS-related errors
 
     You find many ``TypeError`` or ``AttributeError`` exceptions filling your
-    Web server's log files. This generally means that you are creating GEOS
+    web server's log files. This generally means that you are creating GEOS
     objects at the top level of some of your Python modules. Then, due to a race
     condition in the garbage collector, your module is garbage collected before
     the GEOS object. To prevent this, create :class:`GEOSGeometry` objects
@@ -728,8 +728,6 @@ Other Properties & Methods
     equal, an error would be raised.
 
     .. attribute:: is_counterclockwise
-
-        .. versionadded:: 3.1
 
         Returns whether this ``LinearRing`` is counterclockwise.
 

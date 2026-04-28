@@ -336,7 +336,11 @@ class FormsFormsetTestCase(SimpleTestCase):
         ChoiceFormSet = formset_factory(Choice, extra=1, max_num=1, validate_max=True)
         formset = ChoiceFormSet(data, auto_id=False, prefix='choices')
         self.assertFalse(formset.is_valid())
-        self.assertEqual(formset.non_form_errors(), ['Please submit 1 or fewer forms.'])
+        self.assertEqual(formset.non_form_errors(), ['Please submit at most 1 form.'])
+        self.assertEqual(
+            str(formset.non_form_errors()),
+            '<ul class="errorlist nonform"><li>Please submit at most 1 form.</li></ul>',
+        )
 
     def test_formset_validate_min_flag(self):
         """
@@ -358,7 +362,12 @@ class FormsFormsetTestCase(SimpleTestCase):
         ChoiceFormSet = formset_factory(Choice, extra=1, min_num=3, validate_min=True)
         formset = ChoiceFormSet(data, auto_id=False, prefix='choices')
         self.assertFalse(formset.is_valid())
-        self.assertEqual(formset.non_form_errors(), ['Please submit 3 or more forms.'])
+        self.assertEqual(formset.non_form_errors(), ['Please submit at least 3 forms.'])
+        self.assertEqual(
+            str(formset.non_form_errors()),
+            '<ul class="errorlist nonform"><li>'
+            'Please submit at least 3 forms.</li></ul>',
+        )
 
     def test_formset_validate_min_unchanged_forms(self):
         """
@@ -394,7 +403,7 @@ class FormsFormsetTestCase(SimpleTestCase):
         formset = ChoiceFormSet(data, prefix='choices')
         self.assertFalse(formset.has_changed())
         self.assertFalse(formset.is_valid())
-        self.assertEqual(formset.non_form_errors(), ['Please submit 1 or more forms.'])
+        self.assertEqual(formset.non_form_errors(), ['Please submit at least 1 form.'])
 
     def test_second_form_partially_filled_2(self):
         """A partially completed form is invalid."""
@@ -542,6 +551,38 @@ class FormsFormsetTestCase(SimpleTestCase):
         self.assertEqual(formset._errors, [])
         self.assertEqual(len(formset.deleted_forms), 1)
 
+    def test_formset_with_deletion_custom_widget(self):
+        class DeletionAttributeFormSet(BaseFormSet):
+            deletion_widget = HiddenInput
+
+        class DeletionMethodFormSet(BaseFormSet):
+            def get_deletion_widget(self):
+                return HiddenInput(attrs={'class': 'deletion'})
+
+        tests = [
+            (DeletionAttributeFormSet, '<input type="hidden" name="form-0-DELETE">'),
+            (
+                DeletionMethodFormSet,
+                '<input class="deletion" type="hidden" name="form-0-DELETE">',
+            ),
+        ]
+        for formset_class, delete_html in tests:
+            with self.subTest(formset_class=formset_class.__name__):
+                ArticleFormSet = formset_factory(
+                    ArticleForm,
+                    formset=formset_class,
+                    can_delete=True,
+                )
+                formset = ArticleFormSet(auto_id=False)
+                self.assertHTMLEqual(
+                    '\n'.join([form.as_ul() for form in formset.forms]),
+                    (
+                        f'<li>Title: <input type="text" name="form-0-title"></li>'
+                        f'<li>Pub date: <input type="text" name="form-0-pub_date">'
+                        f'{delete_html}</li>'
+                    ),
+                )
+
     def test_formsets_with_ordering(self):
         """
         formset_factory's can_order argument adds an integer field to each
@@ -593,8 +634,8 @@ class FormsFormsetTestCase(SimpleTestCase):
             ],
         )
 
-    def test_formsets_with_order_custom_widget(self):
-        class OrderingAttributFormSet(BaseFormSet):
+    def test_formsets_with_ordering_custom_widget(self):
+        class OrderingAttributeFormSet(BaseFormSet):
             ordering_widget = HiddenInput
 
         class OrderingMethodFormSet(BaseFormSet):
@@ -602,7 +643,7 @@ class FormsFormsetTestCase(SimpleTestCase):
                 return HiddenInput(attrs={'class': 'ordering'})
 
         tests = (
-            (OrderingAttributFormSet, '<input type="hidden" name="form-0-ORDER">'),
+            (OrderingAttributeFormSet, '<input type="hidden" name="form-0-ORDER">'),
             (OrderingMethodFormSet, '<input class="ordering" type="hidden" name="form-0-ORDER">'),
         )
         for formset_class, order_html in tests:
@@ -888,7 +929,7 @@ class FormsFormsetTestCase(SimpleTestCase):
         self.assertIs(formset.is_valid(), False)
         self.assertEqual(
             formset.non_form_errors(),
-            ['Please submit 1000 or fewer forms.'],
+            ['Please submit at most 1000 forms.'],
         )
         self.assertEqual(formset.absolute_max, 2000)
 
@@ -912,7 +953,7 @@ class FormsFormsetTestCase(SimpleTestCase):
         self.assertEqual(len(formset.forms), 3000)
         self.assertEqual(
             formset.non_form_errors(),
-            ['Please submit 1000 or fewer forms.'],
+            ['Please submit at most 1000 forms.'],
         )
 
     def test_absolute_max_with_max_num(self):
@@ -931,7 +972,7 @@ class FormsFormsetTestCase(SimpleTestCase):
         self.assertEqual(len(formset.forms), 1000)
         self.assertEqual(
             formset.non_form_errors(),
-            ['Please submit 30 or fewer forms.'],
+            ['Please submit at most 30 forms.'],
         )
 
     def test_absolute_max_invalid(self):
@@ -983,6 +1024,11 @@ class FormsFormsetTestCase(SimpleTestCase):
         formset = FavoriteDrinksFormSet(data, prefix='drinks')
         self.assertFalse(formset.is_valid())
         self.assertEqual(formset.non_form_errors(), ['You may only specify a drink once.'])
+        self.assertEqual(
+            str(formset.non_form_errors()),
+            '<ul class="errorlist nonform"><li>'
+            'You may only specify a drink once.</li></ul>',
+        )
 
     def test_formset_iteration(self):
         """Formset instances are iterable."""
@@ -1300,10 +1346,69 @@ ArticleFormSet = formset_factory(ArticleForm)
 
 
 class TestIsBoundBehavior(SimpleTestCase):
-    def test_no_data_raises_validation_error(self):
-        msg = 'ManagementForm data is missing or has been tampered with'
-        with self.assertRaisesMessage(ValidationError, msg):
-            ArticleFormSet({}).is_valid()
+    def test_no_data_error(self):
+        formset = ArticleFormSet({})
+        self.assertIs(formset.is_valid(), False)
+        self.assertEqual(
+            formset.non_form_errors(),
+            [
+                'ManagementForm data is missing or has been tampered with. '
+                'Missing fields: form-TOTAL_FORMS, form-INITIAL_FORMS. '
+                'You may need to file a bug report if the issue persists.',
+            ],
+        )
+        self.assertEqual(formset.errors, [])
+        # Can still render the formset.
+        self.assertEqual(
+            str(formset),
+            '<tr><td colspan="2">'
+            '<ul class="errorlist nonfield">'
+            '<li>(Hidden field TOTAL_FORMS) This field is required.</li>'
+            '<li>(Hidden field INITIAL_FORMS) This field is required.</li>'
+            '</ul>'
+            '<input type="hidden" name="form-TOTAL_FORMS" id="id_form-TOTAL_FORMS">'
+            '<input type="hidden" name="form-INITIAL_FORMS" id="id_form-INITIAL_FORMS">'
+            '<input type="hidden" name="form-MIN_NUM_FORMS" id="id_form-MIN_NUM_FORMS">'
+            '<input type="hidden" name="form-MAX_NUM_FORMS" id="id_form-MAX_NUM_FORMS">'
+            '</td></tr>\n'
+        )
+
+    def test_management_form_invalid_data(self):
+        data = {
+            'form-TOTAL_FORMS': 'two',
+            'form-INITIAL_FORMS': 'one',
+        }
+        formset = ArticleFormSet(data)
+        self.assertIs(formset.is_valid(), False)
+        self.assertEqual(
+            formset.non_form_errors(),
+            [
+                'ManagementForm data is missing or has been tampered with. '
+                'Missing fields: form-TOTAL_FORMS, form-INITIAL_FORMS. '
+                'You may need to file a bug report if the issue persists.',
+            ],
+        )
+        self.assertEqual(formset.errors, [])
+        # Can still render the formset.
+        self.assertEqual(
+            str(formset),
+            '<tr><td colspan="2">'
+            '<ul class="errorlist nonfield">'
+            '<li>(Hidden field TOTAL_FORMS) Enter a whole number.</li>'
+            '<li>(Hidden field INITIAL_FORMS) Enter a whole number.</li>'
+            '</ul>'
+            '<input type="hidden" name="form-TOTAL_FORMS" value="two" id="id_form-TOTAL_FORMS">'
+            '<input type="hidden" name="form-INITIAL_FORMS" value="one" id="id_form-INITIAL_FORMS">'
+            '<input type="hidden" name="form-MIN_NUM_FORMS" id="id_form-MIN_NUM_FORMS">'
+            '<input type="hidden" name="form-MAX_NUM_FORMS" id="id_form-MAX_NUM_FORMS">'
+            '</td></tr>\n',
+        )
+
+    def test_customize_management_form_error(self):
+        formset = ArticleFormSet({}, error_messages={'missing_management_form': 'customized'})
+        self.assertIs(formset.is_valid(), False)
+        self.assertEqual(formset.non_form_errors(), ['customized'])
+        self.assertEqual(formset.errors, [])
 
     def test_with_management_data_attrs_work_fine(self):
         data = {

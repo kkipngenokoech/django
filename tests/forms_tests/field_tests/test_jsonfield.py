@@ -16,8 +16,8 @@ class JSONFieldTest(SimpleTestCase):
 
     def test_valid_empty(self):
         field = JSONField(required=False)
-        value = field.clean('')
-        self.assertIsNone(value)
+        self.assertIsNone(field.clean(''))
+        self.assertIsNone(field.clean(None))
 
     def test_invalid(self):
         field = JSONField()
@@ -29,6 +29,12 @@ class JSONFieldTest(SimpleTestCase):
         self.assertEqual(field.prepare_value({'a': 'b'}), '{"a": "b"}')
         self.assertEqual(field.prepare_value(None), 'null')
         self.assertEqual(field.prepare_value('foo'), '"foo"')
+        self.assertEqual(field.prepare_value('你好，世界'), '"你好，世界"')
+        self.assertEqual(field.prepare_value({'a': '😀🐱'}), '{"a": "😀🐱"}')
+        self.assertEqual(
+            field.prepare_value(["你好，世界", "jaźń"]),
+            '["你好，世界", "jaźń"]',
+        )
 
     def test_widget(self):
         field = JSONField()
@@ -90,6 +96,21 @@ class JSONFieldTest(SimpleTestCase):
 
         form = JSONForm({'json_field': '["bar"]'}, initial={'json_field': ['foo']})
         self.assertIn('[&quot;foo&quot;]</textarea>', form.as_p())
+
+    def test_redisplay_none_input(self):
+        class JSONForm(Form):
+            json_field = JSONField(required=True)
+
+        tests = [
+            {},
+            {'json_field': None},
+        ]
+        for data in tests:
+            with self.subTest(data=data):
+                form = JSONForm(data)
+                self.assertEqual(form['json_field'].value(), 'null')
+                self.assertIn('null</textarea>', form.as_p())
+                self.assertEqual(form.errors['json_field'], ['This field is required.'])
 
     def test_redisplay_wrong_input(self):
         """

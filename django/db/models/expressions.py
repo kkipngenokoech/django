@@ -6,7 +6,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from django.core.exceptions import EmptyResultSet, FieldError
-from django.db import NotSupportedError, connection
+from django.db import DatabaseError, NotSupportedError, connection
 from django.db.models import fields
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.query_utils import Q
@@ -147,13 +147,13 @@ class Combinable:
         )
 
 
-@deconstructible
 class BaseExpression:
     """Base class for all query expressions."""
 
     # aggregate specific fields
     is_summary = False
     _output_field_resolved_to_none = False
+    empty_aggregate_value = NotImplemented
     # Can the expression be used in a WHERE clause?
     filterable = True
     # Can the expression can be used as a source expression in Window?
@@ -375,7 +375,10 @@ class BaseExpression:
         yield self
         for expr in self.get_source_expressions():
             if expr:
-                yield from expr.flatten()
+                if hasattr(expr, 'flatten'):
+                    yield from expr.flatten()
+                else:
+                    yield expr
 
     def select_format(self, compiler, sql, params):
         """
@@ -385,6 +388,11 @@ class BaseExpression:
         if hasattr(self.output_field, 'select_format'):
             return self.output_field.select_format(compiler, sql, params)
         return sql, params
+
+
+@deconstructible
+class Expression(BaseExpression, Combinable):
+    """An expression that can be combined with other expressions."""
 
     @cached_property
     def identity(self):
@@ -406,17 +414,12 @@ class BaseExpression:
         return tuple(identity)
 
     def __eq__(self, other):
-        if not isinstance(other, BaseExpression):
+        if not isinstance(other, Expression):
             return NotImplemented
         return other.identity == self.identity
 
     def __hash__(self):
         return hash(self.identity)
-
-
-class Expression(BaseExpression, Combinable):
-    """An expression that can be combined with other expressions."""
-    pass
 
 
 _connector_combinators = {
@@ -542,6 +545,24 @@ class DurationExpression(CombinedExpression):
         expression_wrapper = '(%s)'
         sql = connection.ops.combine_duration_expression(self.connector, expressions)
         return expression_wrapper % sql, expression_params
+
+    def as_sqlite(self, compiler, connection, **extra_context):
+        sql, params = self.as_sql(compiler, connection, **extra_context)
+        if self.connector in {Combinable.MUL, Combinable.DIV}:
+            try:
+                lhs_type = self.lhs.output_field.get_internal_type()
+                rhs_type = self.rhs.output_field.get_internal_type()
+            except (AttributeError, FieldError):
+                pass
+            else:
+                allowed_fields = {
+                    'DecimalField', 'DurationField', 'FloatField', 'IntegerField',
+                }
+                if lhs_type not in allowed_fields or rhs_type not in allowed_fields:
+                    raise DatabaseError(
+                        f'Invalid arguments for operator {self.connector}.'
+                    )
+        return sql, params
 
 
 class TemporalSubtraction(CombinedExpression):
@@ -704,7 +725,7 @@ class Func(SQLiteNumericMixin, Expression):
         return copy
 
 
-class Value(Expression):
+class Value(SQLiteNumericMixin, Expression):
     """Represent a wrapped value as a node within an expression."""
     # Provide a default value for `for_save` in order to allow unresolved
     # instances to be compiled until a decision is taken in #25425.
@@ -723,7 +744,7 @@ class Value(Expression):
         self.value = value
 
     def __repr__(self):
-        return "{}({})".format(self.__class__.__name__, self.value)
+        return f'{self.__class__.__name__}({self.value!r})'
 
     def as_sql(self, compiler, connection):
         connection.ops.check_expression_support(self)
@@ -775,6 +796,10 @@ class Value(Expression):
         if isinstance(self.value, UUID):
             return fields.UUIDField()
 
+    @property
+    def empty_aggregate_value(self):
+        return self.value
+
 
 class RawSQL(Expression):
     def __init__(self, sql, params, output_field=None):
@@ -809,16 +834,6 @@ class Star(Expression):
 
     def as_sql(self, compiler, connection):
         return '*', []
-
-
-class Random(Expression):
-    output_field = fields.FloatField()
-
-    def __repr__(self):
-        return "Random()"
-
-    def as_sql(self, compiler, connection):
-        return connection.ops.random_function_sql(), []
 
 
 class Col(Expression):
@@ -907,6 +922,10 @@ class ExpressionList(Func):
     def __str__(self):
         return self.arg_joiner.join(str(arg) for arg in self.source_expressions)
 
+    def as_sqlite(self, compiler, connection, **extra_context):
+        # Casting to numeric is unnecessary.
+        return self.as_sql(compiler, connection, **extra_context)
+
 
 class ExpressionWrapper(Expression):
     """
@@ -925,12 +944,16 @@ class ExpressionWrapper(Expression):
         return [self.expression]
 
     def get_group_by_cols(self, alias=None):
-        expression = self.expression.copy()
-        expression.output_field = self.output_field
-        return expression.get_group_by_cols(alias=alias)
+        if isinstance(self.expression, Expression):
+            expression = self.expression.copy()
+            expression.output_field = self.output_field
+            return expression.get_group_by_cols(alias=alias)
+        # For non-expressions e.g. an SQL WHERE clause, the entire
+        # `expression` must be included in the GROUP BY clause.
+        return super().get_group_by_cols()
 
     def as_sql(self, compiler, connection):
-        return self.expression.as_sql(compiler, connection)
+        return compiler.compile(self.expression)
 
     def __repr__(self):
         return "{}({})".format(self.__class__.__name__, self.expression)
@@ -1078,8 +1101,13 @@ class Case(Expression):
             sql = connection.ops.unification_cast_sql(self.output_field) % sql
         return sql, sql_params
 
+    def get_group_by_cols(self, alias=None):
+        if not self.cases:
+            return self.default.get_group_by_cols(alias)
+        return super().get_group_by_cols(alias)
 
-class Subquery(Expression):
+
+class Subquery(BaseExpression, Combinable):
     """
     An explicit subquery. It may contain OuterRef() references to the outer
     query which will be resolved when it is applied to that query.
@@ -1088,21 +1116,10 @@ class Subquery(Expression):
     contains_aggregate = False
 
     def __init__(self, queryset, output_field=None, **extra):
-        self.query = queryset.query
+        # Allow the usage of both QuerySet and sql.Query objects.
+        self.query = getattr(queryset, 'query', queryset)
         self.extra = extra
-        # Prevent the QuerySet from being evaluated.
-        self.queryset = queryset._chain(_result_cache=[], prefetch_done=True)
         super().__init__(output_field)
-
-    def __getstate__(self):
-        state = super().__getstate__()
-        args, kwargs = state['_constructor_args']
-        if args:
-            args = (self.queryset, *args[1:])
-        else:
-            kwargs['queryset'] = self.queryset
-        state['_constructor_args'] = args, kwargs
-        return state
 
     def get_source_expressions(self):
         return [self.query]
@@ -1122,10 +1139,14 @@ class Subquery(Expression):
     def external_aliases(self):
         return self.query.external_aliases
 
-    def as_sql(self, compiler, connection, template=None, **extra_context):
+    def get_external_cols(self):
+        return self.query.get_external_cols()
+
+    def as_sql(self, compiler, connection, template=None, query=None, **extra_context):
         connection.ops.check_expression_support(self)
         template_params = {**self.extra, **extra_context}
-        subquery_sql, sql_params = self.query.as_sql(compiler, connection)
+        query = query or self.query
+        subquery_sql, sql_params = query.as_sql(compiler, connection)
         template_params['subquery'] = subquery_sql[1:-1]
 
         template = template or template_params.get('template', self.template)
@@ -1135,7 +1156,7 @@ class Subquery(Expression):
     def get_group_by_cols(self, alias=None):
         if alias:
             return [Ref(alias, self)]
-        external_cols = self.query.get_external_cols()
+        external_cols = self.get_external_cols()
         if any(col.possibly_multivalued for col in external_cols):
             return [self]
         return external_cols
@@ -1148,7 +1169,6 @@ class Exists(Subquery):
     def __init__(self, queryset, negated=False, **kwargs):
         self.negated = negated
         super().__init__(queryset, **kwargs)
-        self.query = self.query.exists()
 
     def __invert__(self):
         clone = self.copy()
@@ -1156,7 +1176,14 @@ class Exists(Subquery):
         return clone
 
     def as_sql(self, compiler, connection, template=None, **extra_context):
-        sql, params = super().as_sql(compiler, connection, template, **extra_context)
+        query = self.query.exists(using=connection.alias)
+        sql, params = super().as_sql(
+            compiler,
+            connection,
+            template=template,
+            query=query,
+            **extra_context,
+        )
         if self.negated:
             sql = 'NOT {}'.format(sql)
         return sql, params
@@ -1170,7 +1197,7 @@ class Exists(Subquery):
         return sql, params
 
 
-class OrderBy(BaseExpression):
+class OrderBy(Expression):
     template = '%(expression)s %(ordering)s'
     conditional = False
 
@@ -1217,14 +1244,13 @@ class OrderBy(BaseExpression):
             'ordering': 'DESC' if self.descending else 'ASC',
             **extra_context,
         }
-        template = template or self.template
         params *= template.count('%(expression)s')
         return (template % placeholders).rstrip(), params
 
     def as_oracle(self, compiler, connection):
-        # Oracle doesn't allow ORDER BY EXISTS() unless it's wrapped in
-        # a CASE WHEN.
-        if isinstance(self.expression, Exists):
+        # Oracle doesn't allow ORDER BY EXISTS() or filters unless it's wrapped
+        # in a CASE WHEN.
+        if connection.ops.conditional_expression_supported_in_where_clause(self.expression):
             copy = self.copy()
             copy.expression = Case(
                 When(self.expression, then=True),

@@ -25,6 +25,7 @@ Some examples
 
     from django.db.models import Count, F, Value
     from django.db.models.functions import Length, Upper
+    from django.db.models.lookups import GreaterThan
 
     # Find companies that have more employees than chairs.
     Company.objects.filter(num_employees__gt=F('num_chairs'))
@@ -76,6 +77,13 @@ Some examples
         Exists(Employee.objects.filter(company=OuterRef('pk'), salary__gt=10))
     )
 
+    # Lookup expressions can also be used directly in filters
+    Company.objects.filter(GreaterThan(F('num_employees'), F('num_chairs')))
+    # or annotations.
+    Company.objects.annotate(
+        need_chairs=GreaterThan(F('num_employees'), F('num_chairs')),
+    )
+
 Built-in Expressions
 ====================
 
@@ -90,10 +98,10 @@ Built-in Expressions
 
 .. class:: F
 
-An ``F()`` object represents the value of a model field or annotated column. It
-makes it possible to refer to model field values and perform  database
-operations using them without actually having to pull them out of the  database
-into Python memory.
+An ``F()`` object represents the value of a model field, transformed value of a
+model field, or annotated column. It makes it possible to refer to model field
+values and perform database operations using them without actually having to
+pull them out of the database into Python memory.
 
 Instead, Django uses the ``F()`` object to generate an SQL expression that
 describes the required operation at the database level.
@@ -154,6 +162,10 @@ the field value of each one, and saving each one back to the database::
 
 * getting the database, rather than Python, to do work
 * reducing the number of queries some operations require
+
+.. versionchanged:: 3.2
+
+    Support for transforms of the field was added.
 
 .. _avoiding-race-conditions-using-f:
 
@@ -381,7 +393,7 @@ some complex computations::
 
 The ``Aggregate`` API is as follows:
 
-.. class:: Aggregate(*expressions, output_field=None, distinct=False, filter=None, **extra)
+.. class:: Aggregate(*expressions, output_field=None, distinct=False, filter=None, default=None, **extra)
 
     .. attribute:: template
 
@@ -406,9 +418,17 @@ The ``Aggregate`` API is as follows:
         allows passing a ``distinct`` keyword argument. If set to ``False``
         (default), ``TypeError`` is raised if ``distinct=True`` is passed.
 
-The ``expressions`` positional arguments can include expressions or the names
-of model fields. They will be converted to a string and used as the
-``expressions`` placeholder within the ``template``.
+    .. attribute:: empty_aggregate_value
+
+        .. versionadded:: 4.0
+
+        Override :attr:`~django.db.models.Expression.empty_aggregate_value` to
+        ``None`` since most aggregate functions result in ``NULL`` when applied
+        to an empty result set.
+
+The ``expressions`` positional arguments can include expressions, transforms of
+the model field, or the names of model fields. They will be converted to a
+string and used as the ``expressions`` placeholder within the ``template``.
 
 The ``output_field`` argument requires a model field instance, like
 ``IntegerField()`` or ``BooleanField()``, into which Django will load the value
@@ -432,8 +452,21 @@ The ``filter`` argument takes a :class:`Q object <django.db.models.Q>` that's
 used to filter the rows that are aggregated. See :ref:`conditional-aggregation`
 and :ref:`filtering-on-annotations` for example usage.
 
+The ``default`` argument takes a value that will be passed along with the
+aggregate to :class:`~django.db.models.functions.Coalesce`. This is useful for
+specifying a value to be returned other than ``None`` when the queryset (or
+grouping) contains no entries.
+
 The ``**extra`` kwargs are ``key=value`` pairs that can be interpolated
 into the ``template`` attribute.
+
+.. versionchanged:: 3.2
+
+    Support for transforms of the field was added.
+
+.. versionchanged:: 4.0
+
+    The ``default`` argument was added.
 
 Creating your own Aggregate Functions
 -------------------------------------
@@ -551,9 +584,9 @@ Referencing columns from the outer queryset
 .. class:: OuterRef(field)
 
 Use ``OuterRef`` when a queryset in a ``Subquery`` needs to refer to a field
-from the outer query. It acts like an :class:`F` expression except that the
-check to see if it refers to a valid field isn't made until the outer queryset
-is resolved.
+from the outer query or its transform. It acts like an :class:`F` expression
+except that the check to see if it refers to a valid field isn't made until the
+outer queryset is resolved.
 
 Instances of ``OuterRef`` may be used in conjunction with nested instances
 of ``Subquery`` to refer to a containing queryset that isn't the immediate
@@ -561,6 +594,10 @@ parent. For example, this queryset would need to be within a nested pair of
 ``Subquery`` instances to resolve correctly::
 
     >>> Book.objects.filter(author=OuterRef(OuterRef('pk')))
+
+.. versionchanged:: 3.2
+
+    Support for transforms of the field was added.
 
 Limiting a subquery to a single column
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -621,12 +658,13 @@ On PostgreSQL, the SQL looks like:
 .. code-block:: sql
 
     SELECT "post"."id", "post"."published_at", EXISTS(
-        SELECT U0."id", U0."post_id", U0."email", U0."created_at"
+        SELECT (1) as "a"
         FROM "comment" U0
         WHERE (
             U0."created_at" >= YYYY-MM-DD HH:MM:SS AND
-            U0."post_id" = ("post"."id")
+            U0."post_id" = "post"."id"
         )
+        LIMIT 1
     ) AS "recent_comment" FROM "post"
 
 It's unnecessary to force ``Exists`` to refer to a single column, since the
@@ -686,11 +724,15 @@ Sometimes database expressions can't easily express a complex ``WHERE`` clause.
 In these edge cases, use the ``RawSQL`` expression. For example::
 
     >>> from django.db.models.expressions import RawSQL
-    >>> queryset.annotate(val=RawSQL("select col from sometable where othercol = %s", (someparam,)))
+    >>> queryset.annotate(val=RawSQL("select col from sometable where othercol = %s", (param,)))
 
 These extra lookups may not be portable to different database engines (because
 you're explicitly writing SQL code) and violate the DRY principle, so you
 should avoid them if possible.
+
+``RawSQL`` expressions can also be used as the target of ``__in`` filters::
+
+    >>> queryset.filter(id__in=RawSQL("select id from sometable where col = %s", (param,)))
 
 .. warning::
 
@@ -877,7 +919,7 @@ values of an expression in the partition. If the ``released`` field of the
 example annotates each movie with the average rating of a movie's peers
 released between twelve months before and twelve months after the each movie.
 
-    >>> from django.db.models import Avg, ExpressionList, F, ValueRange, Window
+    >>> from django.db.models import Avg, F, ValueRange, Window
     >>> Movie.objects.annotate(
     >>>     avg_rating=Window(
     >>>         expression=Avg('rating'),
@@ -932,6 +974,15 @@ calling the appropriate methods on the wrapped expression.
         Tells Django that this expression can be used as the source expression
         in :class:`~django.db.models.expressions.Window`. Defaults to
         ``False``.
+
+    .. attribute:: empty_aggregate_value
+
+        .. versionadded:: 4.0
+
+        Tells Django which value should be returned when the expression is used
+        to :meth:`aggregate <django.db.models.query.QuerySet.aggregate>` over
+        an empty result set. Defaults to :py:data:`NotImplemented` which forces
+        the expression to be computed on the database.
 
     .. method:: resolve_expression(query=None, allow_joins=True, reuse=None, summarize=False, for_save=False)
 
