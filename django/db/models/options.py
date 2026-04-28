@@ -1,15 +1,13 @@
+import bisect
 import copy
 import inspect
-from bisect import bisect
 from collections import defaultdict
 
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist
 from django.db import connections
-from django.db.models import Manager
-from django.db.models.fields import AutoField
-from django.db.models.fields.proxy import OrderWrt
+from django.db.models import AutoField, Manager, OrderWrt
 from django.db.models.query_utils import PathInfo
 from django.utils.datastructures import ImmutableList, OrderedSet
 from django.utils.functional import cached_property
@@ -180,6 +178,12 @@ class Options:
 
             self.unique_together = normalize_together(self.unique_together)
             self.index_together = normalize_together(self.index_together)
+            # App label/class name interpolation for names of constraints and
+            # indexes.
+            if not getattr(cls._meta, 'abstract', False):
+                for attr_name in {'constraints', 'indexes'}:
+                    objs = getattr(self, attr_name, [])
+                    setattr(self, attr_name, self._format_names_with_class(cls, objs))
 
             # verbose_name_plural is a special case because it uses a 's'
             # by default.
@@ -200,6 +204,18 @@ class Options:
         if not self.db_table:
             self.db_table = "%s_%s" % (self.app_label, self.model_name)
             self.db_table = truncate_name(self.db_table, connection.ops.max_name_length())
+
+    def _format_names_with_class(self, cls, objs):
+        """App label/class name interpolation for object names."""
+        new_objs = []
+        for obj in objs:
+            obj = obj.clone()
+            obj.name = obj.name % {
+                'app_label': cls._meta.app_label.lower(),
+                'class': cls.__name__.lower(),
+            }
+            new_objs.append(obj)
+        return new_objs
 
     def _prepare(self, model):
         if self.order_with_respect_to:
@@ -233,10 +249,6 @@ class Options:
                     field = already_created[0]
                 field.primary_key = True
                 self.setup_pk(field)
-                if not field.remote_field.parent_link:
-                    raise ImproperlyConfigured(
-                        'Add parent_link=True to %s.' % field,
-                    )
             else:
                 auto = AutoField(verbose_name='ID', primary_key=True, auto_created=True)
                 model.add_to_class('id', auto)
@@ -253,9 +265,9 @@ class Options:
         if private:
             self.private_fields.append(field)
         elif field.is_relation and field.many_to_many:
-            self.local_many_to_many.insert(bisect(self.local_many_to_many, field), field)
+            bisect.insort(self.local_many_to_many, field)
         else:
-            self.local_fields.insert(bisect(self.local_fields, field), field)
+            bisect.insort(self.local_fields, field)
             self.setup_pk(field)
 
         # If the field being added is a relation to another known field,
@@ -293,7 +305,7 @@ class Options:
         return '<Options for %s>' % self.object_name
 
     def __str__(self):
-        return "%s.%s" % (self.app_label, self.model_name)
+        return self.label_lower
 
     def can_migrate(self, connection):
         """
@@ -824,3 +836,14 @@ class Options:
             if isinstance(attr, property):
                 names.append(name)
         return frozenset(names)
+
+    @cached_property
+    def db_returning_fields(self):
+        """
+        Private API intended only to be used by Django itself.
+        Fields to be returned after a database insert.
+        """
+        return [
+            field for field in self._get_fields(forward=True, reverse=False, include_parents=PROXY_PARENTS)
+            if getattr(field, 'db_returning', False)
+        ]

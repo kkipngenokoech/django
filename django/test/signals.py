@@ -1,7 +1,8 @@
 import os
-import threading
 import time
 import warnings
+
+from asgiref.local import Local
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
@@ -25,8 +26,9 @@ COMPLEX_OVERRIDE_SETTINGS = {'DATABASES'}
 @receiver(setting_changed)
 def clear_cache_handlers(**kwargs):
     if kwargs['setting'] == 'CACHES':
-        from django.core.cache import caches
-        caches._caches = threading.local()
+        from django.core.cache import caches, close_caches
+        close_caches()
+        caches._caches = Local()
 
 
 @receiver(setting_changed)
@@ -85,7 +87,6 @@ def reset_template_engines(**kwargs):
     if kwargs['setting'] in {
         'TEMPLATES',
         'DEBUG',
-        'FILE_CHARSET',
         'INSTALLED_APPS',
     }:
         from django.template import engines
@@ -113,7 +114,7 @@ def language_changed(**kwargs):
     if kwargs['setting'] in {'LANGUAGES', 'LANGUAGE_CODE', 'LOCALE_PATHS'}:
         from django.utils.translation import trans_real
         trans_real._default = None
-        trans_real._active = threading.local()
+        trans_real._active = Local()
     if kwargs['setting'] in {'LANGUAGES', 'LOCALE_PATHS'}:
         from django.utils.translation import trans_real
         trans_real._translations = {}

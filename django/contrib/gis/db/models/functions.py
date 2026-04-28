@@ -4,12 +4,12 @@ from django.contrib.gis.db.models.fields import BaseSpatialField, GeometryField
 from django.contrib.gis.db.models.sql import AreaField, DistanceField
 from django.contrib.gis.geos import GEOSGeometry
 from django.core.exceptions import FieldError
+from django.db import NotSupportedError
 from django.db.models import (
-    BooleanField, FloatField, IntegerField, TextField, Transform,
+    BinaryField, BooleanField, FloatField, Func, IntegerField, TextField,
+    Transform, Value,
 )
-from django.db.models.expressions import Func, Value
 from django.db.models.functions import Cast
-from django.db.utils import NotSupportedError
 from django.utils.functional import cached_property
 
 NUMERIC_TYPES = (int, float, Decimal)
@@ -48,7 +48,7 @@ class GeoFuncMixin:
         return self.source_expressions[self.geom_param_pos[0]].field
 
     def as_sql(self, compiler, connection, function=None, **extra_context):
-        if not self.function and not function:
+        if self.function is None and function is None:
             function = connection.ops.spatial_function_name(self.name)
         return super().as_sql(compiler, connection, function=function, **extra_context)
 
@@ -162,6 +162,12 @@ class AsGeoJSON(GeoFunc):
             expressions.append(options)
         super().__init__(*expressions, **extra)
 
+    def as_oracle(self, compiler, connection, **extra_context):
+        source_expressions = self.get_source_expressions()
+        clone = self.copy()
+        clone.set_source_expressions(source_expressions[:1])
+        return super(AsGeoJSON, clone).as_sql(compiler, connection, **extra_context)
+
 
 class AsGML(GeoFunc):
     geom_param_pos = (1,)
@@ -201,6 +207,16 @@ class AsSVG(GeoFunc):
             self._handle_param(precision, 'precision', int),
         ]
         super().__init__(*expressions, **extra)
+
+
+class AsWKB(GeoFunc):
+    output_field = BinaryField()
+    arity = 1
+
+
+class AsWKT(GeoFunc):
+    output_field = TextField()
+    arity = 1
 
 
 class BoundingCircle(OracleToleranceMixin, GeoFunc):
@@ -299,6 +315,14 @@ class GeoHash(GeoFunc):
         return clone.as_sql(compiler, connection, **extra_context)
 
 
+class GeometryDistance(GeoFunc):
+    output_field = FloatField()
+    arity = 2
+    function = ''
+    arg_joiner = ' <-> '
+    geom_param_pos = (0, 1)
+
+
 class Intersection(OracleToleranceMixin, GeomOutputGeoFunc):
     arity = 2
     geom_param_pos = (0, 1)
@@ -352,7 +376,7 @@ class LineLocatePoint(GeoFunc):
     geom_param_pos = (0, 1)
 
 
-class MakeValid(GeoFunc):
+class MakeValid(GeomOutputGeoFunc):
     pass
 
 

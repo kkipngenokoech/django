@@ -95,7 +95,7 @@ class DjangoHelpFormatter(HelpFormatter):
     """
     show_last = {
         '--version', '--verbosity', '--traceback', '--settings', '--pythonpath',
-        '--no-color', '--force-color',
+        '--no-color', '--force-color', '--skip-checks',
     }
 
     def _reordered_actions(self, actions):
@@ -126,7 +126,7 @@ class OutputWrapper(TextIOBase):
         else:
             self._style_func = lambda x: x
 
-    def __init__(self, out, style_func=None, ending='\n'):
+    def __init__(self, out, ending='\n'):
         self._out = out
         self.style_func = None
         self.ending = ending
@@ -223,7 +223,7 @@ class BaseCommand:
     requires_system_checks = True
     # Arguments, common to all commands, which aren't defined by the argument
     # parser.
-    base_stealth_options = ('skip_checks', 'stderr', 'stdout')
+    base_stealth_options = ('stderr', 'stdout')
     # Command-specific options not defined by the argument parser.
     stealth_options = ()
 
@@ -286,6 +286,11 @@ class BaseCommand:
             '--force-color', action='store_true',
             help='Force colorization of the command output.',
         )
+        if self.requires_system_checks:
+            parser.add_argument(
+                '--skip-checks', action='store_true',
+                help='Skip system checks.',
+            )
         self.add_arguments(parser)
         return parser
 
@@ -355,9 +360,9 @@ class BaseCommand:
         if options.get('stdout'):
             self.stdout = OutputWrapper(options['stdout'])
         if options.get('stderr'):
-            self.stderr = OutputWrapper(options['stderr'], self.stderr.style_func)
+            self.stderr = OutputWrapper(options['stderr'])
 
-        if self.requires_system_checks and not options.get('skip_checks'):
+        if self.requires_system_checks and not options['skip_checks']:
             self.check()
         if self.requires_migrations_checks:
             self.check_migrations()
@@ -373,21 +378,20 @@ class BaseCommand:
             self.stdout.write(output)
         return output
 
-    def _run_checks(self, **kwargs):
-        return checks.run_checks(**kwargs)
-
     def check(self, app_configs=None, tags=None, display_num_errors=False,
-              include_deployment_checks=False, fail_level=checks.ERROR):
+              include_deployment_checks=False, fail_level=checks.ERROR,
+              databases=None):
         """
         Use the system check framework to validate entire Django project.
         Raise CommandError for any serious message (error or critical errors).
         If there are only light messages (like warnings), print them to stderr
         and don't raise an exception.
         """
-        all_issues = self._run_checks(
+        all_issues = checks.run_checks(
             app_configs=app_configs,
             tags=tags,
             include_deployment_checks=include_deployment_checks,
+            databases=databases,
         )
 
         header, body, footer = "", "", ""
@@ -460,10 +464,10 @@ class BaseCommand:
             apps_waiting_migration = sorted({migration.app_label for migration, backwards in plan})
             self.stdout.write(
                 self.style.NOTICE(
-                    "\nYou have %(unpplied_migration_count)s unapplied migration(s). "
+                    "\nYou have %(unapplied_migration_count)s unapplied migration(s). "
                     "Your project may not work properly until you apply the "
                     "migrations for app(s): %(apps_waiting_migration)s." % {
-                        "unpplied_migration_count": len(plan),
+                        "unapplied_migration_count": len(plan),
                         "apps_waiting_migration": ", ".join(apps_waiting_migration),
                     }
                 )

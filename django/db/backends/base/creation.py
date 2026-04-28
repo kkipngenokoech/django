@@ -5,7 +5,7 @@ from io import StringIO
 from django.apps import apps
 from django.conf import settings
 from django.core import serializers
-from django.db import router
+from django.db import router, transaction
 
 # The prefix to put on the default database name when creating
 # the test database.
@@ -20,12 +20,8 @@ class BaseDatabaseCreation:
     def __init__(self, connection):
         self.connection = connection
 
-    @property
-    def _nodb_connection(self):
-        """
-        Used to be defined here, now moved to DatabaseWrapper.
-        """
-        return self.connection._nodb_connection
+    def _nodb_cursor(self):
+        return self.connection._nodb_cursor()
 
     def log(self, msg):
         sys.stderr.write(msg + os.linesep)
@@ -61,16 +57,17 @@ class BaseDatabaseCreation:
         settings.DATABASES[self.connection.alias]["NAME"] = test_database_name
         self.connection.settings_dict["NAME"] = test_database_name
 
-        # We report migrate messages at one level lower than that requested.
-        # This ensures we don't get flooded with messages during testing
-        # (unless you really ask to be flooded).
-        call_command(
-            'migrate',
-            verbosity=max(verbosity - 1, 0),
-            interactive=False,
-            database=self.connection.alias,
-            run_syncdb=True,
-        )
+        if self.connection.settings_dict['TEST']['MIGRATE']:
+            # We report migrate messages at one level lower than that
+            # requested. This ensures we don't get flooded with messages during
+            # testing (unless you really ask to be flooded).
+            call_command(
+                'migrate',
+                verbosity=max(verbosity - 1, 0),
+                interactive=False,
+                database=self.connection.alias,
+                run_syncdb=True,
+            )
 
         # We then serialize the current state of the database into a string
         # and store it on the connection. This slightly horrific process is so people
@@ -129,8 +126,9 @@ class BaseDatabaseCreation:
         the serialize_db_to_string() method.
         """
         data = StringIO(data)
-        for obj in serializers.deserialize("json", data, using=self.connection.alias):
-            obj.save()
+        with transaction.atomic(using=self.connection.alias):
+            for obj in serializers.deserialize("json", data, using=self.connection.alias):
+                obj.save()
 
     def _get_database_display_str(self, verbosity, database_name):
         """
@@ -165,7 +163,7 @@ class BaseDatabaseCreation:
             'suffix': self.sql_table_creation_suffix(),
         }
         # Create the test database and connect to it.
-        with self._nodb_connection.cursor() as cursor:
+        with self._nodb_cursor() as cursor:
             try:
                 self._execute_create_test_db(cursor, test_db_params, keepdb)
             except Exception as e:
@@ -271,7 +269,7 @@ class BaseDatabaseCreation:
         # ourselves. Connect to the previous database (not the test database)
         # to do so, because it's not allowed to delete a database while being
         # connected to it.
-        with self.connection._nodb_connection.cursor() as cursor:
+        with self._nodb_cursor() as cursor:
             cursor.execute("DROP DATABASE %s"
                            % self.connection.ops.quote_name(test_database_name))
 

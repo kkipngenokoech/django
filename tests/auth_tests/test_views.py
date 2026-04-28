@@ -134,6 +134,7 @@ class PasswordResetTest(AuthViewsTestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn('Email email context: "Hello!"', mail.outbox[0].body)
+        self.assertIn('http://custom.example.com/reset/', mail.outbox[0].body)
 
     def test_html_mail_template(self):
         """
@@ -304,6 +305,16 @@ class PasswordResetTest(AuthViewsTestCase):
         response = self.client.post(path, {'new_password1': 'anewpassword', 'new_password2': 'anewpassword'})
         self.assertRedirects(response, '/password_reset/', fetch_redirect_response=False)
 
+    def test_confirm_custom_reset_url_token(self):
+        url, path = self._test_confirm_start()
+        path = path.replace('/reset/', '/reset/custom/token/')
+        self.client.reset_url_token = 'set-passwordcustom'
+        response = self.client.post(
+            path,
+            {'new_password1': 'anewpassword', 'new_password2': 'anewpassword'},
+        )
+        self.assertRedirects(response, '/reset/done/', fetch_redirect_response=False)
+
     def test_confirm_login_post_reset(self):
         url, path = self._test_confirm_start()
         path = path.replace('/reset/', '/reset/post_reset_login/')
@@ -358,6 +369,16 @@ class PasswordResetTest(AuthViewsTestCase):
         token = response.resolver_match.kwargs['token']
         uuidb64 = response.resolver_match.kwargs['uidb64']
         self.assertRedirects(response, '/reset/%s/set-password/' % uuidb64)
+        self.assertEqual(client.session['_password_reset_token'], token)
+
+    def test_confirm_custom_reset_url_token_link_redirects_to_set_password_page(self):
+        url, path = self._test_confirm_start()
+        path = path.replace('/reset/', '/reset/custom/token/')
+        client = Client()
+        response = client.get(path)
+        token = response.resolver_match.kwargs['token']
+        uuidb64 = response.resolver_match.kwargs['uidb64']
+        self.assertRedirects(response, '/reset/custom/token/%s/set-passwordcustom/' % uuidb64)
         self.assertEqual(client.session['_password_reset_token'], token)
 
     def test_invalid_link_if_going_directly_to_the_final_reset_password_url(self):
@@ -423,7 +444,7 @@ class UUIDUserPasswordResetTest(CustomUserPasswordResetTest):
     def test_confirm_invalid_uuid(self):
         """A uidb64 that decodes to a non-UUID doesn't crash."""
         _, path = self._test_confirm_start()
-        invalid_uidb64 = urlsafe_base64_encode('INVALID_UUID'.encode())
+        invalid_uidb64 = urlsafe_base64_encode(b'INVALID_UUID')
         first, _uuidb64_, second = path.strip('/').split('/')
         response = self.client.get('/' + '/'.join((first, invalid_uidb64, second)) + '/')
         self.assertContains(response, 'The password reset link was invalid')
@@ -854,7 +875,7 @@ class LoginRedirectAuthenticatedUser(AuthViewsTestCase):
         self.login()
         msg = (
             "Redirection loop for authenticated user detected. Check that "
-            "your LOGIN_REDIRECT_URL doesn't point to a login page"
+            "your LOGIN_REDIRECT_URL doesn't point to a login page."
         )
         with self.settings(LOGIN_REDIRECT_URL=self.do_redirect_url):
             with self.assertRaisesMessage(ValueError, msg):
@@ -1152,7 +1173,7 @@ class ChangelistTests(AuthViewsTestCase):
         )
         self.assertRedirects(response, reverse('auth_test_admin:auth_user_changelist'))
         row = LogEntry.objects.latest('id')
-        self.assertEqual(row.get_change_message(), 'Changed email.')
+        self.assertEqual(row.get_change_message(), 'Changed Email address.')
 
     def test_user_not_change(self):
         response = self.client.post(
@@ -1241,7 +1262,7 @@ class ChangelistTests(AuthViewsTestCase):
         data['password'] = 'shouldnotchange'
         change_url = reverse('auth_test_admin:auth_user_change', args=(u.pk,))
         response = self.client.post(change_url, data)
-        self.assertRedirects(response, reverse('auth_test_admin:auth_user_changelist'))
+        self.assertEqual(response.status_code, 403)
         u.refresh_from_db()
         self.assertEqual(u.password, original_password)
 
