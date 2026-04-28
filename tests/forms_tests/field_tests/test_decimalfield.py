@@ -1,6 +1,7 @@
 import decimal
 
-from django.forms import DecimalField, NumberInput, ValidationError, Widget
+from django.core.exceptions import ValidationError
+from django.forms import DecimalField, NumberInput, Widget
 from django.test import SimpleTestCase, override_settings
 from django.utils import formats, translation
 
@@ -48,7 +49,7 @@ class DecimalFieldTest(FormFieldAssertionsMixin, SimpleTestCase):
         self.assertIsNone(f.min_value)
 
     def test_enter_a_number_error(self):
-        f = DecimalField(max_digits=4, decimal_places=2)
+        f = DecimalField(max_value=1, max_digits=4, decimal_places=2)
         values = (
             '-NaN', 'NaN', '+NaN',
             '-sNaN', 'sNaN', '+sNaN',

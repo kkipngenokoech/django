@@ -7,7 +7,7 @@ from unittest.mock import Mock
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
 from django.core import management
-from django.db import DEFAULT_DB_ALIAS, connections, router, transaction
+from django.db import DEFAULT_DB_ALIAS, router, transaction
 from django.db.models import signals
 from django.db.utils import ConnectionRouter
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -1344,14 +1344,14 @@ class RouterTestCase(TestCase):
         # If you create an object through a M2M relation, it will be
         # written to the write database, even if the original object
         # was on the read database
-        alice = dive.authors.create(name='Alice')
+        alice = dive.authors.create(name='Alice', pk=3)
         self.assertEqual(alice._state.db, 'default')
 
         # Same goes for get_or_create, regardless of whether getting or creating
         alice, created = dive.authors.get_or_create(name='Alice')
         self.assertEqual(alice._state.db, 'default')
 
-        bob, created = dive.authors.get_or_create(name='Bob')
+        bob, created = dive.authors.get_or_create(name='Bob', defaults={'pk': 4})
         self.assertEqual(bob._state.db, 'default')
 
     def test_o2o_cross_database_protection(self):
@@ -1632,7 +1632,7 @@ class PickleQuerySetTestCase(TestCase):
     databases = {'default', 'other'}
 
     def test_pickling(self):
-        for db in connections:
+        for db in self.databases:
             Book.objects.using(db).create(title='Dive into Python', published=datetime.date(2009, 5, 4))
             qs = Book.objects.all()
             self.assertEqual(qs.db, pickle.loads(pickle.dumps(qs)).db)
