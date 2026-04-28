@@ -43,6 +43,11 @@ TIME_ZONE = 'America/Chicago'
 # If you set this to True, Django will use timezone-aware datetimes.
 USE_TZ = False
 
+# RemovedInDjango50Warning: It's a transitional setting helpful in migrating
+# from pytz tzinfo to ZoneInfo(). Set True to continue using pytz tzinfo
+# objects during the Django 4.x release cycle.
+USE_DEPRECATED_PYTZ = False
+
 # Language code for this installation. All choices can be found here:
 # http://www.i18nguy.com/unicode/language-identifiers.html
 LANGUAGE_CODE = 'en-us'
@@ -93,6 +98,7 @@ LANGUAGES = [
     ('hy', gettext_noop('Armenian')),
     ('ia', gettext_noop('Interlingua')),
     ('id', gettext_noop('Indonesian')),
+    ('ig', gettext_noop('Igbo')),
     ('io', gettext_noop('Ido')),
     ('is', gettext_noop('Icelandic')),
     ('it', gettext_noop('Italian')),
@@ -111,6 +117,7 @@ LANGUAGES = [
     ('ml', gettext_noop('Malayalam')),
     ('mn', gettext_noop('Mongolian')),
     ('mr', gettext_noop('Marathi')),
+    ('ms', gettext_noop('Malay')),
     ('my', gettext_noop('Burmese')),
     ('nb', gettext_noop('Norwegian Bokmål')),
     ('ne', gettext_noop('Nepali')),
@@ -132,7 +139,9 @@ LANGUAGES = [
     ('sw', gettext_noop('Swahili')),
     ('ta', gettext_noop('Tamil')),
     ('te', gettext_noop('Telugu')),
+    ('tg', gettext_noop('Tajik')),
     ('th', gettext_noop('Thai')),
+    ('tk', gettext_noop('Turkmen')),
     ('tr', gettext_noop('Turkish')),
     ('tt', gettext_noop('Tatar')),
     ('udm', gettext_noop('Udmurt')),
@@ -164,7 +173,7 @@ LANGUAGE_COOKIE_SAMESITE = None
 
 # If you set this to True, Django will format dates, numbers and calendars
 # according to user current locale.
-USE_L10N = False
+USE_L10N = True
 
 # Not-necessarily-technical managers of the site. They get broken link
 # notifications and other various emails.
@@ -411,6 +420,9 @@ THOUSAND_SEPARATOR = ','
 DEFAULT_TABLESPACE = ''
 DEFAULT_INDEX_TABLESPACE = ''
 
+# Default primary key field type.
+DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
+
 # Default X-Frame-Options header value
 X_FRAME_OPTIONS = 'DENY'
 
@@ -461,11 +473,11 @@ SESSION_COOKIE_PATH = '/'
 # Whether to use the HttpOnly flag.
 SESSION_COOKIE_HTTPONLY = True
 # Whether to set the flag restricting cookie leaks on cross-site requests.
-# This can be 'Lax', 'Strict', or None to disable the flag.
+# This can be 'Lax', 'Strict', 'None', or False to disable the flag.
 SESSION_COOKIE_SAMESITE = 'Lax'
 # Whether to save the session data on every request.
 SESSION_SAVE_EVERY_REQUEST = False
-# Whether a user's session cookie expires when the Web browser is closed.
+# Whether a user's session cookie expires when the web browser is closed.
 SESSION_EXPIRE_AT_BROWSER_CLOSE = False
 # The module to store session data
 SESSION_ENGINE = 'django.contrib.sessions.backends.db'
@@ -503,9 +515,6 @@ LOGIN_REDIRECT_URL = '/accounts/profile/'
 
 LOGOUT_REDIRECT_URL = None
 
-# The number of days a password reset link is valid for
-PASSWORD_RESET_TIMEOUT_DAYS = 3
-
 # The number of seconds a password reset link is valid for (default: 3 days).
 PASSWORD_RESET_TIMEOUT = 60 * 60 * 24 * 3
 
@@ -517,6 +526,7 @@ PASSWORD_HASHERS = [
     'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
     'django.contrib.auth.hashers.Argon2PasswordHasher',
     'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',
+    'django.contrib.auth.hashers.ScryptPasswordHasher',
 ]
 
 AUTH_PASSWORD_VALIDATORS = []
@@ -546,6 +556,10 @@ CSRF_COOKIE_SAMESITE = 'Lax'
 CSRF_HEADER_NAME = 'HTTP_X_CSRFTOKEN'
 CSRF_TRUSTED_ORIGINS = []
 CSRF_USE_SESSIONS = False
+
+# Whether to mask CSRF cookie value. It's a transitional setting helpful in
+# migrating multiple instance of the same project to Django 4.1+.
+CSRF_COOKIE_MASKED = False
 
 ############
 # MESSAGES #
@@ -631,8 +645,8 @@ SILENCED_SYSTEM_CHECKS = []
 #######################
 # SECURITY MIDDLEWARE #
 #######################
-SECURE_BROWSER_XSS_FILTER = False
 SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_CROSS_ORIGIN_OPENER_POLICY = 'same-origin'
 SECURE_HSTS_INCLUDE_SUBDOMAINS = False
 SECURE_HSTS_PRELOAD = False
 SECURE_HSTS_SECONDS = 0
