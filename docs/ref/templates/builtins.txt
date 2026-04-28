@@ -611,10 +611,11 @@ you should use::
 ``ifequal`` and ``ifnotequal``
 ------------------------------
 
+.. deprecated:: 3.1
+
 ``{% ifequal a b %} ... {% endifequal %}`` is an obsolete way to write
 ``{% if a == b %} ... {% endif %}``. Likewise, ``{% ifnotequal a b %} ...
 {% endifnotequal %}`` is superseded by ``{% if a != b %} ... {% endif %}``.
-The ``ifequal`` and ``ifnotequal`` tags will be deprecated in a future release.
 
 .. templatetag:: ifchanged
 
@@ -688,6 +689,10 @@ the variable ``template_name``::
 The variable may also be any object with a ``render()`` method that accepts a
 context. This allows you to reference a compiled ``Template`` in your context.
 
+Additionally, the variable may be an iterable of template names, in which case
+the first that can be loaded will be used, as per
+:func:`~django.template.loader.select_template`.
+
 An included template is rendered within the context of the template that
 includes it. This example produces the output ``"Hello, John!"``:
 
@@ -723,6 +728,10 @@ available to the included template::
     that includes blocks from another will contain blocks that have *already
     been evaluated and rendered* - not blocks that can be overridden by, for
     example, an extending template.
+
+.. versionchanged:: 3.1
+
+    Support for iterables of template names was added.
 
 .. templatetag:: load
 
@@ -1635,7 +1644,7 @@ For example::
 
     {{ value|escapejs }}
 
-If ``value`` is ``"testing\r\njavascript \'string" <b>escaping</b>"``,
+If ``value`` is ``"testing\r\njavascript 'string\" <b>escaping</b>"``,
 the output will be ``"testing\\u000D\\u000Ajavascript \\u0027string\\u0022 \\u003Cb\\u003Eescaping\\u003C/b\\u003E"``.
 
 .. templatefilter:: filesizeformat

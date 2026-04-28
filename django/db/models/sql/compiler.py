@@ -16,9 +16,16 @@ from django.db.models.sql.query import Query, get_order_dir
 from django.db.transaction import TransactionManagementError
 from django.utils.functional import cached_property
 from django.utils.hashable import make_hashable
+from django.utils.regex_helper import _lazy_re_compile
 
 
 class SQLCompiler:
+    # Multiline ordering SQL clause may appear from RawSQL.
+    ordering_parts = _lazy_re_compile(
+        r'^(.*)\s(?:ASC|DESC).*',
+        re.MULTILINE | re.DOTALL,
+    )
+
     def __init__(self, query, connection, using):
         self.query = query
         self.connection = connection
@@ -31,8 +38,6 @@ class SQLCompiler:
         self.select = None
         self.annotation_col_map = None
         self.klass_info = None
-        # Multiline ordering SQL clause may appear from RawSQL.
-        self.ordering_parts = re.compile(r'^(.*)\s(ASC|DESC)(.*)', re.MULTILINE | re.DOTALL)
         self._meta_ordering = None
 
     def setup_query(self):
@@ -134,6 +139,7 @@ class SQLCompiler:
 
         for expr in expressions:
             sql, params = self.compile(expr)
+            sql, params = expr.select_format(self, sql, params)
             params_hash = make_hashable(params)
             if (sql, params_hash) not in seen:
                 result.append((sql, params))
@@ -378,7 +384,7 @@ class SQLCompiler:
             # not taken into account so we strip it. When this entire method
             # is refactored into expressions, then we can check each part as we
             # generate it.
-            without_ordering = self.ordering_parts.search(sql).group(1)
+            without_ordering = self.ordering_parts.search(sql)[1]
             params_hash = make_hashable(params)
             if (without_ordering, params_hash) in seen:
                 continue
@@ -391,7 +397,7 @@ class SQLCompiler:
         if self.query.distinct and not self.query.distinct_fields:
             select_sql = [t[1] for t in select]
             for expr, (sql, params, is_ref) in order_by:
-                without_ordering = self.ordering_parts.search(sql).group(1)
+                without_ordering = self.ordering_parts.search(sql)[1]
                 if not is_ref and (without_ordering, params) not in select_sql:
                     extra_select.append((expr, (without_ordering, params), None))
         return extra_select
@@ -709,9 +715,9 @@ class SQLCompiler:
         field, targets, alias, joins, path, opts, transform_function = self._setup_joins(pieces, opts, alias)
 
         # If we get to this point and the field is a relation to another model,
-        # append the default ordering for that model unless the attribute name
-        # of the field is specified.
-        if field.is_relation and opts.ordering and getattr(field, 'attname', None) != name:
+        # append the default ordering for that model unless it is the pk
+        # shortcut or the attribute name of the field that is specified.
+        if field.is_relation and opts.ordering and getattr(field, 'attname', None) != name and name != 'pk':
             # Firstly, avoid infinite loops.
             already_seen = already_seen or set()
             join_tuple = tuple(getattr(self.query.alias_map[j], 'join_cols', None) for j in joins)
@@ -1385,10 +1391,10 @@ class SQLInsertCompiler(SQLCompiler):
                 return self.connection.ops.fetch_returned_insert_rows(cursor)
             if self.connection.features.can_return_columns_from_insert:
                 assert len(self.query.objs) == 1
-                return self.connection.ops.fetch_returned_insert_columns(cursor, self.returning_params)
-            return [self.connection.ops.last_insert_id(
+                return [self.connection.ops.fetch_returned_insert_columns(cursor, self.returning_params)]
+            return [(self.connection.ops.last_insert_id(
                 cursor, self.query.get_meta().db_table, self.query.get_meta().pk.column
-            )]
+            ),)]
 
 
 class SQLDeleteCompiler(SQLCompiler):

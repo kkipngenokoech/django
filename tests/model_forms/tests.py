@@ -5,10 +5,9 @@ from unittest import mock, skipUnless
 
 from django import forms
 from django.core.exceptions import (
-    NON_FIELD_ERRORS, FieldError, ImproperlyConfigured,
+    NON_FIELD_ERRORS, FieldError, ImproperlyConfigured, ValidationError,
 )
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.core.validators import ValidationError
 from django.db import connection, models
 from django.db.models.query import EmptyQuerySet
 from django.forms.models import (
@@ -874,15 +873,15 @@ class IncompleteCategoryFormWithExclude(forms.ModelForm):
 class ValidationTest(SimpleTestCase):
     def test_validates_with_replaced_field_not_specified(self):
         form = IncompleteCategoryFormWithFields(data={'name': 'some name', 'slug': 'some-slug'})
-        assert form.is_valid()
+        self.assertIs(form.is_valid(), True)
 
     def test_validates_with_replaced_field_excluded(self):
         form = IncompleteCategoryFormWithExclude(data={'name': 'some name', 'slug': 'some-slug'})
-        assert form.is_valid()
+        self.assertIs(form.is_valid(), True)
 
     def test_notrequired_overrides_notblank(self):
         form = CustomWriterForm({})
-        assert form.is_valid()
+        self.assertIs(form.is_valid(), True)
 
 
 class UniqueTest(TestCase):
@@ -2619,7 +2618,7 @@ class CustomCleanTests(TestCase):
 
             def clean(self):
                 if not self.cleaned_data['left'] == self.cleaned_data['right']:
-                    raise forms.ValidationError('Left and right should be equal')
+                    raise ValidationError('Left and right should be equal')
                 return self.cleaned_data
 
         form = TripleFormWithCleanOverride({'left': 1, 'middle': 2, 'right': 1})

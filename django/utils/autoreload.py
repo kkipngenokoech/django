@@ -21,7 +21,7 @@ from django.utils.functional import cached_property
 from django.utils.version import get_version_tuple
 
 autoreload_started = Signal()
-file_changed = Signal(providing_args=['file_path', 'kind'])
+file_changed = Signal()
 
 DJANGO_AUTORELOAD_ENV = 'RUN_MAIN'
 
@@ -145,7 +145,7 @@ def iter_modules_and_files(modules, extra_files):
             continue
         except ValueError as e:
             # Network filesystems may return null bytes in file paths.
-            logger.debug('"%s" raised when resolving path: "%s"' % (str(e), path))
+            logger.debug('"%s" raised when resolving path: "%s"', e, path)
             continue
         results.add(resolved_path)
     return frozenset(results)
