@@ -9,15 +9,18 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
+from django.conf import settings
+from django.core.servers.basehttp import WSGIServer
 from django.test import LiveServerTestCase, override_settings
+from django.test.testcases import LiveServerThread, QuietWSGIRequestHandler
 
 from .models import Person
 
 TEST_ROOT = os.path.dirname(__file__)
 TEST_SETTINGS = {
-    'MEDIA_URL': '/media/',
+    'MEDIA_URL': 'media/',
     'MEDIA_ROOT': os.path.join(TEST_ROOT, 'media'),
-    'STATIC_URL': '/static/',
+    'STATIC_URL': 'static/',
     'STATIC_ROOT': os.path.join(TEST_ROOT, 'static'),
 }
 
@@ -37,6 +40,42 @@ class LiveServerBase(LiveServerTestCase):
         return urlopen(self.live_server_url + url)
 
 
+class FailingLiveServerThread(LiveServerThread):
+    def _create_server(self):
+        raise RuntimeError('Error creating server.')
+
+
+class LiveServerTestCaseSetupTest(LiveServerBase):
+    server_thread_class = FailingLiveServerThread
+
+    @classmethod
+    def check_allowed_hosts(cls, expected):
+        if settings.ALLOWED_HOSTS != expected:
+            raise RuntimeError(f'{settings.ALLOWED_HOSTS} != {expected}')
+
+    @classmethod
+    def setUpClass(cls):
+        cls.check_allowed_hosts(['testserver'])
+        try:
+            super().setUpClass()
+        except RuntimeError:
+            # LiveServerTestCase's change to ALLOWED_HOSTS should be reverted.
+            cls.check_allowed_hosts(['testserver'])
+        else:
+            raise RuntimeError('Server did not fail.')
+        cls.set_up_called = True
+
+    @classmethod
+    def tearDownClass(cls):
+        # Make tearDownClass() a no-op because setUpClass() was already cleaned
+        # up, and because the error inside setUpClass() was handled, which will
+        # cause tearDownClass() to be called when it normally wouldn't.
+        pass
+
+    def test_set_up_class(self):
+        self.assertIs(self.set_up_called, True)
+
+
 class LiveServerAddress(LiveServerBase):
 
     @classmethod
@@ -48,6 +87,15 @@ class LiveServerAddress(LiveServerBase):
     def test_live_server_url_is_class_property(self):
         self.assertIsInstance(self.live_server_url_test[0], str)
         self.assertEqual(self.live_server_url_test[0], self.live_server_url)
+
+
+class LiveServerSingleThread(LiveServerThread):
+    def _create_server(self):
+        return WSGIServer((self.host, self.port), QuietWSGIRequestHandler, allow_reuse_address=False)
+
+
+class SingleThreadLiveServerTestCase(LiveServerTestCase):
+    server_thread_class = LiveServerSingleThread
 
 
 class LiveServerViews(LiveServerBase):
@@ -162,6 +210,32 @@ class LiveServerViews(LiveServerBase):
             self.assertIn(b"QUERY_STRING: 'q=%D1%82%D0%B5%D1%81%D1%82'", f.read())
 
 
+@override_settings(ROOT_URLCONF='servers.urls')
+class SingleTreadLiveServerViews(SingleThreadLiveServerTestCase):
+    available_apps = ['servers']
+
+    def test_closes_connection_with_content_length(self):
+        """
+        Contrast to
+        LiveServerViews.test_keep_alive_on_connection_with_content_length().
+        Persistent connections require threading server.
+        """
+        conn = HTTPConnection(
+            SingleTreadLiveServerViews.server_thread.host,
+            SingleTreadLiveServerViews.server_thread.port,
+            timeout=1,
+        )
+        try:
+            conn.request('GET', '/example_view/', headers={'Connection': 'keep-alive'})
+            response = conn.getresponse()
+            self.assertTrue(response.will_close)
+            self.assertEqual(response.read(), b'example view')
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.getheader('Connection'), 'close')
+        finally:
+            conn.close()
+
+
 class LiveServerDatabase(LiveServerBase):
 
     def test_fixtures_loaded(self):
@@ -213,7 +287,7 @@ class LiveServerPort(LiveServerBase):
 
     def test_specified_port_bind(self):
         """LiveServerTestCase.port customizes the server's port."""
-        TestCase = type(str('TestCase'), (LiveServerBase,), {})
+        TestCase = type('TestCase', (LiveServerBase,), {})
         # Find an open port and tell TestCase to use it.
         s = socket.socket()
         s.bind(('', 0))
@@ -229,8 +303,8 @@ class LiveServerPort(LiveServerBase):
             TestCase.tearDownClass()
 
 
-class LiverServerThreadedTests(LiveServerBase):
-    """If LiverServerTestCase isn't threaded, these tests will hang."""
+class LiveServerThreadedTests(LiveServerBase):
+    """If LiveServerTestCase isn't threaded, these tests will hang."""
 
     def test_view_calls_subview(self):
         url = '/subview_calling_view/?%s' % urlencode({'url': self.live_server_url})

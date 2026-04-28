@@ -4,7 +4,7 @@ import os
 import sys
 
 from django.apps import apps
-from django.db.models.fields import NOT_PROVIDED
+from django.db.models import NOT_PROVIDED
 from django.utils import timezone
 
 from .loader import MigrationLoader
@@ -44,7 +44,6 @@ class MigrationQuestioner:
         except ImportError:
             return self.defaults.get("ask_initial", False)
         else:
-            # getattr() needed on PY36 and older (replace with attribute access).
             if getattr(migrations_module, "__file__", None):
                 filenames = os.listdir(os.path.dirname(migrations_module.__file__))
             elif hasattr(migrations_module, "__path__"):
