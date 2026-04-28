@@ -36,7 +36,7 @@ class ChoicesMeta(enum.EnumMeta):
     def __contains__(cls, member):
         if not isinstance(member, enum.Enum):
             # Allow non-enums to match against member values.
-            return member in {x.value for x in cls}
+            return any(x.value == member for x in cls)
         return super().__contains__(member)
 
     @property
@@ -60,7 +60,13 @@ class ChoicesMeta(enum.EnumMeta):
 
 class Choices(enum.Enum, metaclass=ChoicesMeta):
     """Class for creating enumerated choices."""
-    pass
+
+    def __str__(self):
+        """
+        Use value when cast to str, so that Choices set as model instance
+        attributes are rendered as expected in templates and similar contexts.
+        """
+        return str(self.value)
 
 
 class IntegerChoices(int, Choices):
