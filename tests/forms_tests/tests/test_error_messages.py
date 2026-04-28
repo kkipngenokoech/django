@@ -1,10 +1,11 @@
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.forms import (
     BooleanField, CharField, ChoiceField, DateField, DateTimeField,
     DecimalField, EmailField, FileField, FloatField, Form,
     GenericIPAddressField, IntegerField, ModelChoiceField,
     ModelMultipleChoiceField, MultipleChoiceField, RegexField,
-    SplitDateTimeField, TimeField, URLField, ValidationError, utils,
+    SplitDateTimeField, TimeField, URLField, utils,
 )
 from django.template import Context, Template
 from django.test import SimpleTestCase, TestCase
@@ -276,7 +277,7 @@ class FormsErrorMessagesTestCase(SimpleTestCase, AssertFormErrorsMixin):
         self.assertHTMLEqual(
             t.render(Context({'form': f})),
             '<ul class="errorlist"><li>field<ul class="errorlist">'
-            '<li>&quot;&lt;script&gt;&quot; is not a valid value.</li>'
+            '<li>“&lt;script&gt;” is not a valid value.</li>'
             '</ul></li></ul>'
         )
 
@@ -301,7 +302,7 @@ class ModelChoiceFieldErrorMessagesTestCase(TestCase, AssertFormErrorsMixin):
         e = {
             'required': 'REQUIRED',
             'invalid_choice': '%(value)s IS INVALID CHOICE',
-            'list': 'NOT A LIST OF VALUES',
+            'invalid_list': 'NOT A LIST OF VALUES',
         }
         f = ModelMultipleChoiceField(queryset=ChoiceModel.objects.all(), error_messages=e)
         self.assertFormErrors(['REQUIRED'], f.clean, '')
