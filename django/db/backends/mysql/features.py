@@ -14,12 +14,6 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     supports_forward_references = False
     supports_regex_backreferencing = False
     supports_date_lookup_using_string = False
-    can_introspect_autofield = True
-    can_introspect_binary_field = False
-    can_introspect_duration_field = False
-    can_introspect_small_integer_field = True
-    can_introspect_positive_integer_field = True
-    introspected_boolean_field_type = 'IntegerField'
     supports_index_column_ordering = False
     supports_timezones = False
     requires_explicit_null_ordering_when_grouping = True
@@ -69,6 +63,16 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     def can_introspect_foreign_keys(self):
         "Confirm support for introspected foreign keys"
         return self._mysql_storage_engine != 'MyISAM'
+
+    @cached_property
+    def introspected_field_types(self):
+        return {
+            **super().introspected_field_types,
+            'BinaryField': 'TextField',
+            'BooleanField': 'IntegerField',
+            'DurationField': 'BigIntegerField',
+            'GenericIPAddressField': 'CharField',
+        }
 
     @cached_property
     def can_return_columns_from_insert(self):
@@ -123,11 +127,6 @@ class DatabaseFeatures(BaseDatabaseFeatures):
         if self.connection.mysql_is_mariadb:
             return self.connection.mysql_version >= (10, 3, 0)
         return self.connection.mysql_version >= (8, 0, 1)
-
-    @cached_property
-    def needs_explain_extended(self):
-        # EXTENDED is deprecated (and not required) in MySQL 5.7.
-        return not self.connection.mysql_is_mariadb and self.connection.mysql_version < (5, 7)
 
     @cached_property
     def supports_explain_analyze(self):

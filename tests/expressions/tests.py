@@ -511,6 +511,25 @@ class BasicExpressionsTests(TestCase):
             Employee.objects.exclude(company_point_of_contact_set=None).values('pk')
         )
 
+    def test_subquery_eq(self):
+        qs = Employee.objects.annotate(
+            is_ceo=Exists(Company.objects.filter(ceo=OuterRef('pk'))),
+            is_point_of_contact=Exists(
+                Company.objects.filter(point_of_contact=OuterRef('pk')),
+            ),
+            small_company=Exists(
+                queryset=Company.objects.filter(num_employees__lt=200),
+            ),
+        ).filter(is_ceo=True, is_point_of_contact=False, small_company=True)
+        self.assertNotEqual(
+            qs.query.annotations['is_ceo'],
+            qs.query.annotations['is_point_of_contact'],
+        )
+        self.assertNotEqual(
+            qs.query.annotations['is_ceo'],
+            qs.query.annotations['small_company'],
+        )
+
     def test_in_subquery(self):
         # This is a contrived test (and you really wouldn't write this query),
         # but it is a succinct way to test the __in=Subquery() construct.
@@ -1809,3 +1828,13 @@ class CombinableTests(SimpleTestCase):
     def test_reversed_or(self):
         with self.assertRaisesMessage(NotImplementedError, self.bitwise_msg):
             object() | Combinable()
+
+
+class ExpressionWrapperTests(SimpleTestCase):
+    def test_empty_group_by(self):
+        expr = ExpressionWrapper(Value(3), output_field=IntegerField())
+        self.assertEqual(expr.get_group_by_cols(alias=None), [])
+
+    def test_non_empty_group_by(self):
+        expr = ExpressionWrapper(Lower(Value('f')), output_field=IntegerField())
+        self.assertEqual(expr.get_group_by_cols(alias=None), [expr.expression])
