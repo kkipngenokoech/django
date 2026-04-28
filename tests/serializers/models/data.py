@@ -4,9 +4,9 @@ The following classes are for testing basic data marshalling, including
 NULL values, where allowed.
 The basic idea is to have a model for each Django data type.
 """
-from django.contrib.contenttypes.fields import (
-    GenericForeignKey, GenericRelation,
-)
+import uuid
+
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
@@ -60,6 +60,7 @@ class IntegerData(models.Model):
 class BigIntegerData(models.Model):
     data = models.BigIntegerField(null=True)
 
+
 # class ImageData(models.Model):
 #    data = models.ImageField(null=True)
 
@@ -68,8 +69,8 @@ class GenericIPAddressData(models.Model):
     data = models.GenericIPAddressField(null=True)
 
 
-class NullBooleanData(models.Model):
-    data = models.NullBooleanField(null=True)
+class PositiveBigIntegerData(models.Model):
+    data = models.PositiveBigIntegerField(null=True)
 
 
 class PositiveIntegerData(models.Model):
@@ -98,6 +99,7 @@ class TimeData(models.Model):
 
 class Tag(models.Model):
     """A tag on an item."""
+
     data = models.SlugField()
     content_type = models.ForeignKey(ContentType, models.CASCADE)
     object_id = models.PositiveIntegerField()
@@ -113,6 +115,7 @@ class GenericData(models.Model):
 
     tags = GenericRelation(Tag)
 
+
 # The following test classes are all for validation
 # of related objects; in particular, forward, backward,
 # and self references.
@@ -125,7 +128,7 @@ class Anchor(models.Model):
     data = models.CharField(max_length=30)
 
     class Meta:
-        ordering = ('id',)
+        ordering = ("id",)
 
 
 class UniqueAnchor(models.Model):
@@ -149,15 +152,15 @@ class O2OData(models.Model):
 
 
 class FKSelfData(models.Model):
-    data = models.ForeignKey('self', models.CASCADE, null=True)
+    data = models.ForeignKey("self", models.CASCADE, null=True)
 
 
 class M2MSelfData(models.Model):
-    data = models.ManyToManyField('self', symmetrical=False)
+    data = models.ManyToManyField("self", symmetrical=False)
 
 
 class FKDataToField(models.Model):
-    data = models.ForeignKey(UniqueAnchor, models.SET_NULL, null=True, to_field='data')
+    data = models.ForeignKey(UniqueAnchor, models.SET_NULL, null=True, to_field="data")
 
 
 class FKDataToO2O(models.Model):
@@ -165,13 +168,14 @@ class FKDataToO2O(models.Model):
 
 
 class M2MIntermediateData(models.Model):
-    data = models.ManyToManyField(Anchor, through='Intermediate')
+    data = models.ManyToManyField(Anchor, through="Intermediate")
 
 
 class Intermediate(models.Model):
     left = models.ForeignKey(M2MIntermediateData, models.CASCADE)
     right = models.ForeignKey(Anchor, models.CASCADE)
     extra = models.CharField(max_length=30, blank=True, default="doesn't matter")
+
 
 # The following test classes are for validating the
 # deserialization of objects that use a user-defined
@@ -204,6 +208,7 @@ class DecimalPKData(models.Model):
 class EmailPKData(models.Model):
     data = models.EmailField(primary_key=True)
 
+
 # class FilePKData(models.Model):
 #    data = models.FileField(primary_key=True)
 
@@ -218,6 +223,7 @@ class FloatPKData(models.Model):
 
 class IntegerPKData(models.Model):
     data = models.IntegerField(primary_key=True)
+
 
 # class ImagePKData(models.Model):
 #    data = models.ImageField(primary_key=True)
@@ -242,6 +248,7 @@ class SlugPKData(models.Model):
 class SmallPKData(models.Model):
     data = models.SmallIntegerField(primary_key=True)
 
+
 # class TextPKData(models.Model):
 #     data = models.TextField(primary_key=True)
 
@@ -251,6 +258,10 @@ class SmallPKData(models.Model):
 
 class UUIDData(models.Model):
     data = models.UUIDField(primary_key=True)
+
+
+class UUIDDefaultData(models.Model):
+    data = models.UUIDField(primary_key=True, default=uuid.uuid4)
 
 
 class FKToUUID(models.Model):
@@ -276,6 +287,7 @@ class ModifyingSaveData(models.Model):
         """
         self.data = 666
         super().save(*args, **kwargs)
+
 
 # Tests for serialization of models using inheritance.
 # Regression for #7202, #7350
