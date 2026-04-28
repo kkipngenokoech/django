@@ -51,13 +51,13 @@ class CommonMiddlewareTest(SimpleTestCase):
         Matches to explicit slashless URLs should go unmolested.
         """
         def get_response(req):
-            return HttpResponse("Here's the text of the Web page.")
+            return HttpResponse("Here's the text of the web page.")
 
         request = self.rf.get('/noslash')
         self.assertIsNone(CommonMiddleware(get_response).process_request(request))
         self.assertEqual(
             CommonMiddleware(get_response)(request).content,
-            b"Here's the text of the Web page.",
+            b"Here's the text of the web page.",
         )
 
     @override_settings(APPEND_SLASH=True)
@@ -128,6 +128,17 @@ class CommonMiddlewareTest(SimpleTestCase):
         self.assertEqual(CommonMiddleware(get_response_404)(request).status_code, 404)
 
     @override_settings(APPEND_SLASH=True)
+    def test_append_slash_opt_out(self):
+        """
+        Views marked with @no_append_slash should be left alone.
+        """
+        request = self.rf.get('/sensitive_fbv')
+        self.assertEqual(CommonMiddleware(get_response_404)(request).status_code, 404)
+
+        request = self.rf.get('/sensitive_cbv')
+        self.assertEqual(CommonMiddleware(get_response_404)(request).status_code, 404)
+
+    @override_settings(APPEND_SLASH=True)
     def test_append_slash_quoted(self):
         """
         URLs which require quoting should be redirected to their slash version.
@@ -195,12 +206,12 @@ class CommonMiddlewareTest(SimpleTestCase):
         Matches to explicit slashless URLs should go unmolested.
         """
         def get_response(req):
-            return HttpResponse("Web content")
+            return HttpResponse("web content")
 
         request = self.rf.get('/customurlconf/noslash')
         request.urlconf = 'middleware.extra_urls'
         self.assertIsNone(CommonMiddleware(get_response).process_request(request))
-        self.assertEqual(CommonMiddleware(get_response)(request).content, b'Web content')
+        self.assertEqual(CommonMiddleware(get_response)(request).content, b'web content')
 
     @override_settings(APPEND_SLASH=True)
     def test_append_slash_slashless_unknown_custom_urlconf(self):

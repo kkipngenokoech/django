@@ -2,6 +2,8 @@ import uuid
 
 from django.conf import settings
 from django.db.backends.base.operations import BaseDatabaseOperations
+from django.db.backends.utils import split_tzname_delta
+from django.db.models import Exists, ExpressionWrapper, Lookup
 from django.utils import timezone
 from django.utils.encoding import force_str
 
@@ -55,7 +57,8 @@ class DatabaseOperations(BaseDatabaseOperations):
             # EXTRACT returns 1-53 based on ISO-8601 for the week number.
             return "EXTRACT(%s FROM %s)" % (lookup_type.upper(), field_name)
 
-    def date_trunc_sql(self, lookup_type, field_name):
+    def date_trunc_sql(self, lookup_type, field_name, tzname=None):
+        field_name = self._convert_field_to_tz(field_name, tzname)
         fields = {
             'year': '%%Y-01-01',
             'month': '%%Y-%%m-01',
@@ -75,14 +78,11 @@ class DatabaseOperations(BaseDatabaseOperations):
             return "DATE(%s)" % (field_name)
 
     def _prepare_tzname_delta(self, tzname):
-        if '+' in tzname:
-            return tzname[tzname.find('+'):]
-        elif '-' in tzname:
-            return tzname[tzname.find('-'):]
-        return tzname
+        tzname, sign, offset = split_tzname_delta(tzname)
+        return f'{sign}{offset}' if offset else tzname
 
     def _convert_field_to_tz(self, field_name, tzname):
-        if settings.USE_TZ and self.connection.timezone_name != tzname:
+        if tzname and settings.USE_TZ and self.connection.timezone_name != tzname:
             field_name = "CONVERT_TZ(%s, '%s', '%s')" % (
                 field_name,
                 self.connection.timezone_name,
@@ -128,7 +128,8 @@ class DatabaseOperations(BaseDatabaseOperations):
             sql = "CAST(DATE_FORMAT(%s, '%s') AS DATETIME)" % (field_name, format_str)
         return sql
 
-    def time_trunc_sql(self, lookup_type, field_name):
+    def time_trunc_sql(self, lookup_type, field_name, tzname=None):
+        field_name = self._convert_field_to_tz(field_name, tzname)
         fields = {
             'hour': '%%H:00:00',
             'minute': '%%H:%%i:00',
@@ -158,6 +159,9 @@ class DatabaseOperations(BaseDatabaseOperations):
         """
         return [(None, ("NULL", [], False))]
 
+    def adapt_decimalfield_value(self, value, max_digits=None, decimal_places=None):
+        return value
+
     def last_executed_query(self, cursor, sql, params):
         # With MySQLdb, cursor objects have an (undocumented) "_executed"
         # attribute where the exact query sent to the database is saved.
@@ -173,9 +177,6 @@ class DatabaseOperations(BaseDatabaseOperations):
         if name.startswith("`") and name.endswith("`"):
             return name  # Quoting once is enough.
         return "`%s`" % name
-
-    def random_function_sql(self):
-        return 'RAND()'
 
     def return_insert_columns(self, fields):
         # MySQL and MariaDB < 10.5.0 don't support an INSERT...RETURNING
@@ -263,7 +264,7 @@ class DatabaseOperations(BaseDatabaseOperations):
         if timezone.is_aware(value):
             raise ValueError("MySQL backend does not support timezone-aware times.")
 
-        return str(value)
+        return value.isoformat(timespec='microseconds')
 
     def max_name_length(self):
         return 64
@@ -292,7 +293,7 @@ class DatabaseOperations(BaseDatabaseOperations):
     def get_db_converters(self, expression):
         converters = super().get_db_converters(expression)
         internal_type = expression.output_field.get_internal_type()
-        if internal_type in ['BooleanField', 'NullBooleanField']:
+        if internal_type == 'BooleanField':
             converters.append(self.convert_booleanfield_value)
         elif internal_type == 'DateTimeField':
             if settings.USE_TZ:
@@ -376,3 +377,14 @@ class DatabaseOperations(BaseDatabaseOperations):
             ):
                 lookup = 'JSON_UNQUOTE(%s)'
         return lookup
+
+    def conditional_expression_supported_in_where_clause(self, expression):
+        # MySQL ignores indexes with boolean fields unless they're compared
+        # directly to a boolean value.
+        if isinstance(expression, (Exists, Lookup)):
+            return True
+        if isinstance(expression, ExpressionWrapper) and expression.conditional:
+            return self.conditional_expression_supported_in_where_clause(expression.expression)
+        if getattr(expression, 'conditional', False):
+            return False
+        return super().conditional_expression_supported_in_where_clause(expression)

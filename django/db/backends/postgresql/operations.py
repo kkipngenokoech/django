@@ -2,6 +2,7 @@ from psycopg2.extras import Inet
 
 from django.conf import settings
 from django.db.backends.base.operations import BaseDatabaseOperations
+from django.db.backends.utils import split_tzname_delta
 
 
 class DatabaseOperations(BaseDatabaseOperations):
@@ -38,19 +39,20 @@ class DatabaseOperations(BaseDatabaseOperations):
         else:
             return "EXTRACT('%s' FROM %s)" % (lookup_type, field_name)
 
-    def date_trunc_sql(self, lookup_type, field_name):
+    def date_trunc_sql(self, lookup_type, field_name, tzname=None):
+        field_name = self._convert_field_to_tz(field_name, tzname)
         # https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-TRUNC
         return "DATE_TRUNC('%s', %s)" % (lookup_type, field_name)
 
     def _prepare_tzname_delta(self, tzname):
-        if '+' in tzname:
-            return tzname.replace('+', '-')
-        elif '-' in tzname:
-            return tzname.replace('-', '+')
+        tzname, sign, offset = split_tzname_delta(tzname)
+        if offset:
+            sign = '-' if sign == '+' else '+'
+            return f'{tzname}{sign}{offset}'
         return tzname
 
     def _convert_field_to_tz(self, field_name, tzname):
-        if settings.USE_TZ:
+        if tzname and settings.USE_TZ:
             field_name = "%s AT TIME ZONE '%s'" % (field_name, self._prepare_tzname_delta(tzname))
         return field_name
 
@@ -71,7 +73,8 @@ class DatabaseOperations(BaseDatabaseOperations):
         # https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-TRUNC
         return "DATE_TRUNC('%s', %s)" % (lookup_type, field_name)
 
-    def time_trunc_sql(self, lookup_type, field_name):
+    def time_trunc_sql(self, lookup_type, field_name, tzname=None):
+        field_name = self._convert_field_to_tz(field_name, tzname)
         return "DATE_TRUNC('%s', %s)::time" % (lookup_type, field_name)
 
     def deferrable_sql(self):
