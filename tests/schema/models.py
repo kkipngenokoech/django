@@ -158,6 +158,7 @@ class IntegerPK(models.Model):
 
 class Note(models.Model):
     info = models.TextField()
+    address = models.TextField(null=True)
 
     class Meta:
         apps = new_apps
@@ -210,6 +211,7 @@ class Thing(models.Model):
     when = models.CharField(max_length=1, primary_key=True)
 
     class Meta:
+        apps = new_apps
         db_table = 'drop'
 
     def __str__(self):

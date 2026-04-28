@@ -613,13 +613,14 @@ Java</label></li>
 </ul>"""
         )
 
-        # When RadioSelect is used with auto_id, and the whole form is printed using
-        # either as_table() or as_ul(), the label for the RadioSelect will point to the
-        # ID of the *first* radio button.
+        # When RadioSelect is used with auto_id, and the whole form is printed
+        # using either as_table() or as_ul(), the label for the RadioSelect
+        # will **not** point to the ID of the *first* radio button to improve
+        # accessibility for screen reader users.
         self.assertHTMLEqual(
             f.as_table(),
             """<tr><th><label for="id_name">Name:</label></th><td><input type="text" name="name" id="id_name" required></td></tr>
-<tr><th><label for="id_language_0">Language:</label></th><td><ul id="id_language">
+<tr><th><label>Language:</label></th><td><ul id="id_language">
 <li><label for="id_language_0"><input type="radio" id="id_language_0" value="P" name="language" required>
 Python</label></li>
 <li><label for="id_language_1"><input type="radio" id="id_language_1" value="J" name="language" required>
@@ -629,7 +630,7 @@ Java</label></li>
         self.assertHTMLEqual(
             f.as_ul(),
             """<li><label for="id_name">Name:</label> <input type="text" name="name" id="id_name" required></li>
-<li><label for="id_language_0">Language:</label> <ul id="id_language">
+<li><label>Language:</label> <ul id="id_language">
 <li><label for="id_language_0"><input type="radio" id="id_language_0" value="P" name="language" required>
 Python</label></li>
 <li><label for="id_language_1"><input type="radio" id="id_language_1" value="J" name="language" required>
@@ -639,7 +640,7 @@ Java</label></li>
         self.assertHTMLEqual(
             f.as_p(),
             """<p><label for="id_name">Name:</label> <input type="text" name="name" id="id_name" required></p>
-<p><label for="id_language_0">Language:</label> <ul id="id_language">
+<p><label>Language:</label> <ul id="id_language">
 <li><label for="id_language_0"><input type="radio" id="id_language_0" value="P" name="language" required>
 Python</label></li>
 <li><label for="id_language_1"><input type="radio" id="id_language_1" value="J" name="language" required>
@@ -3142,6 +3143,23 @@ Good luck picking a username that doesn&#x27;t already exist.</p>
         self.assertEqual(form['field'].id_for_label, 'myCustomID')
         self.assertEqual(form['field_none'].id_for_label, 'id_field_none')
 
+    def test_boundfield_widget_type(self):
+        class SomeForm(Form):
+            first_name = CharField()
+            birthday = SplitDateTimeField(widget=SplitHiddenDateTimeWidget)
+
+        f = SomeForm()
+        self.assertEqual(f['first_name'].widget_type, 'text')
+        self.assertEqual(f['birthday'].widget_type, 'splithiddendatetime')
+
+    def test_boundfield_css_classes(self):
+        form = Person()
+        field = form['first_name']
+        self.assertEqual(field.css_classes(), '')
+        self.assertEqual(field.css_classes(extra_classes=''), '')
+        self.assertEqual(field.css_classes(extra_classes='test'), 'test')
+        self.assertEqual(field.css_classes(extra_classes='test test'), 'test')
+
     def test_label_tag_override(self):
         """
         BoundField label_suffix (if provided) overrides Form label_suffix
@@ -3342,7 +3360,7 @@ Good luck picking a username that doesn&#x27;t already exist.</p>
 
         self.assertIsInstance(e, list)
         self.assertIn('Foo', e)
-        self.assertIn('Foo', forms.ValidationError(e))
+        self.assertIn('Foo', ValidationError(e))
 
         self.assertEqual(
             e.as_text(),

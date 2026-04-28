@@ -159,6 +159,9 @@ class WhereNode(tree.Node):
         clone.relabel_aliases(change_map)
         return clone
 
+    def copy(self):
+        return self.clone()
+
     @classmethod
     def _contains_aggregate(cls, obj):
         if isinstance(obj, tree.Node):
@@ -205,6 +208,25 @@ class WhereNode(tree.Node):
         clone.resolved = True
         return clone
 
+    @cached_property
+    def output_field(self):
+        from django.db.models import BooleanField
+        return BooleanField()
+
+    def select_format(self, compiler, sql, params):
+        # Wrap filters with a CASE WHEN expression if a database backend
+        # (e.g. Oracle) doesn't support boolean expression in SELECT or GROUP
+        # BY list.
+        if not compiler.connection.features.supports_boolean_expr_in_select_clause:
+            sql = f'CASE WHEN {sql} THEN 1 ELSE 0 END'
+        return sql, params
+
+    def get_db_converters(self, connection):
+        return self.output_field.get_db_converters(connection)
+
+    def get_lookup(self, lookup):
+        return self.output_field.get_lookup(lookup)
+
 
 class NothingNode:
     """A node that matches nothing."""
@@ -236,6 +258,7 @@ class SubqueryConstraint:
         self.alias = alias
         self.columns = columns
         self.targets = targets
+        query_object.clear_ordering(clear_default=True)
         self.query_object = query_object
 
     def as_sql(self, compiler, connection):

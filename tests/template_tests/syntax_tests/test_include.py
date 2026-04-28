@@ -1,6 +1,7 @@
 from django.template import (
     Context, Engine, TemplateDoesNotExist, TemplateSyntaxError, loader,
 )
+from django.template.loader_tags import IncludeNode
 from django.test import SimpleTestCase
 
 from ..utils import setup
@@ -243,6 +244,26 @@ class IncludeTests(SimpleTestCase):
         output = outer_tmpl.render(ctx)
         self.assertEqual(output, 'This worked!')
 
+    def test_include_template_iterable(self):
+        engine = Engine.get_default()
+        outer_temp = engine.from_string('{% include var %}')
+        tests = [
+            ('admin/fail.html', 'index.html'),
+            ['admin/fail.html', 'index.html'],
+        ]
+        for template_names in tests:
+            with self.subTest(template_names):
+                output = outer_temp.render(Context({'var': template_names}))
+                self.assertEqual(output, 'index\n')
+
+    def test_include_template_none(self):
+        engine = Engine.get_default()
+        outer_temp = engine.from_string('{% include var %}')
+        ctx = Context({'var': None})
+        msg = 'No template names provided'
+        with self.assertRaisesMessage(TemplateDoesNotExist, msg):
+            outer_temp.render(ctx)
+
     def test_include_from_loader_get_template(self):
         tmpl = loader.get_template('include_tpl.html')  # {% include tmpl %}
         output = tmpl.render({'tmpl': loader.get_template('index.html')})
@@ -294,3 +315,12 @@ class IncludeTests(SimpleTestCase):
         ], libraries={'custom': 'template_tests.templatetags.custom'})
         output = engine.render_to_string('template', {'vars': range(9)})
         self.assertEqual(output, '012345678')
+
+
+class IncludeNodeTests(SimpleTestCase):
+    def test_repr(self):
+        include_node = IncludeNode('app/template.html')
+        self.assertEqual(
+            repr(include_node),
+            "<IncludeNode: template='app/template.html'>",
+        )

@@ -581,6 +581,7 @@ def create_reverse_many_to_one_manager(superclass, rel):
             queryset._add_hints(instance=self.instance)
             if self._db:
                 queryset = queryset.using(self._db)
+            queryset._defer_next_filter = True
             queryset = queryset.filter(**self.core_filters)
             for field in self.field.foreign_related_fields:
                 val = getattr(self.instance, field.attname)
@@ -641,7 +642,6 @@ def create_reverse_many_to_one_manager(superclass, rel):
 
         def add(self, *objs, bulk=True):
             self._remove_prefetched_objects()
-            objs = list(objs)
             db = router.db_for_write(self.model, instance=self.instance)
 
             def check_and_update_obj(obj):
@@ -697,6 +697,10 @@ def create_reverse_many_to_one_manager(superclass, rel):
                 val = self.field.get_foreign_related_value(self.instance)
                 old_ids = set()
                 for obj in objs:
+                    if not isinstance(obj, self.model):
+                        raise TypeError("'%s' instance expected, got %r" % (
+                            self.model._meta.object_name, obj,
+                        ))
                     # Is obj actually part of this descriptor set?
                     if self.field.get_local_related_value(obj) == val:
                         old_ids.add(obj.pk)
