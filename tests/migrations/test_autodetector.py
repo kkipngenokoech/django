@@ -6,13 +6,13 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser
 from django.core.validators import RegexValidator, validate_slug
-from django.db import connection, models
+from django.db import connection, migrations, models
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.questioner import MigrationQuestioner
 from django.db.migrations.state import ModelState, ProjectState
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import isolate_lru_cache
 
 from .models import FoodManager, FoodQuerySet
@@ -464,9 +464,9 @@ class AutodetectorTests(TestCase):
 
     def repr_changes(self, changes, include_dependencies=False):
         output = ""
-        for app_label, migrations in sorted(changes.items()):
+        for app_label, migrations_ in sorted(changes.items()):
             output += "  %s:\n" % app_label
-            for migration in migrations:
+            for migration in migrations_:
                 output += "    %s\n" % migration.name
                 for operation in migration.operations:
                     output += "      %s\n" % operation
@@ -1014,7 +1014,7 @@ class AutodetectorTests(TestCase):
             'renamed_foo',
             'django.db.models.ForeignKey',
             [],
-            {'to': 'app.Foo', 'on_delete': models.CASCADE, 'db_column': 'foo_id'},
+            {'to': 'app.foo', 'on_delete': models.CASCADE, 'db_column': 'foo_id'},
         ))
 
     def test_rename_model(self):
@@ -1030,6 +1030,22 @@ class AutodetectorTests(TestCase):
         self.assertOperationAttributes(changes, 'testapp', 0, 0, old_name="Author", new_name="Writer")
         # Now that RenameModel handles related fields too, there should be
         # no AlterField for the related field.
+        self.assertNumberMigrations(changes, 'otherapp', 0)
+
+    def test_rename_model_case(self):
+        """
+        Model name is case-insensitive. Changing case doesn't lead to any
+        autodetected operations.
+        """
+        author_renamed = ModelState('testapp', 'author', [
+            ('id', models.AutoField(primary_key=True)),
+        ])
+        changes = self.get_changes(
+            [self.author_empty, self.book],
+            [author_renamed, self.book],
+            questioner=MigrationQuestioner({'ask_rename_model': True}),
+        )
+        self.assertNumberMigrations(changes, 'testapp', 0)
         self.assertNumberMigrations(changes, 'otherapp', 0)
 
     def test_rename_m2m_through_model(self):
@@ -2438,3 +2454,52 @@ class AutodetectorTests(TestCase):
         self.assertNumberMigrations(changes, 'app', 1)
         self.assertOperationTypes(changes, 'app', 0, ['DeleteModel'])
         self.assertOperationAttributes(changes, 'app', 0, 0, name='Dog')
+
+    def test_add_model_with_field_removed_from_base_model(self):
+        """
+        Removing a base field takes place before adding a new inherited model
+        that has a field with the same name.
+        """
+        before = [
+            ModelState('app', 'readable', [
+                ('id', models.AutoField(primary_key=True)),
+                ('title', models.CharField(max_length=200)),
+            ]),
+        ]
+        after = [
+            ModelState('app', 'readable', [
+                ('id', models.AutoField(primary_key=True)),
+            ]),
+            ModelState('app', 'book', [
+                ('title', models.CharField(max_length=200)),
+            ], bases=('app.readable',)),
+        ]
+        changes = self.get_changes(before, after)
+        self.assertNumberMigrations(changes, 'app', 1)
+        self.assertOperationTypes(changes, 'app', 0, ['RemoveField', 'CreateModel'])
+        self.assertOperationAttributes(changes, 'app', 0, 0, name='title', model_name='readable')
+        self.assertOperationAttributes(changes, 'app', 0, 1, name='book')
+
+
+class AutodetectorSuggestNameTests(SimpleTestCase):
+    def test_single_operation(self):
+        ops = [migrations.CreateModel('Person', fields=[])]
+        self.assertEqual(MigrationAutodetector.suggest_name(ops), 'person')
+        ops = [migrations.DeleteModel('Person')]
+        self.assertEqual(MigrationAutodetector.suggest_name(ops), 'delete_person')
+
+    def test_two_create_models(self):
+        ops = [
+            migrations.CreateModel('Person', fields=[]),
+            migrations.CreateModel('Animal', fields=[]),
+        ]
+        self.assertEqual(MigrationAutodetector.suggest_name(ops), 'animal_person')
+
+    def test_none_name(self):
+        ops = [migrations.RunSQL('SELECT 1 FROM person;')]
+        suggest_name = MigrationAutodetector.suggest_name(ops)
+        self.assertIs(suggest_name.startswith('auto_'), True)
+
+    def test_auto(self):
+        suggest_name = MigrationAutodetector.suggest_name([])
+        self.assertIs(suggest_name.startswith('auto_'), True)

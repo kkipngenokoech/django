@@ -34,17 +34,24 @@ If you're not using the default project template, here are the requirements:
 
 #. Configure a :class:`~django.template.backends.django.DjangoTemplates`
    backend in your :setting:`TEMPLATES` setting with
-   ``django.contrib.auth.context_processors.auth`` and
+   ``django.contrib.auth.context_processors.auth``,
+   ``django.contrib.messages.context_processors.request``, and
    ``django.contrib.messages.context_processors.messages`` in
    the ``'context_processors'`` option of :setting:`OPTIONS
    <TEMPLATES-OPTIONS>`.
+
+   .. versionchanged:: 3.1
+
+       ``django.contrib.messages.context_processors.request`` was added as a
+       requirement in the ``'context_processors'`` option to support the new
+       :attr:`.AdminSite.enable_nav_sidebar`.
 
 #. If you've customized the :setting:`MIDDLEWARE` setting,
    :class:`django.contrib.auth.middleware.AuthenticationMiddleware` and
    :class:`django.contrib.messages.middleware.MessageMiddleware` must be
    included.
 
-5. :ref:`Hook the admin's URLs into your URLconf
+#. :ref:`Hook the admin's URLs into your URLconf
    <hooking-adminsite-to-urlconf>`.
 
 After you've taken these steps, you'll be able to use the admin site by
@@ -1089,8 +1096,7 @@ subclass::
     automatically generate the value for ``SlugField`` fields from one or more
     other fields. The generated value is produced by concatenating the values
     of the source fields, and then by transforming that result into a valid
-    slug (e.g. substituting dashes for spaces; lowercasing ASCII letters; and
-    removing various English stop words such as 'a', 'an', 'as', and similar).
+    slug (e.g. substituting dashes for spaces and lowercasing ASCII letters).
 
     Prepopulated fields aren't modified by JavaScript after a value has been
     saved. It's usually undesired that slugs change (which would cause an
@@ -1098,6 +1104,11 @@ subclass::
 
     ``prepopulated_fields`` doesn't accept ``DateTimeField``, ``ForeignKey``,
     ``OneToOneField``, and ``ManyToManyField`` fields.
+
+    .. versionchanged:: 3.2
+
+        In older versions, various English stop words are removed from
+        generated values.
 
 .. attribute:: ModelAdmin.preserve_filters
 
@@ -1649,8 +1660,6 @@ templates used by the :class:`ModelAdmin` views:
 
 .. method:: ModelAdmin.get_inlines(request, obj)
 
-    .. versionadded:: 3.0
-
     The ``get_inlines`` method is given the ``HttpRequest`` and the
     ``obj`` being edited (or ``None`` on an add form) and is expected to return
     an iterable of inlines. You can override this method to dynamically add
@@ -2147,13 +2156,13 @@ jQuery
 Django admin JavaScript makes use of the `jQuery`_ library.
 
 To avoid conflicts with user-supplied scripts or libraries, Django's jQuery
-(version 3.4.1) is namespaced as ``django.jQuery``. If you want to use jQuery
+(version 3.5.1) is namespaced as ``django.jQuery``. If you want to use jQuery
 in your own admin JavaScript without including a second copy, you can use the
 ``django.jQuery`` object on changelist and add/edit views.
 
-.. versionchanged:: 3.0
+.. versionchanged:: 3.1
 
-    jQuery was upgraded from 3.3.1 to 3.4.1.
+    jQuery was upgraded from 3.4.1 to 3.5.1.
 
 The :class:`ModelAdmin` class requires jQuery by default, so there is no need
 to add jQuery to your ``ModelAdmin``’s list of media resources unless you have
@@ -2308,7 +2317,7 @@ The ``InlineModelAdmin`` class adds or customizes:
 .. attribute:: InlineModelAdmin.extra
 
     This controls the number of extra forms the formset will display in
-    addition to the initial forms. See the
+    addition to the initial forms. Defaults to 3. See the
     :doc:`formsets documentation </topics/forms/formsets>` for more
     information.
 
@@ -2836,6 +2845,13 @@ Templates can override or extend base admin templates as described in
     ``ModelAdmin`` basis and on a custom field within a ``ModelAdmin`` by
     setting an ``empty_value_display`` attribute on the field. See
     :attr:`ModelAdmin.empty_value_display` for examples.
+
+.. attribute:: AdminSite.enable_nav_sidebar
+
+    .. versionadded:: 3.1
+
+    A boolean value that determines whether to show the navigation sidebar
+    on larger screens. By default, it is set to ``True``.
 
 .. attribute:: AdminSite.login_template
 
