@@ -92,6 +92,7 @@ class URLValidator(RegexValidator):
         r'\Z', re.IGNORECASE)
     message = _('Enter a valid URL.')
     schemes = ['http', 'https', 'ftp', 'ftps']
+    unsafe_chars = frozenset('\t\r\n')
 
     def __init__(self, schemes=None, **kwargs):
         super().__init__(**kwargs)
@@ -100,6 +101,8 @@ class URLValidator(RegexValidator):
 
     def __call__(self, value):
         if not isinstance(value, str):
+            raise ValidationError(self.message, code=self.code, params={'value': value})
+        if self.unsafe_chars.intersection(value):
             raise ValidationError(self.message, code=self.code, params={'value': value})
         # Check if the scheme is valid.
         scheme = value.split('://')[0].lower()
@@ -138,7 +141,7 @@ class URLValidator(RegexValidator):
         # section 3.1. It's defined to be 255 bytes or less, but this includes
         # one byte for the length of the name and one byte for the trailing dot
         # that's used to indicate absolute names in DNS.
-        if len(urlsplit(value).netloc) > 253:
+        if len(urlsplit(value).hostname) > 253:
             raise ValidationError(self.message, code=self.code, params={'value': value})
 
 

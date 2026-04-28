@@ -7,13 +7,12 @@ from threading import Lock
 
 from django.core.exceptions import EmptyResultSet, FieldError
 from django.db import DEFAULT_DB_ALIAS, connection
-from django.db.models import Count, Exists, F, OuterRef, Q
+from django.db.models import Count, Exists, F, Max, OuterRef, Q
 from django.db.models.expressions import RawSQL
 from django.db.models.sql.constants import LOUTER
 from django.db.models.sql.where import NothingNode, WhereNode
 from django.test import SimpleTestCase, TestCase, skipUnlessDBFeature
-from django.test.utils import CaptureQueriesContext, ignore_warnings
-from django.utils.deprecation import RemovedInDjango40Warning
+from django.test.utils import CaptureQueriesContext
 
 from .models import (
     FK1, Annotation, Article, Author, BaseA, Book, CategoryItem,
@@ -594,13 +593,6 @@ class Queries1Tests(TestCase):
             [datetime.datetime(2007, 12, 19, 0, 0)],
         )
 
-    @ignore_warnings(category=RemovedInDjango40Warning)
-    def test_ticket7098(self):
-        self.assertSequenceEqual(
-            Item.objects.values('note__note').order_by('queries_note.note', 'id'),
-            [{'note__note': 'n2'}, {'note__note': 'n3'}, {'note__note': 'n3'}, {'note__note': 'n3'}]
-        )
-
     def test_order_by_rawsql(self):
         self.assertSequenceEqual(
             Item.objects.values('note__note').order_by(
@@ -614,15 +606,6 @@ class Queries1Tests(TestCase):
                 {'note__note': 'n3'},
             ],
         )
-
-    def test_order_by_raw_column_alias_warning(self):
-        msg = (
-            "Passing column raw column aliases to order_by() is deprecated. "
-            "Wrap 'queries_author.name' in a RawSQL expression before "
-            "passing it to order_by()."
-        )
-        with self.assertRaisesMessage(RemovedInDjango40Warning, msg):
-            Item.objects.values('creator__name').order_by('queries_author.name')
 
     def test_ticket7096(self):
         # Make sure exclude() with multiple conditions continues to work.
@@ -717,7 +700,8 @@ class Queries1Tests(TestCase):
             )
             self.assertQuerysetEqual(q.reverse(), [])
             q.query.low_mark = 1
-            with self.assertRaisesMessage(AssertionError, 'Cannot change a query once a slice has been taken'):
+            msg = 'Cannot change a query once a slice has been taken.'
+            with self.assertRaisesMessage(TypeError, msg):
                 q.extra(select={'foo': "1"})
             self.assertQuerysetEqual(q.defer('meal'), [])
             self.assertQuerysetEqual(q.only('meal'), [])
@@ -1871,6 +1855,17 @@ class Queries6Tests(TestCase):
             [self.t5, self.t4],
         )
 
+    def test_col_alias_quoted(self):
+        with CaptureQueriesContext(connection) as captured_queries:
+            self.assertEqual(
+                Tag.objects.values('parent').annotate(
+                    tag_per_parent=Count('pk'),
+                ).aggregate(Max('tag_per_parent')),
+                {'tag_per_parent__max': 2},
+            )
+        sql = captured_queries[0]['sql']
+        self.assertIn('AS %s' % connection.ops.quote_name('col1'), sql)
+
 
 class RawQueriesTests(TestCase):
     @classmethod
@@ -2079,35 +2074,49 @@ class SubqueryTests(TestCase):
         )
 
 
-@skipUnlessDBFeature('allow_sliced_subqueries_with_in')
 class QuerySetBitwiseOperationTests(TestCase):
     @classmethod
     def setUpTestData(cls):
-        school = School.objects.create()
-        cls.room_1 = Classroom.objects.create(school=school, has_blackboard=False, name='Room 1')
-        cls.room_2 = Classroom.objects.create(school=school, has_blackboard=True, name='Room 2')
-        cls.room_3 = Classroom.objects.create(school=school, has_blackboard=True, name='Room 3')
-        cls.room_4 = Classroom.objects.create(school=school, has_blackboard=False, name='Room 4')
+        cls.school = School.objects.create()
+        cls.room_1 = Classroom.objects.create(school=cls.school, has_blackboard=False, name='Room 1')
+        cls.room_2 = Classroom.objects.create(school=cls.school, has_blackboard=True, name='Room 2')
+        cls.room_3 = Classroom.objects.create(school=cls.school, has_blackboard=True, name='Room 3')
+        cls.room_4 = Classroom.objects.create(school=cls.school, has_blackboard=False, name='Room 4')
 
+    @skipUnlessDBFeature('allow_sliced_subqueries_with_in')
     def test_or_with_rhs_slice(self):
         qs1 = Classroom.objects.filter(has_blackboard=True)
         qs2 = Classroom.objects.filter(has_blackboard=False)[:1]
         self.assertCountEqual(qs1 | qs2, [self.room_1, self.room_2, self.room_3])
 
+    @skipUnlessDBFeature('allow_sliced_subqueries_with_in')
     def test_or_with_lhs_slice(self):
         qs1 = Classroom.objects.filter(has_blackboard=True)[:1]
         qs2 = Classroom.objects.filter(has_blackboard=False)
         self.assertCountEqual(qs1 | qs2, [self.room_1, self.room_2, self.room_4])
 
+    @skipUnlessDBFeature('allow_sliced_subqueries_with_in')
     def test_or_with_both_slice(self):
         qs1 = Classroom.objects.filter(has_blackboard=False)[:1]
         qs2 = Classroom.objects.filter(has_blackboard=True)[:1]
         self.assertCountEqual(qs1 | qs2, [self.room_1, self.room_2])
 
+    @skipUnlessDBFeature('allow_sliced_subqueries_with_in')
     def test_or_with_both_slice_and_ordering(self):
         qs1 = Classroom.objects.filter(has_blackboard=False).order_by('-pk')[:1]
         qs2 = Classroom.objects.filter(has_blackboard=True).order_by('-name')[:1]
         self.assertCountEqual(qs1 | qs2, [self.room_3, self.room_4])
+
+    def test_subquery_aliases(self):
+        combined = School.objects.filter(pk__isnull=False) & School.objects.filter(
+            Exists(Classroom.objects.filter(
+                has_blackboard=True,
+                school=OuterRef('pk'),
+            )),
+        )
+        self.assertSequenceEqual(combined, [self.school])
+        nested_combined = School.objects.filter(pk__in=combined.values('pk'))
+        self.assertSequenceEqual(nested_combined, [self.school])
 
 
 class CloneTests(TestCase):
@@ -2376,15 +2385,18 @@ class QuerySetSupportsPythonIdioms(TestCase):
         )
 
     def test_slicing_cannot_filter_queryset_once_sliced(self):
-        with self.assertRaisesMessage(AssertionError, "Cannot filter a query once a slice has been taken."):
+        msg = 'Cannot filter a query once a slice has been taken.'
+        with self.assertRaisesMessage(TypeError, msg):
             Article.objects.all()[0:5].filter(id=1)
 
     def test_slicing_cannot_reorder_queryset_once_sliced(self):
-        with self.assertRaisesMessage(AssertionError, "Cannot reorder a query once a slice has been taken."):
+        msg = 'Cannot reorder a query once a slice has been taken.'
+        with self.assertRaisesMessage(TypeError, msg):
             Article.objects.all()[0:5].order_by('id')
 
     def test_slicing_cannot_combine_queries_once_sliced(self):
-        with self.assertRaisesMessage(AssertionError, "Cannot combine queries once a slice has been taken."):
+        msg = 'Cannot combine queries once a slice has been taken.'
+        with self.assertRaisesMessage(TypeError, msg):
             Article.objects.all()[0:1] & Article.objects.all()[4:5]
 
     def test_slicing_negative_indexing_not_supported_for_single_element(self):
@@ -2434,7 +2446,8 @@ class WeirdQuerysetSlicingTests(TestCase):
         self.assertQuerysetEqual(Article.objects.all()[0:0], [])
         self.assertQuerysetEqual(Article.objects.all()[0:0][:10], [])
         self.assertEqual(Article.objects.all()[:0].count(), 0)
-        with self.assertRaisesMessage(TypeError, 'Cannot reverse a query once a slice has been taken.'):
+        msg = 'Cannot change a query once a slice has been taken.'
+        with self.assertRaisesMessage(TypeError, msg):
             Article.objects.all()[:0].latest('created')
 
     def test_empty_resultset_sql(self):
@@ -2802,6 +2815,21 @@ class ExcludeTests(TestCase):
             )
         self.assertIn('exists', captured_queries[0]['sql'].lower())
 
+    def test_exclude_subquery(self):
+        subquery = JobResponsibilities.objects.filter(
+            responsibility__description='bar',
+        ) | JobResponsibilities.objects.exclude(
+            job__responsibilities__description='foo',
+        )
+        self.assertCountEqual(
+            Job.objects.annotate(
+                responsibility=subquery.filter(
+                    job=OuterRef('name'),
+                ).values('id')[:1]
+            ),
+            [self.j1, self.j2],
+        )
+
 
 class ExcludeTest17600(TestCase):
     """
@@ -3082,6 +3110,15 @@ class QuerySetExceptionTests(SimpleTestCase):
         )
         with self.assertRaisesMessage(FieldError, msg):
             Article.objects.order_by('*')
+
+    def test_invalid_order_by_raw_column_alias(self):
+        msg = (
+            "Cannot resolve keyword 'queries_author.name' into field. Choices "
+            "are: cover, created, creator, creator_id, id, modified, name, "
+            "note, note_id, tags"
+        )
+        with self.assertRaisesMessage(FieldError, msg):
+            Item.objects.values('creator__name').order_by('queries_author.name')
 
     def test_invalid_queryset_model(self):
         msg = 'Cannot use QuerySet for "Article": Use a QuerySet for "ExtraInfo".'

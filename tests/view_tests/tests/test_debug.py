@@ -122,6 +122,11 @@ class DebugViewTests(SimpleTestCase):
 
     def test_404(self):
         response = self.client.get('/raises404/')
+        self.assertNotContains(
+            response,
+            '<pre class="exception_value">',
+            status_code=404,
+        )
         self.assertContains(
             response,
             '<p>The current path, <code>not-in-urls</code>, didn’t match any '
@@ -133,6 +138,11 @@ class DebugViewTests(SimpleTestCase):
     def test_404_not_in_urls(self):
         response = self.client.get('/not-in-urls')
         self.assertNotContains(response, "Raised by:", status_code=404)
+        self.assertNotContains(
+            response,
+            '<pre class="exception_value">',
+            status_code=404,
+        )
         self.assertContains(response, "Django tried these URL patterns", status_code=404)
         self.assertContains(
             response,
@@ -160,6 +170,12 @@ class DebugViewTests(SimpleTestCase):
 
     def test_technical_404(self):
         response = self.client.get('/technical404/')
+        self.assertContains(
+            response,
+            '<pre class="exception_value">Testing technical 404.</pre>',
+            status_code=404,
+            html=True,
+        )
         self.assertContains(response, "Raised by:", status_code=404)
         self.assertContains(response, "view_tests.views.technical404", status_code=404)
         self.assertContains(
@@ -243,7 +259,7 @@ class DebugViewTests(SimpleTestCase):
         response = self.client.get('/')
         self.assertContains(
             response,
-            "<h2>The install worked successfully! Congratulations!</h2>"
+            "<h1>The install worked successfully! Congratulations!</h1>"
         )
 
     @override_settings(ROOT_URLCONF='view_tests.regression_21530_urls')
@@ -925,6 +941,20 @@ class ExceptionReporterTests(SimpleTestCase):
             m.reset_mock()
             reporter.get_traceback_text()
             m.assert_called_once_with(encoding='utf-8')
+
+    @override_settings(ALLOWED_HOSTS=['example.com'])
+    def test_get_raw_insecure_uri(self):
+        factory = RequestFactory(HTTP_HOST='evil.com')
+        tests = [
+            ('////absolute-uri', 'http://evil.com//absolute-uri'),
+            ('/?foo=bar', 'http://evil.com/?foo=bar'),
+            ('/path/with:colons', 'http://evil.com/path/with:colons'),
+        ]
+        for url, expected in tests:
+            with self.subTest(url=url):
+                request = factory.get(url)
+                reporter = ExceptionReporter(request, None, None, None)
+                self.assertEqual(reporter._get_raw_insecure_uri(), expected)
 
 
 class PlainTextReportTests(SimpleTestCase):

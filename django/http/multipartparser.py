@@ -9,7 +9,6 @@ import binascii
 import cgi
 import collections
 import html
-import os
 from urllib.parse import unquote
 
 from django.conf import settings
@@ -212,9 +211,8 @@ class MultiPartParser:
                     # This is a file, use the handler...
                     file_name = disposition.get('filename')
                     if file_name:
-                        file_name = os.path.basename(file_name)
                         file_name = force_str(file_name, encoding, errors='replace')
-                        file_name = self.IE_sanitize(html.unescape(file_name))
+                        file_name = self.sanitize_file_name(file_name)
                     if not file_name:
                         continue
 
@@ -306,9 +304,28 @@ class MultiPartParser:
                 self._files.appendlist(force_str(old_field_name, self._encoding, errors='replace'), file_obj)
                 break
 
-    def IE_sanitize(self, filename):
-        """Cleanup filename from Internet Explorer full paths."""
-        return filename and filename[filename.rfind("\\") + 1:].strip()
+    def sanitize_file_name(self, file_name):
+        """
+        Sanitize the filename of an upload.
+
+        Remove all possible path separators, even though that might remove more
+        than actually required by the target system. Filenames that could
+        potentially cause problems (current/parent dir) are also discarded.
+
+        It should be noted that this function could still return a "filepath"
+        like "C:some_file.txt" which is handled later on by the storage layer.
+        So while this function does sanitize filenames to some extent, the
+        resulting filename should still be considered as untrusted user input.
+        """
+        file_name = html.unescape(file_name)
+        file_name = file_name.rsplit('/')[-1]
+        file_name = file_name.rsplit('\\')[-1]
+
+        if file_name in {'', '.', '..'}:
+            return None
+        return file_name
+
+    IE_sanitize = sanitize_file_name
 
     def _close_files(self):
         # Free up all file handles.

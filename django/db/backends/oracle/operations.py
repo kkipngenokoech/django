@@ -135,9 +135,15 @@ END;
         return 'TRUNC(%s)' % field_name
 
     def datetime_cast_time_sql(self, field_name, tzname):
-        # Since `TimeField` values are stored as TIMESTAMP where only the date
-        # part is ignored, convert the field to the specified timezone.
-        return self._convert_field_to_tz(field_name, tzname)
+        # Since `TimeField` values are stored as TIMESTAMP change to the
+        # default date and convert the field to the specified timezone.
+        convert_datetime_sql = (
+            "TO_TIMESTAMP(CONCAT('1900-01-01 ', TO_CHAR(%s, 'HH24:MI:SS.FF')), "
+            "'YYYY-MM-DD HH24:MI:SS.FF')"
+        ) % self._convert_field_to_tz(field_name, tzname)
+        return "CASE WHEN %s IS NOT NULL THEN %s ELSE NULL END" % (
+            field_name, convert_datetime_sql,
+        )
 
     def datetime_extract_sql(self, lookup_type, field_name, tzname):
         field_name = self._convert_field_to_tz(field_name, tzname)
@@ -182,7 +188,7 @@ END;
             converters.append(self.convert_textfield_value)
         elif internal_type == 'BinaryField':
             converters.append(self.convert_binaryfield_value)
-        elif internal_type in ['BooleanField', 'NullBooleanField']:
+        elif internal_type == 'BooleanField':
             converters.append(self.convert_booleanfield_value)
         elif internal_type == 'DateTimeField':
             if settings.USE_TZ:
@@ -258,16 +264,14 @@ END;
         columns = []
         for param in returning_params:
             value = param.get_value()
-            if value is None or value == []:
-                # cx_Oracle < 6.3 returns None, >= 6.3 returns empty list.
+            if value == []:
                 raise DatabaseError(
                     'The database did not return a new row id. Probably '
                     '"ORA-1403: no data found" was raised internally but was '
                     'hidden by the Oracle OCI library (see '
                     'https://code.djangoproject.com/ticket/28859).'
                 )
-            # cx_Oracle < 7 returns value, >= 7 returns list with single value.
-            columns.append(value[0] if isinstance(value, list) else value)
+            columns.append(value[0])
         return tuple(columns)
 
     def field_cast_sql(self, db_type, internal_type):
@@ -336,7 +340,7 @@ END;
         # always defaults to uppercase.
         # We simplify things by making Oracle identifiers always uppercase.
         if not name.startswith('"') and not name.endswith('"'):
-            name = '"%s"' % truncate_name(name.upper(), self.max_name_length())
+            name = '"%s"' % truncate_name(name, self.max_name_length())
         # Oracle puts the query text into a (query % args) construct, so % signs
         # in names need to be escaped. The '%%' will be collapsed back to '%' at
         # that stage so we aren't really making the name longer here.

@@ -25,7 +25,9 @@ from django.db.models.functions import (
 from django.db.models.sql import constants
 from django.db.models.sql.datastructures import Join
 from django.test import SimpleTestCase, TestCase, skipUnlessDBFeature
-from django.test.utils import Approximate, CaptureQueriesContext, isolate_apps
+from django.test.utils import (
+    Approximate, CaptureQueriesContext, isolate_apps, register_lookup,
+)
 from django.utils.functional import SimpleLazyObject
 
 from .models import (
@@ -668,6 +670,18 @@ class BasicExpressionsTests(TestCase):
         # contain nested aggregates.
         self.assertNotIn('GROUP BY', sql)
 
+    @skipUnlessDBFeature('supports_over_clause')
+    def test_aggregate_rawsql_annotation(self):
+        with self.assertNumQueries(1) as ctx:
+            aggregate = Company.objects.annotate(
+                salary=RawSQL('SUM(num_chairs) OVER (ORDER BY num_employees)', []),
+            ).aggregate(
+                count=Count('pk'),
+            )
+            self.assertEqual(aggregate, {'count': 3})
+        sql = ctx.captured_queries[0]['sql']
+        self.assertNotIn('GROUP BY', sql)
+
     def test_explicit_output_field(self):
         class FuncA(Func):
             output_field = CharField()
@@ -801,6 +815,38 @@ class BasicExpressionsTests(TestCase):
             Employee.objects.filter(Exists(is_poc) | Q(salary__lt=15)),
             [self.example_inc.ceo, self.max],
         )
+        self.assertCountEqual(
+            Employee.objects.filter(Q(salary__gte=30) & Exists(is_ceo)),
+            [self.max],
+        )
+        self.assertCountEqual(
+            Employee.objects.filter(Q(salary__lt=15) | Exists(is_poc)),
+            [self.example_inc.ceo, self.max],
+        )
+
+    def test_boolean_expression_combined_with_empty_Q(self):
+        is_poc = Company.objects.filter(point_of_contact=OuterRef('pk'))
+        self.gmbh.point_of_contact = self.max
+        self.gmbh.save()
+        tests = [
+            Exists(is_poc) & Q(),
+            Q() & Exists(is_poc),
+            Exists(is_poc) | Q(),
+            Q() | Exists(is_poc),
+            Q(Exists(is_poc)) & Q(),
+            Q() & Q(Exists(is_poc)),
+            Q(Exists(is_poc)) | Q(),
+            Q() | Q(Exists(is_poc)),
+        ]
+        for conditions in tests:
+            with self.subTest(conditions):
+                self.assertCountEqual(Employee.objects.filter(conditions), [self.max])
+
+    def test_boolean_expression_in_Q(self):
+        is_poc = Company.objects.filter(point_of_contact=OuterRef('pk'))
+        self.gmbh.point_of_contact = self.max
+        self.gmbh.save()
+        self.assertCountEqual(Employee.objects.filter(Q(Exists(is_poc))), [self.max])
 
 
 class IterableLookupInnerExpressionsTests(TestCase):
@@ -1216,19 +1262,23 @@ class ExpressionOperatorTests(TestCase):
         self.assertEqual(Number.objects.get(pk=self.n.pk).integer, 58)
         self.assertEqual(Number.objects.get(pk=self.n1.pk).integer, -10)
 
+    def test_lefthand_transformed_field_bitwise_or(self):
+        Employee.objects.create(firstname='Max', lastname='Mustermann')
+        with register_lookup(CharField, Length):
+            qs = Employee.objects.annotate(bitor=F('lastname__length').bitor(48))
+            self.assertEqual(qs.get().bitor, 58)
+
     def test_lefthand_power(self):
         # LH Power arithmetic operation on floats and integers
         Number.objects.filter(pk=self.n.pk).update(integer=F('integer') ** 2, float=F('float') ** 1.5)
         self.assertEqual(Number.objects.get(pk=self.n.pk).integer, 1764)
         self.assertEqual(Number.objects.get(pk=self.n.pk).float, Approximate(61.02, places=2))
 
-    @unittest.skipIf(connection.vendor == 'oracle', "Oracle doesn't support bitwise XOR.")
     def test_lefthand_bitwise_xor(self):
         Number.objects.update(integer=F('integer').bitxor(48))
         self.assertEqual(Number.objects.get(pk=self.n.pk).integer, 26)
         self.assertEqual(Number.objects.get(pk=self.n1.pk).integer, -26)
 
-    @unittest.skipIf(connection.vendor == 'oracle', "Oracle doesn't support bitwise XOR.")
     def test_lefthand_bitwise_xor_null(self):
         employee = Employee.objects.create(firstname='John', lastname='Doe')
         Employee.objects.update(salary=F('salary').bitxor(48))
@@ -1480,6 +1530,36 @@ class FTimeDeltaTests(TestCase):
         ))
         self.assertIsNone(queryset.first().shifted)
 
+    def test_durationfield_multiply_divide(self):
+        Experiment.objects.update(scalar=2)
+        tests = [
+            (Decimal('2'), 2),
+            (F('scalar'), 2),
+            (2, 2),
+            (3.2, 3.2),
+        ]
+        for expr, scalar in tests:
+            with self.subTest(expr=expr):
+                qs = Experiment.objects.annotate(
+                    multiplied=ExpressionWrapper(
+                        expr * F('estimated_time'),
+                        output_field=DurationField(),
+                    ),
+                    divided=ExpressionWrapper(
+                        F('estimated_time') / expr,
+                        output_field=DurationField(),
+                    ),
+                )
+                for experiment in qs:
+                    self.assertEqual(
+                        experiment.multiplied,
+                        experiment.estimated_time * scalar,
+                    )
+                    self.assertEqual(
+                        experiment.divided,
+                        experiment.estimated_time / scalar,
+                    )
+
     def test_duration_expressions(self):
         for delta in self.deltas:
             qs = Experiment.objects.annotate(duration=F('estimated_time') + delta)
@@ -1707,6 +1787,11 @@ class ValueTests(TestCase):
         value = Value('foo', output_field=CharField())
         self.assertEqual(value.as_sql(compiler, connection), ('%s', ['foo']))
 
+    def test_output_field_decimalfield(self):
+        Time.objects.create()
+        time = Time.objects.annotate(one=Value(1, output_field=DecimalField())).first()
+        self.assertEqual(time.one, 1)
+
     def test_resolve_output_field(self):
         value_types = [
             ('str', CharField),
@@ -1915,3 +2000,25 @@ class ExpressionWrapperTests(SimpleTestCase):
         group_by_cols = expr.get_group_by_cols(alias=None)
         self.assertEqual(group_by_cols, [expr.expression])
         self.assertEqual(group_by_cols[0].output_field, expr.output_field)
+
+
+class OrderByTests(SimpleTestCase):
+    def test_equal(self):
+        self.assertEqual(
+            OrderBy(F('field'), nulls_last=True),
+            OrderBy(F('field'), nulls_last=True),
+        )
+        self.assertNotEqual(
+            OrderBy(F('field'), nulls_last=True),
+            OrderBy(F('field'), nulls_last=False),
+        )
+
+    def test_hash(self):
+        self.assertEqual(
+            hash(OrderBy(F('field'), nulls_last=True)),
+            hash(OrderBy(F('field'), nulls_last=True)),
+        )
+        self.assertNotEqual(
+            hash(OrderBy(F('field'), nulls_last=True)),
+            hash(OrderBy(F('field'), nulls_last=False)),
+        )
