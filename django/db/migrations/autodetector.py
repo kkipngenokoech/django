@@ -236,6 +236,47 @@ class MigrationAutodetector:
                     )
                     self.through_users[through_key] = (app_label, old_model_name, field_name)
 
+    def _update_foreignkey_to_field_references(self, target_app_label, target_model_name, old_field_name, new_field_name):
+        """
+        Update ForeignKey to_field references when a primary key field is renamed.
+        """
+        # Look for ForeignKey fields in all models that reference the renamed field
+        for (app_label, model_name) in self.kept_model_keys:
+            old_model_name = self.renamed_models.get((app_label, model_name), model_name)
+            old_model_state = self.from_state.models[app_label, old_model_name]
+            new_model_state = self.to_state.models[app_label, model_name]
+            
+            for field_name, field in new_model_state.fields:
+                if (hasattr(field, 'remote_field') and field.remote_field and 
+                    hasattr(field.remote_field, 'model') and field.remote_field.model):
+                    
+                    # Check if this ForeignKey references the target model
+                    try:
+                        related_model = self.new_apps.get_model(field.remote_field.model)
+                        if (related_model._meta.app_label == target_app_label and 
+                            related_model._meta.model_name.lower() == target_model_name.lower()):
+                            
+                            # Check if to_field references the old field name
+                            to_field = getattr(field.remote_field, 'field_name', None)
+                            if to_field == old_field_name:
+                                # Create a new field with updated to_field
+                                old_field_in_current_model = old_model_state.get_field(field_name)
+                                new_field = field.clone()
+                                new_field.remote_field.field_name = new_field_name
+                                
+                                # Generate AlterField operation
+                                self.add_operation(
+                                    app_label,
+                                    operations.AlterField(
+                                        model_name=model_name,
+                                        name=field_name,
+                                        field=new_field,
+                                    )
+                                )
+                    except (LookupError, AttributeError):
+                        # Skip if we can't resolve the model or field
+                        continue
+
     @staticmethod
     def _resolve_dependency(dependency):
         """
