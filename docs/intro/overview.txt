@@ -3,8 +3,8 @@ Django at a glance
 ==================
 
 Because Django was developed in a fast-paced newsroom environment, it was
-designed to make common Web-development tasks fast and easy. Here's an informal
-overview of how to write a database-driven Web app with Django.
+designed to make common web development tasks fast and easy. Here's an informal
+overview of how to write a database-driven web app with Django.
 
 The goal of this document is to give you enough technical specifics to
 understand how Django works, but this isn't intended to be a tutorial or
@@ -26,7 +26,7 @@ representing your models -- so far, it's been solving many years' worth of
 database-schema problems. Here's a quick example:
 
 .. code-block:: python
-    :caption: mysite/news/models.py
+    :caption: ``mysite/news/models.py``
 
     from django.db import models
 
@@ -66,9 +66,7 @@ Enjoy the free API
 
 With that, you've got a free, and rich, :doc:`Python API </topics/db/queries>`
 to access your data. The API is created on the fly, no code generation
-necessary:
-
-.. code-block:: python
+necessary::
 
     # Import the models we created from our "news" app
     >>> from news.models import Article, Reporter
@@ -144,11 +142,11 @@ A dynamic admin interface: it's not just scaffolding -- it's the whole house
 
 Once your models are defined, Django can automatically create a professional,
 production ready :doc:`administrative interface </ref/contrib/admin/index>` --
-a website that lets authenticated users add, change and delete objects. It's
-as easy as registering your model in the admin site:
+a website that lets authenticated users add, change and delete objects. The
+only step required is to register your model in the admin site:
 
 .. code-block:: python
-    :caption: mysite/news/models.py
+    :caption: ``mysite/news/models.py``
 
     from django.db import models
 
@@ -159,7 +157,7 @@ as easy as registering your model in the admin site:
         reporter = models.ForeignKey(Reporter, on_delete=models.CASCADE)
 
 .. code-block:: python
-    :caption: mysite/news/admin.py
+    :caption: ``mysite/news/admin.py``
 
     from django.contrib import admin
 
@@ -169,7 +167,7 @@ as easy as registering your model in the admin site:
 
 The philosophy here is that your site is edited by a staff, or a client, or
 maybe just you -- and you don't want to have to deal with creating backend
-interfaces just to manage content.
+interfaces only to manage content.
 
 One typical workflow in creating Django apps is to create models and get the
 admin sites up and running as fast as possible, so your staff (or clients) can
@@ -178,20 +176,20 @@ start populating data. Then, develop the way data is presented to the public.
 Design your URLs
 ================
 
-A clean, elegant URL scheme is an important detail in a high-quality Web
+A clean, elegant URL scheme is an important detail in a high-quality web
 application. Django encourages beautiful URL design and doesn't put any cruft
 in URLs, like ``.php`` or ``.asp``.
 
 To design URLs for an app, you create a Python module called a :doc:`URLconf
-</topics/http/urls>`. A table of contents for your app, it contains a simple
-mapping between URL patterns and Python callback functions. URLconfs also serve
-to decouple URLs from Python code.
+</topics/http/urls>`. A table of contents for your app, it contains a mapping
+between URL patterns and Python callback functions. URLconfs also serve to
+decouple URLs from Python code.
 
 Here's what a URLconf might look like for the ``Reporter``/``Article``
 example above:
 
 .. code-block:: python
-    :caption: mysite/news/urls.py
+    :caption: ``mysite/news/urls.py``
 
     from django.urls import path
 
@@ -231,7 +229,7 @@ and renders the template with the retrieved data. Here's an example view for
 ``year_archive`` from above:
 
 .. code-block:: python
-    :caption: mysite/news/views.py
+    :caption: ``mysite/news/views.py``
 
     from django.shortcuts import render
 
@@ -260,7 +258,7 @@ Let's say the ``news/year_archive.html`` template was found. Here's what that
 might look like:
 
 .. code-block:: html+django
-    :caption: mysite/news/templates/news/year_archive.html
+    :caption: ``mysite/news/templates/news/year_archive.html``
 
     {% extends "base.html" %}
 
@@ -301,7 +299,7 @@ Here's what the "base.html" template, including the use of :doc:`static files
 </howto/static-files/index>`, might look like:
 
 .. code-block:: html+django
-    :caption: mysite/templates/base.html
+    :caption: ``mysite/templates/base.html``
 
     {% load static %}
     <html>
@@ -309,18 +307,18 @@ Here's what the "base.html" template, including the use of :doc:`static files
         <title>{% block title %}{% endblock %}</title>
     </head>
     <body>
-        <img src="{% static "images/sitelogo.png" %}" alt="Logo">
+        <img src="{% static 'images/sitelogo.png' %}" alt="Logo">
         {% block content %}{% endblock %}
     </body>
     </html>
 
 Simplistically, it defines the look-and-feel of the site (with the site's logo),
-and provides "holes" for child templates to fill. This makes a site redesign as
-easy as changing a single file -- the base template.
+and provides "holes" for child templates to fill. This means that a site redesign
+can be done by changing a single file -- the base template.
 
 It also lets you create multiple versions of a site, with different base
 templates, while reusing child templates. Django's creators have used this
-technique to create strikingly different mobile versions of sites -- simply by
+technique to create strikingly different mobile versions of sites by only
 creating a new base template.
 
 Note that you don't have to use Django's template system if you prefer another
@@ -340,15 +338,14 @@ features:
 * A :doc:`caching framework </topics/cache>` that integrates with memcached
   or other backends.
 
-* A :doc:`syndication framework </ref/contrib/syndication>` that makes
-  creating RSS and Atom feeds as easy as writing a small Python class.
+* A :doc:`syndication framework </ref/contrib/syndication>` that lets you
+  create RSS and Atom feeds by writing a small Python class.
 
 * More attractive automatically-generated admin features -- this overview
   barely scratched the surface.
 
-The next obvious steps are for you to `download Django`_, read :doc:`the
-tutorial </intro/tutorial01>` and join `the community`_. Thanks for your
-interest!
+The next steps are for you to `download Django`_, read :doc:`the tutorial
+</intro/tutorial01>` and join `the community`_. Thanks for your interest!
 
 .. _download Django: https://www.djangoproject.com/download/
 .. _the community: https://www.djangoproject.com/community/

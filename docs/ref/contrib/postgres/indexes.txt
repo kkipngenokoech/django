@@ -7,10 +7,31 @@ PostgreSQL specific model indexes
 The following are PostgreSQL specific :doc:`indexes </ref/models/indexes>`
 available from the ``django.contrib.postgres.indexes`` module.
 
+``BloomIndex``
+==============
+
+.. class:: BloomIndex(*expressions, length=None, columns=(), **options)
+
+    Creates a bloom_ index.
+
+    To use this index access you need to activate the bloom_ extension on
+    PostgreSQL. You can install it using the
+    :class:`~django.contrib.postgres.operations.BloomExtension` migration
+    operation.
+
+    Provide an integer number of bits from 1 to 4096 to the ``length``
+    parameter to specify the length of each index entry. PostgreSQL's default
+    is 80.
+
+    The ``columns`` argument takes a tuple or list of up to 32 values that are
+    integer number of bits from 1 to 4095.
+
+    .. _bloom: https://www.postgresql.org/docs/current/bloom.html
+
 ``BrinIndex``
 =============
 
-.. class:: BrinIndex(autosummarize=None, pages_per_range=None, **options)
+.. class:: BrinIndex(*expressions, autosummarize=None, pages_per_range=None, **options)
 
     Creates a `BRIN index
     <https://www.postgresql.org/docs/current/brin-intro.html>`_.
@@ -22,16 +43,10 @@ available from the ``django.contrib.postgres.indexes`` module.
 
     .. _automatic summarization: https://www.postgresql.org/docs/current/brin-intro.html#BRIN-OPERATION
 
-    .. versionchanged:: 2.2
-
-        The ``autosummarize`` parameter was added.
-
 ``BTreeIndex``
 ==============
 
-.. class:: BTreeIndex(fillfactor=None, **options)
-
-    .. versionadded:: 2.2
+.. class:: BTreeIndex(*expressions, fillfactor=None, **options)
 
     Creates a B-Tree index.
 
@@ -43,7 +58,7 @@ available from the ``django.contrib.postgres.indexes`` module.
 ``GinIndex``
 ============
 
-.. class:: GinIndex(fastupdate=None, gin_pending_list_limit=None, **options)
+.. class:: GinIndex(*expressions, fastupdate=None, gin_pending_list_limit=None, **options)
 
     Creates a `gin index <https://www.postgresql.org/docs/current/gin.html>`_.
 
@@ -58,9 +73,9 @@ available from the ``django.contrib.postgres.indexes`` module.
     Set the ``fastupdate`` parameter to ``False`` to disable the `GIN Fast
     Update Technique`_ that's enabled by default in PostgreSQL.
 
-    Provide an integer number of bytes to the gin_pending_list_limit_ parameter
-    to tune the maximum size of the GIN pending list which is used when
-    ``fastupdate`` is enabled.
+    Provide an integer number of kilobytes to the gin_pending_list_limit_
+    parameter to tune the maximum size of the GIN pending list which is used
+    when ``fastupdate`` is enabled.
 
     .. _GIN Fast Update Technique: https://www.postgresql.org/docs/current/gin-implementation.html#GIN-FAST-UPDATE
     .. _gin_pending_list_limit: https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-GIN-PENDING-LIST-LIMIT
@@ -68,7 +83,7 @@ available from the ``django.contrib.postgres.indexes`` module.
 ``GistIndex``
 =============
 
-.. class:: GistIndex(buffering=None, fillfactor=None, **options)
+.. class:: GistIndex(*expressions, buffering=None, fillfactor=None, **options)
 
     Creates a `GiST index
     <https://www.postgresql.org/docs/current/gist.html>`_. These indexes are
@@ -98,28 +113,19 @@ available from the ``django.contrib.postgres.indexes`` module.
 ``HashIndex``
 =============
 
-.. class:: HashIndex(fillfactor=None, **options)
-
-    .. versionadded:: 2.2
+.. class:: HashIndex(*expressions, fillfactor=None, **options)
 
     Creates a hash index.
 
     Provide an integer value from 10 to 100 to the fillfactor_ parameter to
     tune how packed the index pages will be. PostgreSQL's default is 90.
 
-    .. admonition:: Use this index only on PostgreSQL 10 and later
-
-        Hash indexes have been available in PostgreSQL for a long time, but
-        they suffer from a number of data integrity issues in older versions.
-
     .. _fillfactor: https://www.postgresql.org/docs/current/sql-createindex.html#SQL-CREATEINDEX-STORAGE-PARAMETERS
 
 ``SpGistIndex``
 ===============
 
-.. class:: SpGistIndex(fillfactor=None, **options)
-
-    .. versionadded:: 2.2
+.. class:: SpGistIndex(*expressions, fillfactor=None, **options)
 
     Creates an `SP-GiST index
     <https://www.postgresql.org/docs/current/spgist.html>`_.
@@ -127,4 +133,53 @@ available from the ``django.contrib.postgres.indexes`` module.
     Provide an integer value from 10 to 100 to the fillfactor_ parameter to
     tune how packed the index pages will be. PostgreSQL's default is 90.
 
+    .. versionchanged:: 4.1
+
+        Support for covering SP-GiST indexes on PostgreSQL 14+ was added.
+
     .. _fillfactor: https://www.postgresql.org/docs/current/sql-createindex.html#SQL-CREATEINDEX-STORAGE-PARAMETERS
+
+``OpClass()`` expressions
+=========================
+
+.. class:: OpClass(expression, name)
+
+    An ``OpClass()`` expression represents the ``expression`` with a custom
+    `operator class`_ that can be used to define functional indexes, functional
+    unique constraints, or exclusion constraints. To use it, you need to add
+    ``'django.contrib.postgres'`` in your :setting:`INSTALLED_APPS`. Set the
+    ``name`` parameter to the name of the `operator class`_.
+
+    For example::
+
+        Index(
+            OpClass(Lower('username'), name='varchar_pattern_ops'),
+            name='lower_username_idx',
+        )
+
+    creates an index on ``Lower('username')`` using ``varchar_pattern_ops``.
+    ::
+
+        UniqueConstraint(
+            OpClass(Upper('description'), name='text_pattern_ops'),
+            name='upper_description_unique',
+        )
+
+    creates a unique constraint on ``Upper('description')`` using
+    ``text_pattern_ops``.
+    ::
+
+        ExclusionConstraint(
+            name='exclude_overlapping_ops',
+            expressions=[
+                (OpClass('circle', name='circle_ops'), RangeOperators.OVERLAPS),
+            ],
+        )
+
+    creates an exclusion constraint on ``circle`` using ``circle_ops``.
+
+    .. versionchanged:: 4.1
+
+        Support for exclusion constraints was added.
+
+    .. _operator class: https://www.postgresql.org/docs/current/indexes-opclass.html
