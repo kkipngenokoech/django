@@ -8,11 +8,11 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.validators import MaxValueValidator, RegexValidator
 from django.forms import (
     BooleanField, CharField, CheckboxSelectMultiple, ChoiceField, DateField,
-    DateTimeField, EmailField, FileField, FloatField, Form, HiddenInput,
-    ImageField, IntegerField, MultipleChoiceField, MultipleHiddenInput,
-    MultiValueField, NullBooleanField, PasswordInput, RadioSelect, Select,
-    SplitDateTimeField, SplitHiddenDateTimeWidget, Textarea, TextInput,
-    TimeField, ValidationError, forms,
+    DateTimeField, EmailField, FileField, FileInput, FloatField, Form,
+    HiddenInput, ImageField, IntegerField, MultipleChoiceField,
+    MultipleHiddenInput, MultiValueField, NullBooleanField, PasswordInput,
+    RadioSelect, Select, SplitDateTimeField, SplitHiddenDateTimeWidget,
+    Textarea, TextInput, TimeField, ValidationError, forms,
 )
 from django.forms.renderers import DjangoTemplates, get_default_renderer
 from django.forms.utils import ErrorList
@@ -613,13 +613,14 @@ Java</label></li>
 </ul>"""
         )
 
-        # When RadioSelect is used with auto_id, and the whole form is printed using
-        # either as_table() or as_ul(), the label for the RadioSelect will point to the
-        # ID of the *first* radio button.
+        # When RadioSelect is used with auto_id, and the whole form is printed
+        # using either as_table() or as_ul(), the label for the RadioSelect
+        # will **not** point to the ID of the *first* radio button to improve
+        # accessibility for screen reader users.
         self.assertHTMLEqual(
             f.as_table(),
             """<tr><th><label for="id_name">Name:</label></th><td><input type="text" name="name" id="id_name" required></td></tr>
-<tr><th><label for="id_language_0">Language:</label></th><td><ul id="id_language">
+<tr><th><label>Language:</label></th><td><ul id="id_language">
 <li><label for="id_language_0"><input type="radio" id="id_language_0" value="P" name="language" required>
 Python</label></li>
 <li><label for="id_language_1"><input type="radio" id="id_language_1" value="J" name="language" required>
@@ -629,7 +630,7 @@ Java</label></li>
         self.assertHTMLEqual(
             f.as_ul(),
             """<li><label for="id_name">Name:</label> <input type="text" name="name" id="id_name" required></li>
-<li><label for="id_language_0">Language:</label> <ul id="id_language">
+<li><label>Language:</label> <ul id="id_language">
 <li><label for="id_language_0"><input type="radio" id="id_language_0" value="P" name="language" required>
 Python</label></li>
 <li><label for="id_language_1"><input type="radio" id="id_language_1" value="J" name="language" required>
@@ -639,7 +640,7 @@ Java</label></li>
         self.assertHTMLEqual(
             f.as_p(),
             """<p><label for="id_name">Name:</label> <input type="text" name="name" id="id_name" required></p>
-<p><label for="id_language_0">Language:</label> <ul id="id_language">
+<p><label>Language:</label> <ul id="id_language">
 <li><label for="id_language_0"><input type="radio" id="id_language_0" value="P" name="language" required>
 Python</label></li>
 <li><label for="id_language_1"><input type="radio" id="id_language_1" value="J" name="language" required>
@@ -745,6 +746,15 @@ Java</label></li>
             [str(item) for item in bf[1:]],
             [str(bf[1]), str(bf[2]), str(bf[3])],
         )
+
+    def test_boundfield_invalid_index(self):
+        class TestForm(Form):
+            name = ChoiceField(choices=[])
+
+        field = TestForm()['name']
+        msg = 'BoundField indices must be integers or slices, not str.'
+        with self.assertRaisesMessage(TypeError, msg):
+            field['foo']
 
     def test_boundfield_bool(self):
         """BoundField without any choices (subwidgets) evaluates to True."""
@@ -995,7 +1005,7 @@ Java</label></li>
         self.assertHTMLEqual(
             f.as_table(),
             """<tr><th>&lt;em&gt;Special&lt;/em&gt; Field:</th><td>
-<ul class="errorlist"><li>Something&#39;s wrong with &#39;Nothing to escape&#39;</li></ul>
+<ul class="errorlist"><li>Something&#x27;s wrong with &#x27;Nothing to escape&#x27;</li></ul>
 <input type="text" name="special_name" value="Nothing to escape" required></td></tr>
 <tr><th><em>Special</em> Field:</th><td>
 <ul class="errorlist"><li>'<b>Nothing to escape</b>' is a safe string</li></ul>
@@ -1008,10 +1018,10 @@ Java</label></li>
         self.assertHTMLEqual(
             f.as_table(),
             """<tr><th>&lt;em&gt;Special&lt;/em&gt; Field:</th><td>
-<ul class="errorlist"><li>Something&#39;s wrong with &#39;Should escape &lt; &amp; &gt; and
-&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;&#39;</li></ul>
+<ul class="errorlist"><li>Something&#x27;s wrong with &#x27;Should escape &lt; &amp; &gt; and
+&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;&#x27;</li></ul>
 <input type="text" name="special_name"
-value="Should escape &lt; &amp; &gt; and &lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;" required></td></tr>
+value="Should escape &lt; &amp; &gt; and &lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;" required></td></tr>
 <tr><th><em>Special</em> Field:</th><td>
 <ul class="errorlist"><li>'<b><i>Do not escape</i></b>' is a safe string</li></ul>
 <input type="text" name="special_safe_name" value="&lt;i&gt;Do not escape&lt;/i&gt;" required></td></tr>"""
@@ -1235,6 +1245,22 @@ value="Should escape &lt; &amp; &gt; and &lt;script&gt;alert(&#39;xss&#39;)&lt;/
         self.assertTrue(f.has_error(NON_FIELD_ERRORS))
         self.assertTrue(f.has_error(NON_FIELD_ERRORS, 'password_mismatch'))
         self.assertFalse(f.has_error(NON_FIELD_ERRORS, 'anything'))
+
+    def test_html_output_with_hidden_input_field_errors(self):
+        class TestForm(Form):
+            hidden_input = CharField(widget=HiddenInput)
+
+            def clean(self):
+                self.add_error(None, 'Form error')
+
+        f = TestForm(data={})
+        error_dict = {
+            'hidden_input': ['This field is required.'],
+            '__all__': ['Form error'],
+        }
+        self.assertEqual(f.errors, error_dict)
+        f.as_table()
+        self.assertEqual(f.errors, error_dict)
 
     def test_dynamic_construction(self):
         # It's possible to construct a Form dynamically by adding to the self.fields
@@ -1957,19 +1983,33 @@ Password: <input type="password" name="password" required></li>
         )
 
     def test_get_initial_for_field(self):
+        now = datetime.datetime(2006, 10, 25, 14, 30, 45, 123456)
+
         class PersonForm(Form):
             first_name = CharField(initial='John')
             last_name = CharField(initial='Doe')
             age = IntegerField()
             occupation = CharField(initial=lambda: 'Unknown')
+            dt_fixed = DateTimeField(initial=now)
+            dt_callable = DateTimeField(initial=lambda: now)
 
         form = PersonForm(initial={'first_name': 'Jane'})
-        self.assertEqual(form.get_initial_for_field(form.fields['age'], 'age'), None)
-        self.assertEqual(form.get_initial_for_field(form.fields['last_name'], 'last_name'), 'Doe')
-        # Form.initial overrides Field.initial.
-        self.assertEqual(form.get_initial_for_field(form.fields['first_name'], 'first_name'), 'Jane')
-        # Callables are evaluated.
-        self.assertEqual(form.get_initial_for_field(form.fields['occupation'], 'occupation'), 'Unknown')
+        cases = [
+            ('age', None),
+            ('last_name', 'Doe'),
+            # Form.initial overrides Field.initial.
+            ('first_name', 'Jane'),
+            # Callables are evaluated.
+            ('occupation', 'Unknown'),
+            # Microseconds are removed from datetimes.
+            ('dt_fixed', datetime.datetime(2006, 10, 25, 14, 30, 45)),
+            ('dt_callable', datetime.datetime(2006, 10, 25, 14, 30, 45)),
+        ]
+        for field_name, expected in cases:
+            with self.subTest(field_name=field_name):
+                field = form.fields[field_name]
+                actual = form.get_initial_for_field(field, field_name)
+                self.assertEqual(actual, expected)
 
     def test_changed_data(self):
         class Person(Form):
@@ -2071,6 +2111,8 @@ Password: <input type="password" name="password" required></li>
             supports_microseconds = False
 
         class DateTimeForm(Form):
+            # Test a non-callable.
+            fixed = DateTimeField(initial=now)
             auto_timestamp = DateTimeField(initial=delayed_now)
             auto_time_only = TimeField(initial=delayed_now_time)
             supports_microseconds = DateTimeField(initial=delayed_now, widget=TextInput)
@@ -2079,22 +2121,65 @@ Password: <input type="password" name="password" required></li>
             ti_without_microsec = DateTimeField(initial=delayed_now, widget=TextInputWithoutMicrosec)
 
         unbound = DateTimeForm()
-        self.assertEqual(unbound['auto_timestamp'].value(), now_no_ms)
-        self.assertEqual(unbound['auto_time_only'].value(), now_no_ms.time())
-        self.assertEqual(unbound['supports_microseconds'].value(), now)
-        self.assertEqual(unbound['hi_default_microsec'].value(), now)
-        self.assertEqual(unbound['hi_without_microsec'].value(), now_no_ms)
-        self.assertEqual(unbound['ti_without_microsec'].value(), now_no_ms)
+        cases = [
+            ('fixed', now_no_ms),
+            ('auto_timestamp', now_no_ms),
+            ('auto_time_only', now_no_ms.time()),
+            ('supports_microseconds', now),
+            ('hi_default_microsec', now),
+            ('hi_without_microsec', now_no_ms),
+            ('ti_without_microsec', now_no_ms),
+        ]
+        for field_name, expected in cases:
+            with self.subTest(field_name=field_name):
+                actual = unbound[field_name].value()
+                self.assertEqual(actual, expected)
+                # Also check get_initial_for_field().
+                field = unbound.fields[field_name]
+                actual = unbound.get_initial_for_field(field, field_name)
+                self.assertEqual(actual, expected)
 
-    def test_datetime_clean_initial_callable_disabled(self):
-        now = datetime.datetime(2006, 10, 25, 14, 30, 45, 123456)
+    def get_datetime_form_with_callable_initial(self, disabled, microseconds=0):
+        class FakeTime:
+            def __init__(self):
+                self.elapsed_seconds = 0
+
+            def now(self):
+                self.elapsed_seconds += 1
+                return datetime.datetime(
+                    2006, 10, 25, 14, 30, 45 + self.elapsed_seconds,
+                    microseconds,
+                )
 
         class DateTimeForm(forms.Form):
-            dt = DateTimeField(initial=lambda: now, disabled=True)
+            dt = DateTimeField(initial=FakeTime().now, disabled=disabled)
 
-        form = DateTimeForm({})
+        return DateTimeForm({})
+
+    def test_datetime_clean_disabled_callable_initial_microseconds(self):
+        """
+        Cleaning a form with a disabled DateTimeField and callable initial
+        removes microseconds.
+        """
+        form = self.get_datetime_form_with_callable_initial(
+            disabled=True, microseconds=123456,
+        )
         self.assertEqual(form.errors, {})
-        self.assertEqual(form.cleaned_data, {'dt': now})
+        self.assertEqual(form.cleaned_data, {
+            'dt': datetime.datetime(2006, 10, 25, 14, 30, 46),
+        })
+
+    def test_datetime_clean_disabled_callable_initial_bound_field(self):
+        """
+        The cleaned value for a form with a disabled DateTimeField and callable
+        initial matches the bound field's cached initial value.
+        """
+        form = self.get_datetime_form_with_callable_initial(disabled=True)
+        self.assertEqual(form.errors, {})
+        cleaned = form.cleaned_data['dt']
+        self.assertEqual(cleaned, datetime.datetime(2006, 10, 25, 14, 30, 46))
+        bf = form['dt']
+        self.assertEqual(cleaned, bf.initial)
 
     def test_datetime_changed_data_callable_with_microseconds(self):
         class DateTimeForm(forms.Form):
@@ -2477,6 +2562,25 @@ Password: <input type="password" name="password" required>
         self.assertEqual(f.errors, {})
         self.assertEqual(f.cleaned_data['file1'], 'resume.txt')
 
+    def test_filefield_with_fileinput_required(self):
+        class FileForm(Form):
+            file1 = forms.FileField(widget=FileInput)
+
+        f = FileForm(auto_id=False)
+        self.assertHTMLEqual(
+            f.as_table(),
+            '<tr><th>File1:</th><td>'
+            '<input type="file" name="file1" required></td></tr>',
+        )
+        # A required file field with initial data doesn't contain the required
+        # HTML attribute. The file input is left blank by the user to keep the
+        # existing, initial value.
+        f = FileForm(initial={'file1': 'resume.txt'}, auto_id=False)
+        self.assertHTMLEqual(
+            f.as_table(),
+            '<tr><th>File1:</th><td><input type="file" name="file1"></td></tr>',
+        )
+
     def test_basic_processing_in_view(self):
         class UserRegistration(Form):
             username = CharField(max_length=10)
@@ -2632,7 +2736,7 @@ Password: <input type="password" name="password" required>
             t.render(Context({'form': UserRegistration(auto_id=False)})),
             """<form>
 <p>Username: <input type="text" name="username" maxlength="10" required><br>
-Good luck picking a username that doesn&#39;t already exist.</p>
+Good luck picking a username that doesn&#x27;t already exist.</p>
 <p>Password1: <input type="password" name="password1" required></p>
 <p>Password2: <input type="password" name="password2" required></p>
 <input type="submit" required>
@@ -3098,6 +3202,23 @@ Good luck picking a username that doesn&#39;t already exist.</p>
         self.assertEqual(form['field'].id_for_label, 'myCustomID')
         self.assertEqual(form['field_none'].id_for_label, 'id_field_none')
 
+    def test_boundfield_widget_type(self):
+        class SomeForm(Form):
+            first_name = CharField()
+            birthday = SplitDateTimeField(widget=SplitHiddenDateTimeWidget)
+
+        f = SomeForm()
+        self.assertEqual(f['first_name'].widget_type, 'text')
+        self.assertEqual(f['birthday'].widget_type, 'splithiddendatetime')
+
+    def test_boundfield_css_classes(self):
+        form = Person()
+        field = form['first_name']
+        self.assertEqual(field.css_classes(), '')
+        self.assertEqual(field.css_classes(extra_classes=''), '')
+        self.assertEqual(field.css_classes(extra_classes='test'), 'test')
+        self.assertEqual(field.css_classes(extra_classes='test test'), 'test')
+
     def test_label_tag_override(self):
         """
         BoundField label_suffix (if provided) overrides Form label_suffix
@@ -3298,7 +3419,7 @@ Good luck picking a username that doesn&#39;t already exist.</p>
 
         self.assertIsInstance(e, list)
         self.assertIn('Foo', e)
-        self.assertIn('Foo', forms.ValidationError(e))
+        self.assertIn('Foo', ValidationError(e))
 
         self.assertEqual(
             e.as_text(),
@@ -3671,6 +3792,22 @@ Good luck picking a username that doesn&#39;t already exist.</p>
         self.assertTrue(f.is_valid())
         self.assertEqual(f.cleaned_data, {'data': 'xyzzy'})
 
+    def test_empty_data_files_multi_value_dict(self):
+        p = Person()
+        self.assertIsInstance(p.data, MultiValueDict)
+        self.assertIsInstance(p.files, MultiValueDict)
+
+    def test_field_deep_copy_error_messages(self):
+        class CustomCharField(CharField):
+            def __init__(self, **kwargs):
+                kwargs['error_messages'] = {'invalid': 'Form custom error message.'}
+                super().__init__(**kwargs)
+
+        field = CustomCharField()
+        field_copy = copy.deepcopy(field)
+        self.assertIsInstance(field_copy, CustomCharField)
+        self.assertIsNot(field_copy.error_messages, field.error_messages)
+
 
 class CustomRenderer(DjangoTemplates):
     pass
@@ -3704,7 +3841,7 @@ class RendererTests(SimpleTestCase):
             default_renderer = CustomRenderer
 
         form = CustomForm()
-        self.assertTrue(isinstance(form.renderer, CustomForm.default_renderer))
+        self.assertIsInstance(form.renderer, CustomForm.default_renderer)
 
     def test_attribute_override(self):
         class CustomForm(Form):
