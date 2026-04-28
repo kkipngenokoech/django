@@ -1,6 +1,5 @@
-from django.db import connection
+from django.db import DatabaseError, NotSupportedError, connection
 from django.db.models import Exists, F, IntegerField, OuterRef, Value
-from django.db.utils import DatabaseError, NotSupportedError
 from django.test import TestCase, skipIfDBFeature, skipUnlessDBFeature
 
 from .models import Number, ReservedName
@@ -272,12 +271,14 @@ class QuerySetSetOperationTests(TestCase):
             for operation in (
                 'annotate',
                 'defer',
+                'delete',
                 'exclude',
                 'extra',
                 'filter',
                 'only',
                 'prefetch_related',
                 'select_related',
+                'update',
             ):
                 with self.subTest(combinator=combinator, operation=operation):
                     with self.assertRaisesMessage(

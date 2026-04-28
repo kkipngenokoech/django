@@ -10,8 +10,7 @@ from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.messages.storage.cookie import CookieStorage
 from django.db import connection, models
-from django.db.models import F
-from django.db.models.fields import Field, IntegerField
+from django.db.models import F, Field, IntegerField
 from django.db.models.functions import Upper
 from django.db.models.lookups import Contains, Exact
 from django.template import Context, Template, TemplateSyntaxError
@@ -707,6 +706,18 @@ class ChangeListTests(TestCase):
         link = reverse('admin:admin_changelist_parent_change', args=(p.pk,))
         self.assertNotContains(response, '<a href="%s">' % link)
 
+    def test_clear_all_filters_link(self):
+        self.client.force_login(self.superuser)
+        link = '<a href="?">&#10006; Clear all filters</a>'
+        response = self.client.get(reverse('admin:auth_user_changelist'))
+        self.assertNotContains(response, link)
+        for data in (
+            {SEARCH_VAR: 'test'},
+            {'is_staff__exact': '0'},
+        ):
+            response = self.client.get(reverse('admin:auth_user_changelist'), data=data)
+            self.assertContains(response, link)
+
     def test_tuple_list_display(self):
         swallow = Swallow.objects.create(origin='Africa', load='12.34', speed='22.2')
         swallow2 = Swallow.objects.create(origin='Africa', load='12.34', speed='22.2')
@@ -843,6 +854,26 @@ class ChangeListTests(TestCase):
         request = self.factory.post(changelist_url, data=data)
         queryset = m._get_list_editable_queryset(request, prefix='form')
         self.assertEqual(queryset.count(), 2)
+
+    def test_get_list_editable_queryset_with_regex_chars_in_prefix(self):
+        a = Swallow.objects.create(origin='Swallow A', load=4, speed=1)
+        Swallow.objects.create(origin='Swallow B', load=2, speed=2)
+        data = {
+            'form$-TOTAL_FORMS': '2',
+            'form$-INITIAL_FORMS': '2',
+            'form$-MIN_NUM_FORMS': '0',
+            'form$-MAX_NUM_FORMS': '1000',
+            'form$-0-uuid': str(a.pk),
+            'form$-0-load': '10',
+            '_save': 'Save',
+        }
+        superuser = self._create_superuser('superuser')
+        self.client.force_login(superuser)
+        changelist_url = reverse('admin:admin_changelist_swallow_changelist')
+        m = SwallowAdmin(Swallow, custom_site)
+        request = self.factory.post(changelist_url, data=data)
+        queryset = m._get_list_editable_queryset(request, prefix='form$')
+        self.assertEqual(queryset.count(), 1)
 
     def test_changelist_view_list_editable_changed_objects_uses_filter(self):
         """list_editable edits use a filtered queryset to limit memory usage."""

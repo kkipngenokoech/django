@@ -411,6 +411,10 @@ class TestQuerying(PostgreSQLTestCase):
                     **{lookup: value},
                 ).exists())
 
+    def test_key_escape(self):
+        obj = JSONModel.objects.create(field={'%total': 10})
+        self.assertEqual(JSONModel.objects.filter(**{'field__%total': 10}).get(), obj)
+
 
 @isolate_apps('postgres_tests')
 class TestChecks(PostgreSQLSimpleTestCase):
@@ -429,7 +433,7 @@ class TestChecks(PostgreSQLSimpleTestCase):
                 ),
                 hint='Use a callable instead, e.g., use `dict` instead of `{}`.',
                 obj=MyModel._meta.get_field('field'),
-                id='postgres.E003',
+                id='fields.E010',
             )
         ])
 

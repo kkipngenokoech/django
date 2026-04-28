@@ -24,6 +24,7 @@ class BaseDatabaseOperations:
         'SmallIntegerField': (-32768, 32767),
         'IntegerField': (-2147483648, 2147483647),
         'BigIntegerField': (-9223372036854775808, 9223372036854775807),
+        'PositiveBigIntegerField': (0, 9223372036854775807),
         'PositiveSmallIntegerField': (0, 32767),
         'PositiveIntegerField': (0, 2147483647),
         'SmallAutoField': (-32768, 32767),
@@ -625,7 +626,7 @@ class BaseDatabaseOperations:
         if self.connection.features.supports_temporal_subtraction:
             lhs_sql, lhs_params = lhs
             rhs_sql, rhs_params = rhs
-            return "(%s - %s)" % (lhs_sql, rhs_sql), lhs_params + rhs_params
+            return '(%s - %s)' % (lhs_sql, rhs_sql), (*lhs_params, *rhs_params)
         raise NotSupportedError("This backend does not support %s subtraction." % internal_type)
 
     def window_frame_start(self, start):
@@ -657,7 +658,16 @@ class BaseDatabaseOperations:
         return self.window_frame_start(start), self.window_frame_end(end)
 
     def window_frame_range_start_end(self, start=None, end=None):
-        return self.window_frame_rows_start_end(start, end)
+        start_, end_ = self.window_frame_rows_start_end(start, end)
+        if (
+            self.connection.features.only_supports_unbounded_with_preceding_and_following and
+            ((start and start < 0) or (end and end > 0))
+        ):
+            raise NotSupportedError(
+                '%s only supports UNBOUNDED together with PRECEDING and '
+                'FOLLOWING.' % self.connection.display_name
+            )
+        return start_, end_
 
     def explain_query_prefix(self, format=None, **options):
         if not self.connection.features.supports_explaining_query_execution:

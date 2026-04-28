@@ -33,6 +33,7 @@ from django.db.models.signals import (
 )
 from django.db.models.utils import make_model_tuple
 from django.utils.encoding import force_str
+from django.utils.hashable import make_hashable
 from django.utils.text import capfirst, get_text_list
 from django.utils.translation import gettext_lazy as _
 from django.utils.version import get_version
@@ -201,7 +202,7 @@ class ModelBase(type):
                 continue
             # Locate OneToOneField instances.
             for field in base._meta.local_fields:
-                if isinstance(field, OneToOneField):
+                if isinstance(field, OneToOneField) and field.remote_field.parent_link:
                     related = resolve_relation(new_class, field.remote_field.model)
                     parent_links[make_model_tuple(related)] = field
 
@@ -568,6 +569,9 @@ class Model(metaclass=ModelBase):
         return getattr(self, meta.pk.attname)
 
     def _set_pk_val(self, value):
+        for parent_link in self._meta.parents.values():
+            if parent_link and parent_link != self._meta.pk:
+                setattr(self, parent_link.target_field.attname, value)
         return setattr(self, self._meta.pk.attname, value)
 
     pk = property(_get_pk_val, _set_pk_val)
@@ -848,6 +852,7 @@ class Model(metaclass=ModelBase):
         updated = False
         # Skip an UPDATE when adding an instance and primary key has a default.
         if (
+            not raw and
             not force_insert and
             self._state.adding and
             self._meta.pk.default and
@@ -940,8 +945,9 @@ class Model(metaclass=ModelBase):
 
     def _get_FIELD_display(self, field):
         value = getattr(self, field.attname)
+        choices_dict = dict(make_hashable(field.flatchoices))
         # force_str() to coerce lazy strings.
-        return force_str(dict(field.flatchoices).get(value, value), strings_only=True)
+        return force_str(choices_dict.get(make_hashable(value), value), strings_only=True)
 
     def _get_next_or_previous_by_FIELD(self, field, is_next, **kwargs):
         if not self.pk:
@@ -1249,6 +1255,7 @@ class Model(metaclass=ModelBase):
     def check(cls, **kwargs):
         errors = [*cls._check_swappable(), *cls._check_model(), *cls._check_managers(**kwargs)]
         if not cls._meta.swapped:
+            databases = kwargs.get('databases') or []
             errors += [
                 *cls._check_fields(**kwargs),
                 *cls._check_m2m_through_same_relationship(),
@@ -1271,7 +1278,7 @@ class Model(metaclass=ModelBase):
                 *cls._check_unique_together(),
                 *cls._check_indexes(),
                 *cls._check_ordering(),
-                *cls._check_constraints(),
+                *cls._check_constraints(databases),
             ]
 
         return errors
@@ -1830,9 +1837,9 @@ class Model(metaclass=ModelBase):
         return errors
 
     @classmethod
-    def _check_constraints(cls):
+    def _check_constraints(cls, databases):
         errors = []
-        for db in settings.DATABASES:
+        for db in databases:
             if not router.allow_migrate_model(db, cls):
                 continue
             connection = connections[db]

@@ -6,9 +6,8 @@ from itertools import chain
 
 from django.conf import settings
 from django.core.exceptions import FieldError
-from django.db import utils
+from django.db import DatabaseError, NotSupportedError, models
 from django.db.backends.base.operations import BaseDatabaseOperations
-from django.db.models import aggregates, fields
 from django.db.models.expressions import Col
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime, parse_time
@@ -40,25 +39,25 @@ class DatabaseOperations(BaseDatabaseOperations):
             return len(objs)
 
     def check_expression_support(self, expression):
-        bad_fields = (fields.DateField, fields.DateTimeField, fields.TimeField)
-        bad_aggregates = (aggregates.Sum, aggregates.Avg, aggregates.Variance, aggregates.StdDev)
+        bad_fields = (models.DateField, models.DateTimeField, models.TimeField)
+        bad_aggregates = (models.Sum, models.Avg, models.Variance, models.StdDev)
         if isinstance(expression, bad_aggregates):
             for expr in expression.get_source_expressions():
                 try:
                     output_field = expr.output_field
-                except FieldError:
+                except (AttributeError, FieldError):
                     # Not every subexpression has an output_field which is fine
                     # to ignore.
                     pass
                 else:
                     if isinstance(output_field, bad_fields):
-                        raise utils.NotSupportedError(
+                        raise NotSupportedError(
                             'You cannot use Sum, Avg, StdDev, and Variance '
                             'aggregations on date/time fields in sqlite3 '
                             'since date/time is saved as text.'
                         )
-        if isinstance(expression, aggregates.Aggregate) and len(expression.source_expressions) > 1:
-            raise utils.NotSupportedError(
+        if isinstance(expression, models.Aggregate) and len(expression.source_expressions) > 1:
+            raise NotSupportedError(
                 "SQLite doesn't support DISTINCT on aggregate functions "
                 "accepting multiple arguments."
             )
@@ -313,7 +312,7 @@ class DatabaseOperations(BaseDatabaseOperations):
 
     def combine_duration_expression(self, connector, sub_expressions):
         if connector not in ['+', '-']:
-            raise utils.DatabaseError('Invalid connector for timedelta: %s.' % connector)
+            raise DatabaseError('Invalid connector for timedelta: %s.' % connector)
         fn_params = ["'%s'" % connector] + sub_expressions
         if len(fn_params) > 3:
             raise ValueError('Too many params for timedelta operations.')
@@ -326,9 +325,10 @@ class DatabaseOperations(BaseDatabaseOperations):
     def subtract_temporals(self, internal_type, lhs, rhs):
         lhs_sql, lhs_params = lhs
         rhs_sql, rhs_params = rhs
+        params = (*lhs_params, *rhs_params)
         if internal_type == 'TimeField':
-            return "django_time_diff(%s, %s)" % (lhs_sql, rhs_sql), lhs_params + rhs_params
-        return "django_timestamp_diff(%s, %s)" % (lhs_sql, rhs_sql), lhs_params + rhs_params
+            return 'django_time_diff(%s, %s)' % (lhs_sql, rhs_sql), params
+        return 'django_timestamp_diff(%s, %s)' % (lhs_sql, rhs_sql), params
 
     def insert_statement(self, ignore_conflicts=False):
         return 'INSERT OR IGNORE INTO' if ignore_conflicts else super().insert_statement(ignore_conflicts)

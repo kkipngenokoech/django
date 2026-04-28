@@ -13,13 +13,6 @@ details.
 Get the latest version of Python at https://www.python.org/downloads/ or with
 your operating system's package manager.
 
-.. admonition:: Django on Jython
-
-    Jython_ (a Python implementation for the Java platform) is not compatible
-    with Python 3, so Django ≥ 2.0 cannot run on Jython.
-
-.. _jython: http://www.jython.org/
-
 .. admonition:: Python on Windows
 
     If you are just starting with Django and using Windows, you may find
@@ -118,7 +111,7 @@ database queries, Django will need permission to create a test database.
 .. _PostgreSQL: https://www.postgresql.org/
 .. _MariaDB: https://mariadb.org/
 .. _MySQL: https://www.mysql.com/
-.. _psycopg2: http://initd.org/psycopg/
+.. _psycopg2: https://www.psycopg.org/
 .. _SQLite: https://www.sqlite.org/
 .. _cx_Oracle: https://oracle.github.io/python-cx_Oracle/
 .. _Oracle: https://www.oracle.com/

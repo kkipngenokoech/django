@@ -159,11 +159,11 @@ Use the ``django.test.Client`` class to make requests.
 
             >>> c = Client()
             >>> c.get('/customers/details/', {'name': 'fred', 'age': 7},
-            ...       HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+            ...       HTTP_ACCEPT='application/json')
 
-        ...will send the HTTP header ``HTTP_X_REQUESTED_WITH`` to the
-        details view, which is a good way to test code paths that use the
-        :meth:`django.http.HttpRequest.is_ajax()` method.
+        ...will send the HTTP header ``HTTP_ACCEPT`` to the details view, which
+        is a good way to test code paths that use the
+        :meth:`django.http.HttpRequest.accepts()` method.
 
         .. admonition:: CGI specification
 
@@ -774,6 +774,11 @@ If your tests make any database queries, use subclasses
     on macOS). If you want to intentionally raise an exception such as
     :exc:`unittest.SkipTest` in ``setUpClass()``, be sure to do it before
     calling ``super()`` to avoid this.
+
+.. versionchanged:: 3.1
+
+    The ``debug()`` method was implemented to allow running a test without
+    collecting the result and catching exceptions.
 
 ``TransactionTestCase``
 -----------------------
@@ -1608,8 +1613,8 @@ your test suite.
     syntax differences. When invalid XML is passed in any parameter, an
     ``AssertionError`` is always raised, even if both string are identical.
 
-    XML declaration, document type, and comments are ignored. Only the root
-    element and its children are compared.
+    XML declaration, document type, processing instructions, and comments are
+    ignored. Only the root element and its children are compared.
 
     Output in case of error can be customized with the ``msg`` argument.
 
@@ -1670,9 +1675,12 @@ your test suite.
     ``num`` database queries are executed.
 
     If a ``"using"`` key is present in ``kwargs`` it is used as the database
-    alias for which to check the number of queries.  If you wish to call a
-    function with a ``using`` parameter you can do it by wrapping the call with
-    a ``lambda`` to add an extra parameter::
+    alias for which to check the number of queries::
+
+        self.assertNumQueries(7, using='non_default_db')
+
+    If you wish to call a function with a ``using`` parameter you can do it by
+    wrapping the call with a ``lambda`` to add an extra parameter::
 
         self.assertNumQueries(7, lambda: my_function(using=7))
 

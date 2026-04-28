@@ -16,7 +16,7 @@ except ImportError:
     crypt = None
 else:
     # On some platforms (e.g. OpenBSD), crypt.crypt() always return None.
-    if crypt.crypt('', '') is None:
+    if crypt.crypt('') is None:
         crypt = None
 
 try:
@@ -462,7 +462,7 @@ class BasePasswordHasherTests(SimpleTestCase):
 
     def test_harden_runtime(self):
         msg = 'subclasses of BasePasswordHasher should provide a harden_runtime() method'
-        with self.assertWarns(Warning, msg=msg):
+        with self.assertWarnsMessage(Warning, msg):
             self.hasher.harden_runtime('password', 'encoded')
 
     def test_must_update(self):

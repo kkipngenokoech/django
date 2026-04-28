@@ -1,9 +1,9 @@
 from django.contrib.postgres.signals import (
     get_citext_oids, get_hstore_oids, register_type_handlers,
 )
+from django.db import NotSupportedError
 from django.db.migrations import AddIndex, RemoveIndex
 from django.db.migrations.operations.base import Operation
-from django.db.utils import NotSupportedError
 
 
 class CreateExtension(Operation):
@@ -35,6 +35,12 @@ class CreateExtension(Operation):
 
     def describe(self):
         return "Creates extension %s" % self.name
+
+
+class BloomExtension(CreateExtension):
+
+    def __init__(self):
+        self.name = 'bloom'
 
 
 class BtreeGinExtension(CreateExtension):
