@@ -40,8 +40,9 @@ class Tag(models.Model):
 
 class Note(models.Model):
     note = models.CharField(max_length=100)
-    misc = models.CharField(max_length=10)
+    misc = models.CharField(max_length=25)
     tag = models.ForeignKey(Tag, models.SET_NULL, blank=True, null=True)
+    negate = models.BooleanField(default=True)
 
     class Meta:
         ordering = ['note']
@@ -68,6 +69,7 @@ class ExtraInfo(models.Model):
     note = models.ForeignKey(Note, models.CASCADE, null=True)
     value = models.IntegerField(null=True)
     date = models.ForeignKey(DateTimePK, models.SET_NULL, null=True)
+    filterable = models.BooleanField(default=True)
 
     class Meta:
         ordering = ['info']
@@ -141,6 +143,7 @@ class Cover(models.Model):
 class Number(models.Model):
     num = models.IntegerField()
     other_num = models.IntegerField(null=True)
+    another_num = models.IntegerField(null=True)
 
     def __str__(self):
         return str(self.num)
@@ -405,7 +408,7 @@ class ChildObjectA(ObjectA):
 class ObjectB(models.Model):
     name = models.CharField(max_length=50)
     objecta = models.ForeignKey(ObjectA, models.CASCADE)
-    num = models.PositiveSmallIntegerField()
+    num = models.PositiveIntegerField()
 
     def __str__(self):
         return self.name
@@ -427,14 +430,14 @@ class ObjectC(models.Model):
 
 
 class SimpleCategory(models.Model):
-    name = models.CharField(max_length=15)
+    name = models.CharField(max_length=25)
 
     def __str__(self):
         return self.name
 
 
 class SpecialCategory(SimpleCategory):
-    special_name = models.CharField(max_length=15)
+    special_name = models.CharField(max_length=35)
 
     def __str__(self):
         return self.name + " " + self.special_name
@@ -633,7 +636,7 @@ class StaffUser(BaseUser):
     staff = models.OneToOneField(Staff, models.CASCADE, related_name='user')
 
     def __str__(self):
-        return self.staff
+        return str(self.staff)
 
 
 class Ticket21203Parent(models.Model):

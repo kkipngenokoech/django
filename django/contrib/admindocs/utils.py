@@ -20,6 +20,9 @@ else:
 
 
 def get_view_name(view_func):
+    if hasattr(view_func, 'view_class'):
+        klass = view_func.view_class
+        return f'{klass.__module__}.{klass.__qualname__}'
     mod_name = view_func.__module__
     view_name = getattr(view_func, '__qualname__', view_func.__class__.__name__)
     return mod_name + '.' + view_name
@@ -137,6 +140,15 @@ if docutils_is_available:
 # Match the beginning of a named or unnamed group.
 named_group_matcher = _lazy_re_compile(r'\(\?P(<\w+>)')
 unnamed_group_matcher = _lazy_re_compile(r'\(')
+
+
+def replace_metacharacters(pattern):
+    """Remove unescaped metacharacters from the pattern."""
+    return re.sub(
+        r'((?:^|(?<!\\))(?:\\\\)*)(\\?)([?*+^$]|\\[bBAZ])',
+        lambda m: m[1] + m[3] if m[2] else m[1],
+        pattern,
+    )
 
 
 def replace_named_groups(pattern):
