@@ -154,7 +154,6 @@ class TestInline(TestDataMixin, TestCase):
         # Identically named callable isn't present in the parent ModelAdmin,
         # rendering of the add view shouldn't explode
         response = self.client.get(reverse('admin:admin_inlines_novel_add'))
-        self.assertEqual(response.status_code, 200)
         # View should have the child inlines section
         self.assertContains(
             response,
@@ -164,7 +163,6 @@ class TestInline(TestDataMixin, TestCase):
     def test_callable_lookup(self):
         """Admin inline should invoke local callable when its name is listed in readonly_fields"""
         response = self.client.get(reverse('admin:admin_inlines_poll_add'))
-        self.assertEqual(response.status_code, 200)
         # Add parent object view should have the child inlines section
         self.assertContains(
             response,
@@ -510,7 +508,7 @@ class TestInlineMedia(TestDataMixin, TestCase):
                 'my_awesome_inline_scripts.js',
                 'custom_number.js',
                 'admin/js/jquery.init.js',
-                'admin/js/inlines.min.js',
+                'admin/js/inlines.js',
             ]
         )
         self.assertContains(response, 'my_awesome_inline_scripts.js')

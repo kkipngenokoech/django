@@ -9,7 +9,7 @@ from django.contrib.gis.geos import (
 )
 from django.contrib.gis.measure import Area
 from django.db import NotSupportedError, connection
-from django.db.models import Sum, Value
+from django.db.models import IntegerField, Sum, Value
 from django.test import TestCase, skipUnlessDBFeature
 
 from ..utils import FuncTestMixin, mariadb, mysql, oracle, postgis, spatialite
@@ -44,14 +44,13 @@ class GISFunctionsTests(FuncTestMixin, TestCase):
             '{"type":"Point","crs":{"type":"name","properties":{"name":"EPSG:4326"}},'
             '"bbox":[-87.65018,41.85039,-87.65018,41.85039],"coordinates":[-87.65018,41.85039]}'
         )
-        # MySQL and Oracle ignore the crs option.
-        if mysql or oracle:
+        if 'crs' in connection.features.unsupported_geojson_options:
             del houston_json['crs']
             del chicago_json['crs']
-        # Oracle ignores also the bbox and precision options.
-        if oracle:
+        if 'bbox' in connection.features.unsupported_geojson_options:
             del chicago_json['bbox']
             del victoria_json['bbox']
+        if 'precision' in connection.features.unsupported_geojson_options:
             chicago_json['coordinates'] = [-87.650175, 41.850385]
 
         # Precision argument should only be an integer
@@ -194,16 +193,21 @@ class GISFunctionsTests(FuncTestMixin, TestCase):
             self.assertEqual(qs[0].circle.num_points, circle_num_points(48))
             self.assertEqual(qs[1].circle.num_points, circle_num_points(48))
 
-        qs = Country.objects.annotate(circle=functions.BoundingCircle('mpoly', num_seg=12)).order_by('name')
-        if postgis:
-            self.assertGreater(qs[0].circle.area, 168.4, 0)
-            self.assertLess(qs[0].circle.area, 169.5, 0)
-            self.assertAlmostEqual(qs[1].circle.area, 136, 0)
-            self.assertEqual(qs[0].circle.num_points, circle_num_points(12))
-            self.assertEqual(qs[1].circle.num_points, circle_num_points(12))
-        else:
-            self.assertAlmostEqual(qs[0].circle.area, expected_areas[0], 0)
-            self.assertAlmostEqual(qs[1].circle.area, expected_areas[1], 0)
+        tests = [12, Value(12, output_field=IntegerField())]
+        for num_seq in tests:
+            with self.subTest(num_seq=num_seq):
+                qs = Country.objects.annotate(
+                    circle=functions.BoundingCircle('mpoly', num_seg=num_seq),
+                ).order_by('name')
+                if postgis:
+                    self.assertGreater(qs[0].circle.area, 168.4, 0)
+                    self.assertLess(qs[0].circle.area, 169.5, 0)
+                    self.assertAlmostEqual(qs[1].circle.area, 136, 0)
+                    self.assertEqual(qs[0].circle.num_points, circle_num_points(12))
+                    self.assertEqual(qs[1].circle.num_points, circle_num_points(12))
+                else:
+                    self.assertAlmostEqual(qs[0].circle.area, expected_areas[0], 0)
+                    self.assertAlmostEqual(qs[1].circle.area, expected_areas[1], 0)
 
     @skipUnlessDBFeature("has_Centroid_function")
     def test_centroid(self):
@@ -382,7 +386,8 @@ class GISFunctionsTests(FuncTestMixin, TestCase):
     @skipUnlessDBFeature("has_MemSize_function")
     def test_memsize(self):
         ptown = City.objects.annotate(size=functions.MemSize('point')).get(name='Pueblo')
-        self.assertTrue(20 <= ptown.size <= 40)  # Exact value may depend on PostGIS version
+        # Exact value depends on database and version.
+        self.assertTrue(20 <= ptown.size <= 105)
 
     @skipUnlessDBFeature("has_NumGeom_function")
     def test_num_geom(self):

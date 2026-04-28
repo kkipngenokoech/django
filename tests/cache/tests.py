@@ -6,17 +6,20 @@ import os
 import pickle
 import re
 import shutil
+import sys
 import tempfile
 import threading
 import time
 import unittest
+import warnings
 from pathlib import Path
-from unittest import mock
+from unittest import mock, skipIf
 
 from django.conf import settings
 from django.core import management, signals
 from django.core.cache import (
-    DEFAULT_CACHE_ALIAS, CacheKeyWarning, cache, caches,
+    DEFAULT_CACHE_ALIAS, CacheHandler, CacheKeyWarning, InvalidCacheKey, cache,
+    caches,
 )
 from django.core.cache.backends.base import InvalidCacheBackendError
 from django.core.cache.utils import make_template_fragment_key
@@ -33,13 +36,14 @@ from django.template.context_processors import csrf
 from django.template.response import TemplateResponse
 from django.test import (
     RequestFactory, SimpleTestCase, TestCase, TransactionTestCase,
-    override_settings,
+    ignore_warnings, override_settings,
 )
 from django.test.signals import setting_changed
 from django.utils import timezone, translation
 from django.utils.cache import (
     get_cache_key, learn_cache_key, patch_cache_control, patch_vary_headers,
 )
+from django.utils.deprecation import RemovedInDjango41Warning
 from django.views.decorators.cache import cache_control, cache_page
 
 from .models import Poll, expensive_calculation
@@ -621,12 +625,26 @@ class BaseCacheTests:
     def test_zero_cull(self):
         self._perform_cull_test('zero_cull', 50, 19)
 
+    def test_cull_delete_when_store_empty(self):
+        try:
+            cull_cache = caches['cull']
+        except InvalidCacheBackendError:
+            self.skipTest("Culling isn't implemented.")
+        old_max_entries = cull_cache._max_entries
+        # Force _cull to delete on first cached record.
+        cull_cache._max_entries = -1
+        try:
+            cull_cache.set('force_cull_delete', 'value', 1000)
+            self.assertIs(cull_cache.has_key('force_cull_delete'), True)
+        finally:
+            cull_cache._max_entries = old_max_entries
+
     def _perform_invalid_key_test(self, key, expected_warning):
         """
-        All the builtin backends (except memcached, see below) should warn on
-        keys that would be refused by memcached. This encourages portable
-        caching code without making it too difficult to use production backends
-        with more liberal key rules. Refs #6447.
+        All the builtin backends should warn (except memcached that should
+        error) on keys that would be refused by memcached. This encourages
+        portable caching code without making it too difficult to use production
+        backends with more liberal key rules. Refs #6447.
         """
         # mimic custom ``make_key`` method being defined since the default will
         # never show the below warnings
@@ -636,9 +654,24 @@ class BaseCacheTests:
         old_func = cache.key_func
         cache.key_func = func
 
+        tests = [
+            ('add', [key, 1]),
+            ('get', [key]),
+            ('set', [key, 1]),
+            ('incr', [key]),
+            ('decr', [key]),
+            ('touch', [key]),
+            ('delete', [key]),
+            ('get_many', [[key, 'b']]),
+            ('set_many', [{key: 1, 'b': 2}]),
+            ('delete_many', [{key: 1, 'b': 2}]),
+        ]
         try:
-            with self.assertWarnsMessage(CacheKeyWarning, expected_warning):
-                cache.set(key, 'value')
+            for operation, args in tests:
+                with self.subTest(operation=operation):
+                    with self.assertWarns(CacheKeyWarning) as cm:
+                        getattr(cache, operation)(*args)
+                    self.assertEqual(str(cm.warning), expected_warning)
         finally:
             cache.key_func = old_func
 
@@ -1245,8 +1278,8 @@ configured_caches = {}
 for _cache_params in settings.CACHES.values():
     configured_caches[_cache_params['BACKEND']] = _cache_params
 
-MemcachedCache_params = configured_caches.get('django.core.cache.backends.memcached.MemcachedCache')
 PyLibMCCache_params = configured_caches.get('django.core.cache.backends.memcached.PyLibMCCache')
+PyMemcacheCache_params = configured_caches.get('django.core.cache.backends.memcached.PyMemcacheCache')
 
 # The memcached backends don't support cull-related options like `MAX_ENTRIES`.
 memcached_excluded_caches = {'cull', 'zero_cull'}
@@ -1270,24 +1303,29 @@ class BaseMemcachedTests(BaseCacheTests):
                 with self.settings(CACHES={'default': params}):
                     self.assertEqual(cache._servers, ['server1.tld', 'server2:11211'])
 
-    def test_invalid_key_characters(self):
+    def _perform_invalid_key_test(self, key, expected_warning):
         """
-        On memcached, we don't introduce a duplicate key validation
-        step (for speed reasons), we just let the memcached API
-        library raise its own exception on bad keys. Refs #6447.
-
-        In order to be memcached-API-library agnostic, we only assert
-        that a generic exception of some kind is raised.
+        While other backends merely warn, memcached should raise for an invalid
+        key.
         """
-        # memcached does not allow whitespace or control characters in keys
-        # when using the ascii protocol.
-        with self.assertRaises(Exception):
-            cache.set('key with spaces', 'value')
-
-    def test_invalid_key_length(self):
-        # memcached limits key length to 250
-        with self.assertRaises(Exception):
-            cache.set('a' * 251, 'value')
+        msg = expected_warning.replace(key, cache.make_key(key))
+        tests = [
+            ('add', [key, 1]),
+            ('get', [key]),
+            ('set', [key, 1]),
+            ('incr', [key]),
+            ('decr', [key]),
+            ('touch', [key]),
+            ('delete', [key]),
+            ('get_many', [[key, 'b']]),
+            ('set_many', [{key: 1, 'b': 2}]),
+            ('delete_many', [{key: 1, 'b': 2}]),
+        ]
+        for operation, args in tests:
+            with self.subTest(operation=operation):
+                with self.assertRaises(InvalidCacheKey) as cm:
+                    getattr(cache, operation)(*args)
+                self.assertEqual(str(cm.exception), msg)
 
     def test_default_never_expiring_timeout(self):
         # Regression test for #22845
@@ -1312,10 +1350,7 @@ class BaseMemcachedTests(BaseCacheTests):
         # By default memcached allows objects up to 1MB. For the cache_db session
         # backend to always use the current session, memcached needs to delete
         # the old key if it fails to set.
-        # pylibmc doesn't seem to have SERVER_MAX_VALUE_LENGTH as far as I can
-        # tell from a quick check of its source code. This is falling back to
-        # the default value exposed by python-memcached on my system.
-        max_value_length = getattr(cache._lib, 'SERVER_MAX_VALUE_LENGTH', 1048576)
+        max_value_length = 2 ** 20
 
         cache.set('small_value', 'a')
         self.assertEqual(cache.get('small_value'), 'a')
@@ -1324,11 +1359,10 @@ class BaseMemcachedTests(BaseCacheTests):
         try:
             cache.set('small_value', large_value)
         except Exception:
-            # Some clients (e.g. pylibmc) raise when the value is too large,
-            # while others (e.g. python-memcached) intentionally return True
-            # indicating success. This test is primarily checking that the key
-            # was deleted, so the return/exception behavior for the set()
-            # itself is not important.
+            # Most clients (e.g. pymemcache or pylibmc) raise when the value is
+            # too large. This test is primarily checking that the key was
+            # deleted, so the return/exception behavior for the set() itself is
+            # not important.
             pass
         # small_value should be deleted, or set if configured to accept larger values
         value = cache.get('small_value')
@@ -1339,7 +1373,7 @@ class BaseMemcachedTests(BaseCacheTests):
         # connection is closed when the request is complete.
         signals.request_finished.disconnect(close_old_connections)
         try:
-            with mock.patch.object(cache._lib.Client, 'disconnect_all', autospec=True) as mock_disconnect:
+            with mock.patch.object(cache._class, 'disconnect_all', autospec=True) as mock_disconnect:
                 signals.request_finished.send(self.__class__)
                 self.assertIs(mock_disconnect.called, self.should_disconnect_on_close)
         finally:
@@ -1348,11 +1382,16 @@ class BaseMemcachedTests(BaseCacheTests):
     def test_set_many_returns_failing_keys(self):
         def fail_set_multi(mapping, *args, **kwargs):
             return mapping.keys()
-        with mock.patch('%s.Client.set_multi' % self.client_library_name, side_effect=fail_set_multi):
+        with mock.patch.object(cache._class, 'set_multi', side_effect=fail_set_multi):
             failing_keys = cache.set_many({'key': 'value'})
             self.assertEqual(failing_keys, ['key'])
 
 
+# RemovedInDjango41Warning.
+MemcachedCache_params = configured_caches.get('django.core.cache.backends.memcached.MemcachedCache')
+
+
+@ignore_warnings(category=RemovedInDjango41Warning)
 @unittest.skipUnless(MemcachedCache_params, "MemcachedCache backend not configured")
 @override_settings(CACHES=caches_setting_for_tests(
     base=MemcachedCache_params,
@@ -1360,7 +1399,6 @@ class BaseMemcachedTests(BaseCacheTests):
 ))
 class MemcachedCacheTests(BaseMemcachedTests, TestCase):
     base_params = MemcachedCache_params
-    client_library_name = 'memcache'
 
     def test_memcached_uses_highest_pickle_version(self):
         # Regression test for #19810
@@ -1385,6 +1423,32 @@ class MemcachedCacheTests(BaseMemcachedTests, TestCase):
         self.assertEqual(cache.get('key_default_none', default='default'), 'default')
 
 
+class MemcachedCacheDeprecationTests(SimpleTestCase):
+    def test_warning(self):
+        from django.core.cache.backends.memcached import MemcachedCache
+
+        # Remove warnings filter on MemcachedCache deprecation warning, added
+        # in runtests.py.
+        warnings.filterwarnings(
+            'error',
+            'MemcachedCache is deprecated',
+            category=RemovedInDjango41Warning,
+        )
+        try:
+            msg = (
+                'MemcachedCache is deprecated in favor of PyMemcacheCache and '
+                'PyLibMCCache.'
+            )
+            with self.assertRaisesMessage(RemovedInDjango41Warning, msg):
+                MemcachedCache('127.0.0.1:11211', {})
+        finally:
+            warnings.filterwarnings(
+                'ignore',
+                'MemcachedCache is deprecated',
+                category=RemovedInDjango41Warning,
+            )
+
+
 @unittest.skipUnless(PyLibMCCache_params, "PyLibMCCache backend not configured")
 @override_settings(CACHES=caches_setting_for_tests(
     base=PyLibMCCache_params,
@@ -1392,18 +1456,8 @@ class MemcachedCacheTests(BaseMemcachedTests, TestCase):
 ))
 class PyLibMCCacheTests(BaseMemcachedTests, TestCase):
     base_params = PyLibMCCache_params
-    client_library_name = 'pylibmc'
     # libmemcached manages its own connections.
     should_disconnect_on_close = False
-
-    # By default, pylibmc/libmemcached don't verify keys client-side and so
-    # this test triggers a server-side bug that causes later tests to fail
-    # (#19914). The `verify_keys` behavior option could be set to True (which
-    # would avoid triggering the server-side bug), however this test would
-    # still fail due to https://github.com/lericson/pylibmc/issues/219.
-    @unittest.skip("triggers a memcached-server bug, causing subsequent tests to fail")
-    def test_invalid_key_characters(self):
-        pass
 
     @override_settings(CACHES=caches_setting_for_tests(
         base=PyLibMCCache_params,
@@ -1416,6 +1470,53 @@ class PyLibMCCacheTests(BaseMemcachedTests, TestCase):
     def test_pylibmc_options(self):
         self.assertTrue(cache._cache.binary)
         self.assertEqual(cache._cache.behaviors['tcp_nodelay'], int(True))
+
+    def test_pylibmc_client_servers(self):
+        backend = self.base_params['BACKEND']
+        tests = [
+            ('unix:/run/memcached/socket', '/run/memcached/socket'),
+            ('/run/memcached/socket', '/run/memcached/socket'),
+            ('localhost', 'localhost'),
+            ('localhost:11211', 'localhost:11211'),
+            ('[::1]', '[::1]'),
+            ('[::1]:11211', '[::1]:11211'),
+            ('127.0.0.1', '127.0.0.1'),
+            ('127.0.0.1:11211', '127.0.0.1:11211'),
+        ]
+        for location, expected in tests:
+            settings = {'default': {'BACKEND': backend, 'LOCATION': location}}
+            with self.subTest(location), self.settings(CACHES=settings):
+                self.assertEqual(cache.client_servers, [expected])
+
+
+@unittest.skipUnless(PyMemcacheCache_params, 'PyMemcacheCache backend not configured')
+@override_settings(CACHES=caches_setting_for_tests(
+    base=PyMemcacheCache_params,
+    exclude=memcached_excluded_caches,
+))
+class PyMemcacheCacheTests(BaseMemcachedTests, TestCase):
+    base_params = PyMemcacheCache_params
+
+    def test_pymemcache_highest_pickle_version(self):
+        self.assertEqual(
+            cache._cache.default_kwargs['serde']._serialize_func.keywords['pickle_version'],
+            pickle.HIGHEST_PROTOCOL,
+        )
+        for cache_key in settings.CACHES:
+            for client_key, client in caches[cache_key]._cache.clients.items():
+                with self.subTest(cache_key=cache_key, server=client_key):
+                    self.assertEqual(
+                        client.serde._serialize_func.keywords['pickle_version'],
+                        pickle.HIGHEST_PROTOCOL,
+                    )
+
+    @override_settings(CACHES=caches_setting_for_tests(
+        base=PyMemcacheCache_params,
+        exclude=memcached_excluded_caches,
+        OPTIONS={'no_delay': True},
+    ))
+    def test_pymemcache_options(self):
+        self.assertIs(cache._cache.default_kwargs['no_delay'], True)
 
 
 @override_settings(CACHES=caches_setting_for_tests(
@@ -1468,6 +1569,28 @@ class FileBasedCacheTests(BaseCacheTests, TestCase):
         os.unlink(cache._key_to_file('foo'))
         # Returns the default instead of erroring.
         self.assertEqual(cache.get('foo', 'baz'), 'baz')
+
+    @skipIf(
+        sys.platform == 'win32',
+        'Windows only partially supports umasks and chmod.',
+    )
+    def test_cache_dir_permissions(self):
+        os.rmdir(self.dirname)
+        dir_path = Path(self.dirname) / 'nested' / 'filebasedcache'
+        for cache_params in settings.CACHES.values():
+            cache_params['LOCATION'] = dir_path
+        setting_changed.send(self.__class__, setting='CACHES', enter=False)
+        cache.set('foo', 'bar')
+        self.assertIs(dir_path.exists(), True)
+        tests = [
+            dir_path,
+            dir_path.parent,
+            dir_path.parent.parent,
+        ]
+        for directory in tests:
+            with self.subTest(directory=directory):
+                dir_mode = directory.stat().st_mode & 0o777
+                self.assertEqual(dir_mode, 0o700)
 
     def test_get_does_not_ignore_non_filenotfound_exceptions(self):
         with mock.patch('builtins.open', side_effect=OSError):
@@ -1620,7 +1743,7 @@ class CacheUtils(SimpleTestCase):
     def _get_request_cache(self, method='GET', query_string=None, update_cache=None):
         request = self._get_request(self.host, self.path,
                                     method, query_string=query_string)
-        request._cache_update_cache = True if not update_cache else update_cache
+        request._cache_update_cache = update_cache if update_cache else True
         return request
 
     def test_patch_vary_headers(self):
@@ -1642,9 +1765,9 @@ class CacheUtils(SimpleTestCase):
             with self.subTest(initial_vary=initial_vary, newheaders=newheaders):
                 response = HttpResponse()
                 if initial_vary is not None:
-                    response['Vary'] = initial_vary
+                    response.headers['Vary'] = initial_vary
                 patch_vary_headers(response, newheaders)
-                self.assertEqual(response['Vary'], resulting_vary)
+                self.assertEqual(response.headers['Vary'], resulting_vary)
 
     def test_get_cache_key(self):
         request = self.factory.get(self.path)
@@ -1695,7 +1818,7 @@ class CacheUtils(SimpleTestCase):
     def test_learn_cache_key(self):
         request = self.factory.head(self.path)
         response = HttpResponse()
-        response['Vary'] = 'Pony'
+        response.headers['Vary'] = 'Pony'
         # Make sure that the Vary header is added to the key hash
         learn_cache_key(request, response)
 
@@ -1737,9 +1860,9 @@ class CacheUtils(SimpleTestCase):
             with self.subTest(initial_cc=initial_cc, newheaders=newheaders):
                 response = HttpResponse()
                 if initial_cc is not None:
-                    response['Cache-Control'] = initial_cc
+                    response.headers['Cache-Control'] = initial_cc
                 patch_cache_control(response, **newheaders)
-                parts = set(cc_delim_re.split(response['Cache-Control']))
+                parts = set(cc_delim_re.split(response.headers['Cache-Control']))
                 self.assertEqual(parts, expected_cc)
 
 
@@ -1819,7 +1942,7 @@ class CacheI18nTest(SimpleTestCase):
     def tearDown(self):
         cache.clear()
 
-    @override_settings(USE_I18N=True, USE_L10N=False, USE_TZ=False)
+    @override_settings(USE_I18N=True, USE_TZ=False)
     def test_cache_key_i18n_translation(self):
         request = self.factory.get(self.path)
         lang = translation.get_language()
@@ -1834,20 +1957,20 @@ class CacheI18nTest(SimpleTestCase):
         request.META['HTTP_ACCEPT_LANGUAGE'] = accept_language
         request.META['HTTP_ACCEPT_ENCODING'] = 'gzip;q=1.0, identity; q=0.5, *;q=0'
         response = HttpResponse()
-        response['Vary'] = vary
+        response.headers['Vary'] = vary
         key = learn_cache_key(request, response)
         key2 = get_cache_key(request)
         self.assertEqual(key, reference_key)
         self.assertEqual(key2, reference_key)
 
-    @override_settings(USE_I18N=True, USE_L10N=False, USE_TZ=False)
+    @override_settings(USE_I18N=True, USE_TZ=False)
     def test_cache_key_i18n_translation_accept_language(self):
         lang = translation.get_language()
         self.assertEqual(lang, 'en')
         request = self.factory.get(self.path)
         request.META['HTTP_ACCEPT_ENCODING'] = 'gzip;q=1.0, identity; q=0.5, *;q=0'
         response = HttpResponse()
-        response['Vary'] = 'accept-encoding'
+        response.headers['Vary'] = 'accept-encoding'
         key = learn_cache_key(request, response)
         self.assertIn(lang, key, "Cache keys should include the language name when translation is active")
         self.check_accept_language_vary(
@@ -1896,17 +2019,7 @@ class CacheI18nTest(SimpleTestCase):
             key
         )
 
-    @override_settings(USE_I18N=False, USE_L10N=True, USE_TZ=False)
-    def test_cache_key_i18n_formatting(self):
-        request = self.factory.get(self.path)
-        lang = translation.get_language()
-        response = HttpResponse()
-        key = learn_cache_key(request, response)
-        self.assertIn(lang, key, "Cache keys should include the language name when formatting is active")
-        key2 = get_cache_key(request)
-        self.assertEqual(key, key2)
-
-    @override_settings(USE_I18N=False, USE_L10N=False, USE_TZ=True)
+    @override_settings(USE_I18N=False, USE_TZ=True)
     def test_cache_key_i18n_timezone(self):
         request = self.factory.get(self.path)
         tz = timezone.get_current_timezone_name()
@@ -1916,7 +2029,7 @@ class CacheI18nTest(SimpleTestCase):
         key2 = get_cache_key(request)
         self.assertEqual(key, key2)
 
-    @override_settings(USE_I18N=False, USE_L10N=False)
+    @override_settings(USE_I18N=False)
     def test_cache_key_no_i18n(self):
         request = self.factory.get(self.path)
         lang = translation.get_language()
@@ -2068,6 +2181,7 @@ class CacheMiddlewareTest(SimpleTestCase):
         self.assertEqual(middleware.cache_timeout, 30)
         self.assertEqual(middleware.key_prefix, 'middlewareprefix')
         self.assertEqual(middleware.cache_alias, 'other')
+        self.assertEqual(middleware.cache, self.other_cache)
 
         # If more arguments are being passed in construction, it's being used
         # as a decorator. First, test with "defaults":
@@ -2077,6 +2191,7 @@ class CacheMiddlewareTest(SimpleTestCase):
         self.assertEqual(as_view_decorator.key_prefix, '')
         # Value of DEFAULT_CACHE_ALIAS from django.core.cache
         self.assertEqual(as_view_decorator.cache_alias, 'default')
+        self.assertEqual(as_view_decorator.cache, self.default_cache)
 
         # Next, test with custom values:
         as_view_decorator_with_custom = CacheMiddleware(
@@ -2086,6 +2201,21 @@ class CacheMiddlewareTest(SimpleTestCase):
         self.assertEqual(as_view_decorator_with_custom.cache_timeout, 60)
         self.assertEqual(as_view_decorator_with_custom.key_prefix, 'foo')
         self.assertEqual(as_view_decorator_with_custom.cache_alias, 'other')
+        self.assertEqual(as_view_decorator_with_custom.cache, self.other_cache)
+
+    def test_update_cache_middleware_constructor(self):
+        middleware = UpdateCacheMiddleware(empty_response)
+        self.assertEqual(middleware.cache_timeout, 30)
+        self.assertIsNone(middleware.page_timeout)
+        self.assertEqual(middleware.key_prefix, 'middlewareprefix')
+        self.assertEqual(middleware.cache_alias, 'other')
+        self.assertEqual(middleware.cache, self.other_cache)
+
+    def test_fetch_cache_middleware_constructor(self):
+        middleware = FetchFromCacheMiddleware(empty_response)
+        self.assertEqual(middleware.key_prefix, 'middlewareprefix')
+        self.assertEqual(middleware.cache_alias, 'other')
+        self.assertEqual(middleware.cache, self.other_cache)
 
     def test_middleware(self):
         middleware = CacheMiddleware(hello_world_view)
@@ -2299,9 +2429,9 @@ class TestWithTemplateResponse(SimpleTestCase):
                 template = engines['django'].from_string("This is a test")
                 response = TemplateResponse(HttpRequest(), template)
                 if initial_vary is not None:
-                    response['Vary'] = initial_vary
+                    response.headers['Vary'] = initial_vary
                 patch_vary_headers(response, newheaders)
-                self.assertEqual(response['Vary'], resulting_vary)
+                self.assertEqual(response.headers['Vary'], resulting_vary)
 
     def test_get_cache_key(self):
         request = self.factory.get(self.path)
@@ -2398,3 +2528,21 @@ class CacheHandlerTest(SimpleTestCase):
             t.join()
 
         self.assertIsNot(c[0], c[1])
+
+    def test_nonexistent_alias(self):
+        msg = "The connection 'nonexistent' doesn't exist."
+        with self.assertRaisesMessage(InvalidCacheBackendError, msg):
+            caches['nonexistent']
+
+    def test_nonexistent_backend(self):
+        test_caches = CacheHandler({
+            'invalid_backend': {
+                'BACKEND': 'django.nonexistent.NonexistentBackend',
+            },
+        })
+        msg = (
+            "Could not find backend 'django.nonexistent.NonexistentBackend': "
+            "No module named 'django.nonexistent'"
+        )
+        with self.assertRaisesMessage(InvalidCacheBackendError, msg):
+            test_caches['invalid_backend']
