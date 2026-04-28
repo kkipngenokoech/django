@@ -86,7 +86,7 @@ class BinaryFieldTests(SimpleTestCase):
 
 
 @isolate_apps('invalid_models_tests')
-class CharFieldTests(SimpleTestCase):
+class CharFieldTests(TestCase):
 
     def test_valid_field(self):
         class Model(models.Model):
@@ -386,6 +386,30 @@ class CharFieldTests(SimpleTestCase):
                 id='mysql.W003',
             )
         ])
+
+    def test_db_collation(self):
+        class Model(models.Model):
+            field = models.CharField(max_length=100, db_collation='anything')
+
+        field = Model._meta.get_field('field')
+        error = Error(
+            '%s does not support a database collation on CharFields.'
+            % connection.display_name,
+            id='fields.E190',
+            obj=field,
+        )
+        expected = [] if connection.features.supports_collation_on_charfield else [error]
+        self.assertEqual(field.check(databases=self.databases), expected)
+
+    def test_db_collation_required_db_features(self):
+        class Model(models.Model):
+            field = models.CharField(max_length=100, db_collation='anything')
+
+            class Meta:
+                required_db_features = {'supports_collation_on_charfield'}
+
+        field = Model._meta.get_field('field')
+        self.assertEqual(field.check(databases=self.databases), [])
 
 
 @isolate_apps('invalid_models_tests')
@@ -723,14 +747,16 @@ class TimeFieldTests(SimpleTestCase):
         class Model(models.Model):
             field_dt = models.TimeField(default=now())
             field_t = models.TimeField(default=now().time())
+            # Timezone-aware time object (when USE_TZ=True).
+            field_tz = models.TimeField(default=now().timetz())
             field_now = models.DateField(default=now)
 
-        field_dt = Model._meta.get_field('field_dt')
-        field_t = Model._meta.get_field('field_t')
-        field_now = Model._meta.get_field('field_now')
-        errors = field_dt.check()
-        errors.extend(field_t.check())
-        errors.extend(field_now.check())  # doesn't raise a warning
+        names = ['field_dt', 'field_t', 'field_tz', 'field_now']
+        fields = [Model._meta.get_field(name) for name in names]
+        errors = []
+        for field in fields:
+            errors.extend(field.check())
+
         self.assertEqual(errors, [
             DjangoWarning(
                 'Fixed default value provided.',
@@ -738,7 +764,7 @@ class TimeFieldTests(SimpleTestCase):
                      'value as default for this field. This may not be '
                      'what you want. If you want to have the current date '
                      'as default, use `django.utils.timezone.now`',
-                obj=field_dt,
+                obj=fields[0],
                 id='fields.W161',
             ),
             DjangoWarning(
@@ -747,9 +773,21 @@ class TimeFieldTests(SimpleTestCase):
                      'value as default for this field. This may not be '
                      'what you want. If you want to have the current date '
                      'as default, use `django.utils.timezone.now`',
-                obj=field_t,
+                obj=fields[1],
                 id='fields.W161',
-            )
+            ),
+            DjangoWarning(
+                'Fixed default value provided.',
+                hint=(
+                    'It seems you set a fixed date / time / datetime value as '
+                    'default for this field. This may not be what you want. '
+                    'If you want to have the current date as default, use '
+                    '`django.utils.timezone.now`'
+                ),
+                obj=fields[2],
+                id='fields.W161',
+            ),
+            # field_now doesn't raise a warning.
         ])
 
     @override_settings(USE_TZ=True)
@@ -778,6 +816,30 @@ class TextFieldTests(TestCase):
                 id='fields.W162',
             )
         ])
+
+    def test_db_collation(self):
+        class Model(models.Model):
+            field = models.TextField(db_collation='anything')
+
+        field = Model._meta.get_field('field')
+        error = Error(
+            '%s does not support a database collation on TextFields.'
+            % connection.display_name,
+            id='fields.E190',
+            obj=field,
+        )
+        expected = [] if connection.features.supports_collation_on_textfield else [error]
+        self.assertEqual(field.check(databases=self.databases), expected)
+
+    def test_db_collation_required_db_features(self):
+        class Model(models.Model):
+            field = models.TextField(db_collation='anything')
+
+            class Meta:
+                required_db_features = {'supports_collation_on_textfield'}
+
+        field = Model._meta.get_field('field')
+        self.assertEqual(field.check(databases=self.databases), [])
 
 
 @isolate_apps('invalid_models_tests')
