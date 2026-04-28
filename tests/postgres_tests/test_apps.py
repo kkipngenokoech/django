@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db.backends.signals import connection_created
 from django.db.migrations.writer import MigrationWriter
 from django.test.utils import modify_settings
@@ -8,8 +10,10 @@ try:
     from psycopg2.extras import (
         DateRange, DateTimeRange, DateTimeTZRange, NumericRange,
     )
+
     from django.contrib.postgres.fields import (
-        DateRangeField, DateTimeRangeField, IntegerRangeField,
+        DateRangeField, DateTimeRangeField, DecimalRangeField,
+        IntegerRangeField,
     )
 except ImportError:
     pass
@@ -28,6 +32,7 @@ class PostgresConfigTests(PostgreSQLTestCase):
             (DateRange(empty=True), DateRangeField),
             (DateTimeRange(empty=True), DateRangeField),
             (DateTimeTZRange(None, None, '[]'), DateTimeRangeField),
+            (NumericRange(Decimal('1.0'), Decimal('5.0'), '()'), DecimalRangeField),
             (NumericRange(1, 10), IntegerRangeField),
         )
 

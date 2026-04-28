@@ -5,6 +5,7 @@ from django.db import models
 from django.forms import CharField, FileField, Form, ModelForm
 from django.forms.models import ModelFormMetaclass
 from django.test import SimpleTestCase, TestCase
+from tests.forms_tests.tests import jinja2_tests
 
 from ..models import (
     BoundaryModel, ChoiceFieldModel, ChoiceModel, ChoiceOptionModel, Defaults,
@@ -150,7 +151,7 @@ class ModelFormCallableModelDefault(TestCase):
 
 class FormsModelTestCase(TestCase):
     def test_unicode_filename(self):
-        # FileModel with unicode filename and data #########################
+        # FileModel with Unicode filename and data #########################
         file1 = SimpleUploadedFile('我隻氣墊船裝滿晒鱔.txt', 'मेरी मँडराने वाली नाव सर्पमीनों से भरी ह'.encode())
         f = FileForm(data={}, files={'file1': file1}, auto_id=False)
         self.assertTrue(f.is_valid())
@@ -372,3 +373,8 @@ class EmptyLabelTestCase(TestCase):
 <option value="2">Bar</option>
 </select></p>"""
         )
+
+
+@jinja2_tests
+class Jinja2EmptyLabelTestCase(EmptyLabelTestCase):
+    pass

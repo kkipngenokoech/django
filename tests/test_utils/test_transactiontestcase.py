@@ -2,6 +2,7 @@ from unittest import mock
 
 from django.db import connections
 from django.test import TestCase, TransactionTestCase, override_settings
+from django.test.testcases import DatabaseOperationForbidden
 
 from .models import Car
 
@@ -44,7 +45,7 @@ class TransactionTestCaseDatabasesTests(TestCase):
         so that it's less likely to overflow. An overflow causes
         assertNumQueries() to fail.
         """
-        for alias in connections:
+        for alias in self.databases:
             self.assertEqual(len(connections[alias].queries_log), 0, 'Failed for alias %s' % alias)
 
 
@@ -58,5 +59,5 @@ class DisallowedDatabaseQueriesTests(TransactionTestCase):
             "DisallowedDatabaseQueriesTests.databases to ensure proper test "
             "isolation and silence this failure."
         )
-        with self.assertRaisesMessage(AssertionError, message):
+        with self.assertRaisesMessage(DatabaseOperationForbidden, message):
             Car.objects.using('other').get()

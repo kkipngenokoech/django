@@ -1,6 +1,7 @@
 import copy
 import itertools
 import operator
+import warnings
 from functools import total_ordering, wraps
 
 
@@ -11,8 +12,6 @@ class cached_property:
 
     A cached property can be made out of an existing method:
     (e.g. ``url = cached_property(get_absolute_url)``).
-    The optional ``name`` argument is obsolete as of Python 3.6 and will be
-    deprecated in Django 4.0 (#30127).
     """
     name = None
 
@@ -24,6 +23,15 @@ class cached_property:
         )
 
     def __init__(self, func, name=None):
+        from django.utils.deprecation import RemovedInDjango50Warning
+
+        if name is not None:
+            warnings.warn(
+                "The name argument is deprecated as it's unnecessary as of "
+                "Python 3.6.",
+                RemovedInDjango50Warning,
+                stacklevel=2,
+            )
         self.real_func = func
         self.__doc__ = getattr(func, '__doc__')
 
@@ -47,6 +55,22 @@ class cached_property:
             return self
         res = instance.__dict__[self.name] = self.func(instance)
         return res
+
+
+class classproperty:
+    """
+    Decorator that converts a method with a single cls argument into a property
+    that can be accessed directly from the class.
+    """
+    def __init__(self, method=None):
+        self.fget = method
+
+    def __get__(self, instance, cls=None):
+        return self.fget(cls)
+
+    def getter(self, method):
+        self.fget = method
+        return self
 
 
 class Promise:
@@ -79,7 +103,7 @@ def lazy(func, *resultclasses):
             self.__kw = kw
             if not self.__prepared:
                 self.__prepare_class__()
-            self.__prepared = True
+            self.__class__.__prepared = True
 
         def __reduce__(self):
             return (
@@ -103,8 +127,10 @@ def lazy(func, *resultclasses):
                         setattr(cls, method_name, meth)
             cls._delegate_bytes = bytes in resultclasses
             cls._delegate_text = str in resultclasses
-            assert not (cls._delegate_bytes and cls._delegate_text), (
-                "Cannot call lazy() with both bytes and text return types.")
+            if cls._delegate_bytes and cls._delegate_text:
+                raise ValueError(
+                    'Cannot call lazy() with both bytes and text return types.'
+                )
             if cls._delegate_text:
                 cls.__str__ = cls.__text_cast
             elif cls._delegate_bytes:
@@ -159,6 +185,12 @@ def lazy(func, *resultclasses):
             if self._delegate_text:
                 return str(self) % rhs
             return self.__cast() % rhs
+
+        def __add__(self, other):
+            return self.__cast() + other
+
+        def __radd__(self, other):
+            return other + self.__cast()
 
         def __deepcopy__(self, memo):
             # Instances of this class are effectively immutable. It's just a
