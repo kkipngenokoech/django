@@ -13,23 +13,21 @@ When it's enabled, two users accessing the same content may see dates, times and
 numbers formatted in different ways, depending on the formats for their current
 locale.
 
-The formatting system is disabled by default. To enable it, it's
-necessary to set :setting:`USE_L10N = True <USE_L10N>` in your settings file.
+The formatting system is enabled by default. To disable it, it's
+necessary to set :setting:`USE_L10N = False <USE_L10N>` in your settings file.
 
 .. note::
 
-    The default :file:`settings.py` file created by :djadmin:`django-admin
-    startproject <startproject>` includes :setting:`USE_L10N = True <USE_L10N>`
-    for convenience.  Note, however, that to enable number formatting with
-    thousand separators it is necessary to set :setting:`USE_THOUSAND_SEPARATOR
-    = True <USE_THOUSAND_SEPARATOR>` in your settings file. Alternatively, you
-    could use :tfilter:`intcomma` to format numbers in your template.
+    To enable number formatting with thousand separators, it is necessary to
+    set :setting:`USE_THOUSAND_SEPARATOR = True <USE_THOUSAND_SEPARATOR>` in
+    your settings file. Alternatively, you could use :tfilter:`intcomma` to
+    format numbers in your template.
 
 .. note::
 
-    There is also an independent but related :setting:`USE_I18N` setting that
-    controls if Django should activate translation. See
-    :doc:`/topics/i18n/translation` for more details.
+    There is a related :setting:`USE_I18N` setting that controls if Django
+    should activate translation. See :doc:`/topics/i18n/translation` for more
+    details.
 
 Locale aware input in forms
 ===========================
@@ -45,8 +43,8 @@ locales when guessing the format used by the user when inputting data on forms.
     ``%b`` (abbreviated month name), ``%B`` (full month name),
     or ``%p`` (AM/PM).
 
-To enable a form field to localize input and output data simply use its
-``localize`` argument::
+To enable a form field to localize input and output data use its ``localize``
+argument::
 
     class CashRegisterForm(forms.Form):
        product = forms.CharField()
@@ -142,18 +140,21 @@ To force localization of a single value, use :tfilter:`localize`. To
 control localization over a large section of a template, use the
 :ttag:`localize` template tag.
 
+Returns a string representation for unlocalized numbers  (``int``, ``float``,
+or ``Decimal``).
+
 .. _custom-format-files:
 
 Creating custom format files
 ============================
 
 Django provides format definitions for many locales, but sometimes you might
-want to create your own, because a format files doesn't exist for your locale,
+want to create your own, because a format file doesn't exist for your locale,
 or because you want to overwrite some of the values.
 
 To use custom formats, specify the path where you'll place format files
-first. To do that, just set your :setting:`FORMAT_MODULE_PATH` setting to
-the package where format files will exist, for instance::
+first.  To do that, set your :setting:`FORMAT_MODULE_PATH` setting to the
+package where format files will exist, for instance::
 
     FORMAT_MODULE_PATH = [
         'mysite.formats',

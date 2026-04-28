@@ -10,7 +10,7 @@ display and edit geolocalized data on a map. By default, they use
 `OpenLayers`_-powered maps, with a base WMS layer provided by `NASA`_.
 
 .. _OpenLayers: https://openlayers.org/
-.. _NASA: https://earthdata.nasa.gov/
+.. _NASA: https://www.earthdata.nasa.gov/
 
 Field arguments
 ===============
@@ -33,7 +33,7 @@ GeoDjango form fields take the following optional arguments.
 .. attribute:: Field.geom_type
 
     You generally shouldn't have to set or change that attribute which should
-    be setup depending on the field class. It matches the OpenGIS standard
+    be set up depending on the field class. It matches the OpenGIS standard
     geometry name.
 
 Form field classes
@@ -88,7 +88,7 @@ Form widgets
 GeoDjango form widgets allow you to display and edit geographic data on a
 visual map.
 Note that none of the currently available widgets supports 3D geometries, hence
-geometry fields will fallback using a simple ``Textarea`` widget for such data.
+geometry fields will fallback using a ``Textarea`` widget for such data.
 
 Widget attributes
 -----------------
@@ -105,6 +105,11 @@ from other Django widget attributes.
 .. attribute:: BaseGeometryWidget.map_width
 
     Height and width of the widget map (default is 400x600).
+
+    .. deprecated:: 4.2
+
+        ``map_height`` and ``map_width`` attributes are deprecated, use CSS to
+        size map widgets instead.
 
 .. attribute:: BaseGeometryWidget.map_srid
 
@@ -131,7 +136,7 @@ widget. For example::
 
     class MyGeoForm(forms.Form):
         point = forms.PointField(widget=
-            forms.OSMWidget(attrs={'map_width': 800, 'map_height': 500}))
+            forms.OSMWidget(attrs={'display_raw': True}))
 
 Widget classes
 --------------
@@ -155,10 +160,8 @@ Widget classes
     ``OpenLayersWidget`` and :class:`OSMWidget` use the ``openlayers.js`` file
     hosted on the ``cdnjs.cloudflare.com`` content-delivery network. You can
     subclass these widgets in order to specify your own version of the
-    ``OpenLayers.js`` file `tailored to your needs`_ in the ``js`` property of
-    the inner ``Media`` class (see :ref:`assets-as-a-static-definition`).
-
-    .. _tailored to your needs: https://openlayers.org/en/latest/doc/tutorials/custom-builds.html
+    ``OpenLayers.js`` file in the ``js`` property of the inner ``Media`` class
+    (see :ref:`assets-as-a-static-definition`).
 
 ``OSMWidget``
 

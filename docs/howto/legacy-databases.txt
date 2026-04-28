@@ -1,6 +1,6 @@
-=========================================
-Integrating Django with a legacy database
-=========================================
+==============================================
+How to integrate Django with a legacy database
+==============================================
 
 While Django is best suited for developing new applications, it's quite
 possible to integrate it into legacy databases. Django includes a couple of
@@ -62,7 +62,7 @@ each table's creation, modification, and deletion::
 
 If you do want to allow Django to manage the table's lifecycle, you'll need to
 change the :attr:`~django.db.models.Options.managed` option above to ``True``
-(or simply remove it because ``True`` is its default value).
+(or remove it because ``True`` is its default value).
 
 Install the core Django tables
 ==============================
