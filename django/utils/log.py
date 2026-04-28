@@ -7,14 +7,14 @@ from django.core import mail
 from django.core.mail import get_connection
 from django.core.management.color import color_style
 from django.utils.module_loading import import_string
-from django.views.debug import ExceptionReporter
 
 request_logger = logging.getLogger('django.request')
 
 # Default logging for Django. This sends an email to the site admins on every
 # HTTP 500 error. Depending on DEBUG, all other log records are either sent to
 # the console (DEBUG=True) or discarded (DEBUG=False) by means of the
-# require_debug_true filter.
+# require_debug_true filter. This configuration is quoted in
+# docs/ref/logging.txt; please amend it there if edited here.
 DEFAULT_LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -83,10 +83,11 @@ class AdminEmailHandler(logging.Handler):
     request data will be provided in the email report.
     """
 
-    def __init__(self, include_html=False, email_backend=None):
+    def __init__(self, include_html=False, email_backend=None, reporter_class=None):
         super().__init__()
         self.include_html = include_html
         self.email_backend = email_backend
+        self.reporter_class = import_string(reporter_class or settings.DEFAULT_EXCEPTION_REPORTER)
 
     def emit(self, record):
         try:
@@ -116,7 +117,7 @@ class AdminEmailHandler(logging.Handler):
         else:
             exc_info = (None, record.getMessage(), None)
 
-        reporter = ExceptionReporter(request, is_email=True, *exc_info)
+        reporter = self.reporter_class(request, is_email=True, *exc_info)
         message = "%s\n\n%s" % (self.format(no_exc_record), reporter.get_traceback_text())
         html_message = reporter.get_traceback_html() if self.include_html else None
         self.send_mail(subject, message, fail_silently=True, html_message=html_message)
@@ -160,6 +161,8 @@ class RequireDebugTrue(logging.Filter):
 
 
 class ServerFormatter(logging.Formatter):
+    default_time_format = '%d/%b/%Y %H:%M:%S'
+
     def __init__(self, *args, **kwargs):
         self.style = color_style()
         super().__init__(*args, **kwargs)

@@ -136,6 +136,15 @@ def inclusion_one_default(one, two='hi'):
 inclusion_one_default.anything = "Expected inclusion_one_default __dict__"
 
 
+@register.inclusion_tag('inclusion.html')
+def inclusion_keyword_only_default(*, kwarg=42):
+    return {
+        'result': (
+            'inclusion_keyword_only_default - Expected result: %s' % kwarg
+        ),
+    }
+
+
 @register.inclusion_tag(engine.get_template('inclusion.html'))
 def inclusion_one_default_from_template(one, two='hi'):
     """Expected inclusion_one_default_from_template __doc__"""
@@ -231,6 +240,17 @@ def inclusion_tag_without_context_parameter(arg):
 
 
 inclusion_tag_without_context_parameter.anything = "Expected inclusion_tag_without_context_parameter __dict__"
+
+
+@register.inclusion_tag('inclusion.html', takes_context=True)
+def inclusion_tag_takes_context_without_params():
+    """Expected inclusion_tag_takes_context_without_params __doc__"""
+    return {}
+
+
+inclusion_tag_takes_context_without_params.anything = (
+    'Expected inclusion_tag_takes_context_without_params __dict__'
+)
 
 
 @register.inclusion_tag('inclusion_extends1.html')

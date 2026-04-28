@@ -8,11 +8,11 @@ from django.contrib.gis.db.models.functions import (
 from django.contrib.gis.geos import GEOSGeometry, LineString, Point, Polygon
 from django.test import TestCase, skipUnlessDBFeature
 
+from ..utils import FuncTestMixin
 from .models import (
     City3D, Interstate2D, Interstate3D, InterstateProj2D, InterstateProj3D,
     MultiPoint3D, Point2D, Point3D, Polygon2D, Polygon3D,
 )
-from ..utils import FuncTestMixin
 
 data_path = os.path.realpath(os.path.join(os.path.dirname(__file__), '..', 'data'))
 city_file = os.path.join(data_path, 'cities', 'cities.shp')
@@ -71,7 +71,7 @@ class Geo3DLoadingHelper:
         # Interstate (2D / 3D and Geographic/Projected variants)
         for name, line, exp_z in interstate_data:
             line_3d = GEOSGeometry(line, srid=4269)
-            line_2d = LineString([l[:2] for l in line_3d.coords], srid=4269)
+            line_2d = LineString([coord[:2] for coord in line_3d.coords], srid=4269)
 
             # Creating a geographic and projected version of the
             # interstate in both 2D and 3D.
@@ -142,7 +142,7 @@ class Geo3DTest(Geo3DLoadingHelper, TestCase):
         Testing LayerMapping on 3D models.
         """
         # Import here as GDAL is required for those imports
-        from django.contrib.gis.utils import LayerMapping, LayerMapError
+        from django.contrib.gis.utils import LayerMapError, LayerMapping
 
         point_mapping = {'point': 'POINT'}
         mpoint_mapping = {'mpoint': 'MULTIPOINT'}

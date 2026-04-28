@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.apps import apps
 from django.core import checks
+from django.core.exceptions import FieldError
 from django.db import models
 from django.test import TestCase, skipIfDBFeature
 from django.test.utils import isolate_apps
@@ -128,3 +129,30 @@ class ForeignKeyTests(TestCase):
 
         with self.assertRaisesMessage(ValueError, 'Cannot resolve output_field'):
             Foo._meta.get_field('bar').get_col('alias')
+
+    @isolate_apps('model_fields')
+    def test_non_local_to_field(self):
+        class Parent(models.Model):
+            key = models.IntegerField(unique=True)
+
+        class Child(Parent):
+            pass
+
+        class Related(models.Model):
+            child = models.ForeignKey(Child, on_delete=models.CASCADE, to_field='key')
+
+        msg = (
+            "'model_fields.Related.child' refers to field 'key' which is not "
+            "local to model 'model_fields.Child'."
+        )
+        with self.assertRaisesMessage(FieldError, msg):
+            Related._meta.get_field('child').related_fields
+
+    def test_invalid_to_parameter(self):
+        msg = (
+            "ForeignKey(1) is invalid. First parameter to ForeignKey must be "
+            "either a model, a model name, or the string 'self'"
+        )
+        with self.assertRaisesMessage(TypeError, msg):
+            class MyModel(models.Model):
+                child = models.ForeignKey(1, models.CASCADE)

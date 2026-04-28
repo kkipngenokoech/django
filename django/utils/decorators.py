@@ -38,6 +38,17 @@ def _multi_decorate(decorators, method):
         # 'func'. Also, wrap method.__get__() in a function because new
         # attributes can't be set on bound method objects, only on functions.
         bound_method = partial(method.__get__(self, type(self)))
+        # Copy function attributes from the original method to the partial object
+        # so that decorators that use @wraps or access __name__, __module__, etc. work
+        try:
+            update_wrapper(bound_method, method)
+        except (AttributeError, TypeError):
+            # If update_wrapper fails, set minimal attributes manually
+            bound_method.__name__ = getattr(method, '__name__', '<unknown>')
+            bound_method.__module__ = getattr(method, '__module__', None)
+            bound_method.__doc__ = getattr(method, '__doc__', None)
+            bound_method.__qualname__ = getattr(method, '__qualname__', None)
+            bound_method.__annotations__ = getattr(method, '__annotations__', {})
         for dec in decorators:
             bound_method = dec(bound_method)
         return bound_method(*args, **kwargs)
@@ -113,9 +124,9 @@ def decorator_from_middleware(middleware_class):
 
 def make_middleware_decorator(middleware_class):
     def _make_decorator(*m_args, **m_kwargs):
-        middleware = middleware_class(*m_args, **m_kwargs)
-
         def _decorator(view_func):
+            middleware = middleware_class(view_func, *m_args, **m_kwargs)
+
             @wraps(view_func)
             def _wrapped_view(request, *args, **kwargs):
                 if hasattr(middleware, 'process_request'):
@@ -152,13 +163,28 @@ def make_middleware_decorator(middleware_class):
     return _make_decorator
 
 
-class classproperty:
-    def __init__(self, method=None):
-        self.fget = method
+def sync_and_async_middleware(func):
+    """
+    Mark a middleware factory as returning a hybrid middleware supporting both
+    types of request.
+    """
+    func.sync_capable = True
+    func.async_capable = True
+    return func
 
-    def __get__(self, instance, cls=None):
-        return self.fget(cls)
 
-    def getter(self, method):
-        self.fget = method
-        return self
+def sync_only_middleware(func):
+    """
+    Mark a middleware factory as returning a sync middleware.
+    This is the default.
+    """
+    func.sync_capable = True
+    func.async_capable = False
+    return func
+
+
+def async_only_middleware(func):
+    """Mark a middleware factory as returning an async middleware."""
+    func.sync_capable = False
+    func.async_capable = True
+    return func
