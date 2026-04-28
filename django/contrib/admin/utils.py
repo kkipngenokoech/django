@@ -388,6 +388,9 @@ def display_for_field(value, field, empty_value_display):
         return _boolean_icon(value)
     elif value is None:
         return empty_value_display
+    # JSONField needs special handling to display as valid JSON
+    elif hasattr(field, '__class__') and field.__class__.__name__ == 'JSONField':
+        return field.prepare_value(value)
     elif isinstance(field, models.DateTimeField):
         return formats.localize(timezone.template_localtime(value))
     elif isinstance(field, (models.DateField, models.TimeField)):
