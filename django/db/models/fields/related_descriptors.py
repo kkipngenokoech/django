@@ -253,8 +253,23 @@ class ForwardManyToOneDescriptor:
 
         # Set the values of the related field.
         else:
+            # Check if the related object is unsaved and has no primary key value
+            # If so, we need to defer setting the foreign key until the related object is saved
+            related_pk_value = None
             for lh_field, rh_field in self.field.related_fields:
-                setattr(instance, lh_field.attname, getattr(value, rh_field.attname))
+                related_pk_value = getattr(value, rh_field.attname)
+                # For unsaved objects with empty/None primary keys, store a reference
+                # to the related object instead of the primary key value
+                if (value._state.adding and 
+                    (related_pk_value is None or related_pk_value == '')):
+                    # Mark this field as having a deferred foreign key resolution
+                    if not hasattr(instance, '_deferred_fk_updates'):
+                        instance._deferred_fk_updates = {}
+                    instance._deferred_fk_updates[self.field.attname] = (value, rh_field.attname)
+                    # Set the foreign key field to None for now
+                    setattr(instance, lh_field.attname, None)
+                else:
+                    setattr(instance, lh_field.attname, related_pk_value)
 
         # Set the related instance cache used by __get__ to avoid an SQL query
         # when accessing the attribute we just set.
